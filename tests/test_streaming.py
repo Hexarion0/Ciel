@@ -58,6 +58,55 @@ def test_internal_playback_notes_are_hidden_across_every_chunk_boundary(omit_cod
     assert visible.feed("[chuckle] Hello.", final=True) == "[chuckle] Hello."
 
 
+@pytest.mark.parametrize("omit_code", [True, False])
+def test_stage_directions_are_hidden_across_every_chunk_boundary(omit_code):
+    text = "[soft inhale — steady, focused] Alright. [brief pause — quiet, present] I can check."
+    for boundary in range(len(text) + 1):
+        visible = VisibleText(omit_code=omit_code)
+        output = visible.feed(text[:boundary])
+        output += visible.feed(text[boundary:], final=True)
+        assert " ".join(output.split()) == "Alright. I can check."
+    visible = VisibleText(omit_code=omit_code)
+    assert visible.feed("Use [array] and [1, 2, 3]. [chuckle] Hello.", final=True) == (
+        "Use [array] and [1, 2, 3]. [chuckle] Hello."
+    )
+    assert visible.feed("[soft inhale", final=True) == ""
+    assert visible.feed("[label <think>private</think>]", final=True) == "[label ]"
+
+
+@pytest.mark.parametrize("pipeline", [False, True])
+def test_stream_filters_long_stage_directions_before_sentence_splitting(pipeline):
+    played, prepared = [], []
+
+    def speak(text, **controls):
+        played.append(text)
+        controls["on_start"]()
+        return True
+
+    def prepare(text, *_args):
+        prepared.append(text)
+        return (np.zeros(10, dtype=np.float32), 24000, None)
+
+    tts = SimpleNamespace(
+        expressiveness="expressive", audio_queue_size=2, supports_sentence_pipeline=pipeline,
+        begin_stream=lambda: 1, update_stream=lambda *_args: None,
+        end_stream=lambda *_args: None, stop=lambda: None, speak=speak,
+        prepare_sentence=prepare,
+    )
+    text = "[soft inhale — " + "steady, focused. " * 30 + "] Alright. I can check."
+
+    def generate(*_args, **_kwargs):
+        for index in range(0, len(text), 7):
+            yield chunk(text[index:index + 7])
+
+    result = stream_reply(SimpleNamespace(stream=generate), [], tts, lambda: True)
+    assert result.spoken
+    assert result.response.content.strip() == "Alright. I can check."
+    assert played == ["Alright.", "I can check."]
+    if pipeline:
+        assert prepared == played
+
+
 def test_sentence_boundaries_keep_decimal_and_abbreviation():
     buffer = SentenceBuffer()
     assert buffer.feed("Dr. Smith measured 3.") == []

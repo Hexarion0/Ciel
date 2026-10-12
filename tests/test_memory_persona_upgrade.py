@@ -209,6 +209,7 @@ def test_persona_prompt_has_explicit_continuity_and_natural_style_contract():
     assert "Memory and continuity:" in prompt
     assert "open_threads" in prompt
     assert "latest correction" in prompt
-    assert "Personality and presence:" in prompt
+    assert "Conversational style:" in prompt
+    assert "Use plain, literal English" in prompt
     assert "reasoned opinions" in prompt
     assert "Short replies are not automatically an invitation" in " ".join(prompt.split())

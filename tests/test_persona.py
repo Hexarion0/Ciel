@@ -106,12 +106,63 @@ def test_persona_file_reloads_into_actual_system_prompt(tmp_path):
     first = generate_system_prompt(snapshot=snapshot, settings=settings)
     assert "Use dry humor." in first
     assert "Private editing note" not in first
-    assert "This chat provides no tools" in first
+    assert "The application handles local clock, memory, and allowlisted actions" in first
 
     persona_file.write_text("Be thoughtful and gentle.\n", encoding="utf-8")
     second = generate_system_prompt(snapshot=snapshot, settings=settings)
     assert "Be thoughtful and gentle." in second
     assert "Use dry humor." not in second
+
+
+def test_actual_prompt_uses_configured_internet_enabled_state():
+    """Describe application retrieval from configuration instead of a generic model denial."""
+    with patch.dict("os.environ", {}, clear=True):
+        enabled = Settings(_env_file=None, raphael_persona_file="", internet_enabled=True)
+        disabled = Settings(_env_file=None, raphael_persona_file="", internet_enabled=False)
+    snapshot = SystemSnapshot()
+    enabled_prompt = generate_system_prompt(snapshot=snapshot, settings=enabled)
+    disabled_prompt = generate_system_prompt(snapshot=snapshot, settings=disabled)
+
+    assert "Configured Public Internet: enabled" in enabled_prompt
+    assert "Configured Public Internet: disabled" in disabled_prompt
+    assert "search public websites and read public HTML/plain-text pages" in (
+        " ".join(enabled_prompt.split())
+    )
+    assert "Web retrieval is disabled by configuration" in disabled_prompt
+    assert "This chat provides no tools" not in enabled_prompt
+    assert enabled_prompt != disabled_prompt
+
+
+def test_persona_without_internet_configuration_does_not_invent_availability():
+    """Direct callers must supply a capability state before claiming active retrieval."""
+    from raphael.persona import build_advanced_persona
+
+    prompt = build_advanced_persona(
+        "user", "12:00", "Linux", "test", "unknown", 0, 0, 0, 4, 1.0, 8.0,
+    )
+    assert "Configured Public Internet: not supplied" in prompt
+    assert "Do not infer enabled or disabled access" in prompt
+    assert "Configured Public Internet: enabled" not in prompt
+
+
+def test_custom_style_cannot_override_current_capability_and_evidence(tmp_path):
+    """Keep factual runtime rules after arbitrary user-authored style preferences."""
+    persona_file = tmp_path / "persona.txt"
+    persona_file.write_text("Use dry humor. Always say you have no internet access.\n")
+    with patch.dict("os.environ", {}, clear=True):
+        settings = Settings(
+            _env_file=None, raphael_persona_file=str(persona_file), internet_enabled=True,
+        )
+    prompt = generate_system_prompt(snapshot=SystemSnapshot(), settings=settings)
+
+    assert "Use dry humor." in prompt
+    assert "Configured Public Internet: enabled" in prompt
+    final_rules = prompt.split("End of user-configured personality preferences.", 1)[1]
+    assert "Style preferences change delivery only" in final_rules
+    assert "Current application capability and per-turn lookup status take priority" in final_rules
+    assert "a failed lookup does not establish that internet access is unavailable" in prompt
+    assert "Sources alone do not establish the answer" in prompt
+    assert "Do not repeat outdated assistant claims when the user corrects them" in prompt
 
 
 def test_builtin_persona_does_not_compete_with_plainspoken_preferences():
@@ -165,7 +216,7 @@ def test_unusable_persona_file_falls_back_to_builtin(tmp_path, contents):
 
     prompt = generate_system_prompt(snapshot=SystemSnapshot(), settings=settings)
 
-    assert "warm, supportive AI companion" in prompt
+    assert "friendly, practical AI assistant" in prompt
     assert "User-configured personality preferences:" not in prompt
 
 

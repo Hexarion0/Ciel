@@ -1,6 +1,6 @@
 # RAPHAEL development roadmap
 
-Last reviewed: **2026-10-08**. Package version: **0.3.6 development**.
+Last reviewed: **2026-10-12**. Package version: **0.3.6 development**.
 
 The goal is a reliable personal desktop assistant with natural voice conversation,
 persistent memory, useful actions, and eventually remote messaging and presence.
@@ -15,7 +15,8 @@ before treating it as ready for everyday use.
 | Voices | Default Piper/Amy; optional custom Turbo and local Piper fallback | Reproducible custom-voice installation and private asset import on a fresh machine |
 | Providers | NIM, Groq, OpenRouter, Ollama, routing, retries/fallback, latency tracing | Usage totals, budget controls, broader live fallback verification |
 | Memory | SQLite conversations, structured state, confirmed profiles/goals, contextual recall, corrections, forgetting, automated restart recall | Live voice-based restart acceptance and summary quality evaluation |
-| Actions | Trusted module discovery, validation, local telemetry, allowlisted Linux app launching | Model-selected calls, web search, reminders, live desktop launch acceptance |
+| Actions | Trusted module discovery, validation, local telemetry, allowlisted Linux app launching | Model-selected calls, reminders, live desktop launch acceptance |
+| Internet | Free automatic search, public HTML/text reading, bounded retrieval, relevant user context, source links | Live voice/text retrieval acceptance, broader site compatibility, PDF/media extraction |
 | Personality | Modular persona prompt, continuity rules, opinions/initiative, editable preferences, voice-requested style updates/reset | Continued evaluation during real conversations |
 | Setup | Amy/custom voice choice, device/key configuration, missing-asset reporting | Automatic Turbo setup, a desktop installer with a managed runtime, and clean-machine validation |
 | Desktop web interface | PC-local voice/text chat, live captions, status, and controls | Same-Wi-Fi phone access and desktop acceptance |
@@ -40,8 +41,9 @@ and the [changelog](../CHANGELOG.md). The repository has a `v0.2` tag; no stable
    cancellation, deadlines, and honest execution results.
 4. **Add persistent reminders.** Start with relative reminders, list/cancel,
    restart recovery, and delivery; then add absolute times and recurrence.
-5. **Add web search with sources.** Return current information with references,
-   bounded requests, and clear handling of unavailable search.
+5. **Validate internet retrieval.** Exercise current questions, research requests,
+   public links, missing locations, source display, and unavailable search through
+   voice and text. Keep free-search and site compatibility limits visible.
 
 The broader milestones below remain the plan. New priority choices should update
 this section rather than silently marking later milestones complete.
@@ -149,12 +151,20 @@ setup but does not remove the storage required for dependencies and models.
 - [ ] Return tool results to the provider without treating generated text as execution proof.
 - [ ] Add relative reminders, persistence, listing, cancellation, and restart recovery.
 - [ ] Add timezone-aware absolute reminders and recurring reminders.
-- [ ] Add web search, source links, timeouts, and failure handling.
+- [x] Add application-side web search, source links, bounded public page reads,
+      timeouts, and honest failure handling.
+- [x] Search current facts by default, use relevant user memory/context, and support
+      larger research/compare/double-check budgets with session privacy through `/local`.
+- [x] Configure an optional home city; explicit request locations take priority.
+- [ ] Validate live search, page reading, location questions, and voice/text source display.
+- [ ] Add PDF/media extraction and broader public-site compatibility.
 - [ ] Test end-to-end action chaining only after single actions are reliable.
 
 No destructive action ships today. Test explicit confirmation end-to-end before
 adding one. Action modules are trusted Python code, not sandboxed third-party plugins.
 The interface and existing behavior are documented in [actions.md](actions.md).
+Public web retrieval runs before answer generation in the application. It does
+not use model-selected action calls or grant website account access.
 
 ## Dashboard — v0.5
 

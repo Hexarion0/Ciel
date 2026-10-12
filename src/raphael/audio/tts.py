@@ -22,6 +22,7 @@ from raphael.audio.speech_events import (
     SpeechExpressiveness,
     split_speech_event,
     strip_speech_events,
+    strip_stage_directions,
 )
 from raphael.config import get_settings, normalize_audio_device
 from raphael.conversation import strip_internal_reply_notes
@@ -343,6 +344,7 @@ class TextToSpeech:
         clean = re.sub(r"^\s*\d+\.\s+", "", clean, flags=re.MULTILINE)
         # Remove emojis (surrogate pairs and emoji blocks)
         clean = re.sub(r"[\U00010000-\U0010ffff]", "", clean)
+        clean = strip_stage_directions(clean)
         # Collapse multiple spaces / newlines
         clean = re.sub(r"\s+", " ", clean).strip()
         return clean

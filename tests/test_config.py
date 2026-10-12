@@ -4,7 +4,10 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-from raphael.config import Settings
+import pytest
+from pydantic import ValidationError
+
+from raphael.config import InternetConfig, Settings
 
 
 def test_default_settings():
@@ -186,3 +189,84 @@ def test_followup_policy_is_configurable_and_validated():
         assert Settings(_env_file=None).audio.ambient_followup_policy == 'strict'
     with pytest.raises(ValidationError):
         Settings(_env_file=None, ambient_followup_policy='anything')
+
+
+def test_internet_defaults_allow_free_automatic_search_without_assuming_a_city():
+    """Keep default retrieval bounded and the user's location unset."""
+    with patch.dict(os.environ, {}, clear=True):
+        internet = Settings(_env_file=None).internet
+    assert internet == InternetConfig()
+    assert internet.enabled and internet.automatic
+    assert internet.home_city == ""
+    assert (internet.timeout_seconds, internet.research_timeout_seconds) == (8.0, 20.0)
+    assert (internet.max_results, internet.research_max_results) == (5, 8)
+    assert (internet.max_pages, internet.research_max_pages) == (2, 4)
+
+
+def test_internet_environment_settings_reach_structured_config(tmp_path):
+    """Load the flat environment controls without losing their values."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "INTERNET_ENABLED=false\nINTERNET_AUTOMATIC=false\n"
+        'INTERNET_HOME_CITY="  Paris, France  "\n'
+        "INTERNET_TIMEOUT_SECONDS=4.5\nINTERNET_RESEARCH_TIMEOUT_SECONDS=30\n"
+        "INTERNET_MAX_RESULTS=3\nINTERNET_RESEARCH_MAX_RESULTS=12\n"
+        "INTERNET_MAX_PAGES=0\nINTERNET_RESEARCH_MAX_PAGES=6\n"
+    )
+    with patch.dict(os.environ, {}, clear=True):
+        settings = Settings(_env_file=env_file)
+    assert settings.internet_home_city == "Paris, France"
+    assert settings.internet == InternetConfig(
+        enabled=False,
+        automatic=False,
+        home_city="Paris, France",
+        timeout_seconds=4.5,
+        research_timeout_seconds=30,
+        max_results=3,
+        research_max_results=12,
+        max_pages=0,
+        research_max_pages=6,
+    )
+
+
+def test_internet_process_environment_overrides_env_file(tmp_path):
+    """Allow deployment settings to override the checked-in example values."""
+    env_file = tmp_path / ".env"
+    env_file.write_text("INTERNET_ENABLED=true\nINTERNET_HOME_CITY=Paris, France\n")
+    with patch.dict(
+        os.environ,
+        {"INTERNET_ENABLED": "false", "INTERNET_HOME_CITY": "Dublin, Ireland"},
+        clear=True,
+    ):
+        internet = Settings(_env_file=env_file).internet
+    assert not internet.enabled
+    assert internet.home_city == "Dublin, Ireland"
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_values"),
+    [
+        ("timeout_seconds", (0, 60.1, float("nan"), float("inf"))),
+        ("research_timeout_seconds", (0, 120.1, float("nan"), float("inf"))),
+        ("max_results", (0, 11)),
+        ("research_max_results", (0, 21)),
+        ("max_pages", (-1, 6)),
+        ("research_max_pages", (-1, 11)),
+        ("home_city", ("x" * 201,)),
+    ],
+)
+def test_internet_limits_reject_invalid_values(field, invalid_values):
+    """Reject unbounded or non-finite budgets in both configuration entry points."""
+    with patch.dict(os.environ, {}, clear=True):
+        for value in invalid_values:
+            with pytest.raises(ValidationError):
+                Settings(_env_file=None, **{f"internet_{field}": value})
+            with pytest.raises(ValidationError):
+                InternetConfig(**{field: value})
+
+
+def test_blank_internet_city_stays_unset():
+    """Whitespace does not create a default location."""
+    with patch.dict(os.environ, {"INTERNET_HOME_CITY": "  "}, clear=True):
+        assert Settings(_env_file=None).internet.home_city == ""
+    assert InternetConfig(home_city="  ").home_city == ""

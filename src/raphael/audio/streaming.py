@@ -8,7 +8,7 @@ from collections.abc import Callable
 from contextvars import copy_context
 from dataclasses import dataclass
 
-from raphael.audio.speech_events import SpeechEventLimiter, strip_speech_events
+from raphael.audio.speech_events import SpeechEventLimiter, is_stage_direction, strip_speech_events
 from raphael.conversation import INTERNAL_REPLY_NOTES
 from raphael.latency import active_trace, mark
 from raphael.logging import get_logger
@@ -59,6 +59,17 @@ class VisibleText:
                 if final:
                     self.pending = ""
                 break
+            if not self.hidden and not self.code and self.pending.startswith("["):
+                end = self.pending.find("]")
+                if end < 0:
+                    if not final:
+                        break
+                    if is_stage_direction(self.pending[1:]):
+                        self.pending = ""
+                        break
+                elif is_stage_direction(self.pending[1:end]):
+                    self.pending = self.pending[end + 1:]
+                    continue
             char, self.pending = self.pending[0], self.pending[1:]
             if not self.hidden and (not self.code or not self.omit_code):
                 output.append(char)

@@ -93,6 +93,7 @@ class ConversationManager:
         model: str = "",
         latency: float = 0.0,
         tokens: int = 0,
+        sources: list[dict[str, str]] | None = None,
     ) -> int:
         """Persist a conversation turn to SQLite and return the turn ID."""
         turn = ConversationTurn(
@@ -103,6 +104,7 @@ class ConversationManager:
             model=model,
             latency=latency,
             tokens=tokens,
+            sources=sources or [],
         )
         turn_id = self.store.save_turn(turn)
         logger.debug(

@@ -21,6 +21,48 @@ separate directory, run both `python -m raphael --help` and `raphael --help`, th
 `pip check`. Verify normal startup does not require optional training packages.
 Select an existing local Piper model to check synthesis without playback.
 
+## Live internet acceptance
+
+Use both `raphael web` and a normal voice session. These checks require a working
+network and a configured AI provider; mocked tests do not establish search
+availability or spoken answer quality.
+
+1. Ask for today's news and a current product price without saying “search.”
+   Check the linked sources support the answer and that lookup finishes within
+   `INTERNET_TIMEOUT_SECONDS`. Ask a greeting and the local clock question;
+   neither should perform a web lookup.
+2. Ask RAPHAEL to read a public article URL. Expect an answer based on the page
+   text, with a source link. A blocked or unsupported page must receive an
+   honest explanation rather than an invented summary.
+3. Ask for weather without a location and with `INTERNET_HOME_CITY` empty.
+   Expect a city question. Reply with a city, then check an explicit location
+   overrides the configured home city on a later request.
+4. Ask to compare or research a topic, then request a related follow-up.
+   Confirm relevant preferences and user context improve the query. Click
+   sources by mouse and keyboard, then restart and check their metadata survives
+   alongside the saved answer. Source URLs should not be read aloud.
+   Ask about a named series or software release, then say “Can you search the
+   latest episode/release?” without repeating its name. Check the displayed
+   query retains the user topic. Correct an installment or version number;
+   the next query must use that correction and check fresh sources. Search
+   guides or a different named topic must not be cited as evidence. When
+   excerpts do not establish a precise answer, expect an honest limitation or
+   clarification rather than a guessed number or a denial of internet access.
+   Replay “search Tensura season 4 where it ends,” “so what volume should I read?”,
+   “research again, finished season 4 part 2,” then “research.” Queries must retain
+   the title, reading question, and part number without old assistant volume guesses.
+   Web answers wait for complete source-quote validation before audio starts, even
+   with `TTS_STREAMING=true`. Invalid JSON, invented quotes, or a volume unsupported
+   by a supplied page excerpt must produce a short uncertainty reply.
+5. Interrupt a lookup or its spoken answer. Expect responsive cancellation and
+   no stale answer or source links attached to the next request. Disconnect the
+   network, ask for current facts, and expect an inability-to-verify explanation
+   and a retry offer. Restore connectivity and retry.
+6. Use `/local` and ask a related current-information question, including after
+   restart. Confirm the private session makes no external retrieval requests.
+   Also check `INTERNET_ENABLED=false` and `INTERNET_AUTOMATIC=false` behave as
+   documented.
+
 ## Live microphone acceptance
 
 Use the target desktop, microphone, and speakers with the normal `.env` and
@@ -96,6 +138,12 @@ and private audio out of reports.
     terminal escapes or per-letter lines. Final history must still contain one
     assistant reply. Native word spans drive letter interpolation; spelling and
     phonemes are not the same, so assess remaining drift on the actual headset.
+    Ask "What did we talk about last time?" after a short technical conversation.
+    Expect a brief factual recap without poetry or speeches about trust or agency.
+    Repeat in batch mode. Bracketed breathing, pause, mood, or gesture descriptions
+    must not appear in captions, reach either synthesizer, or enter saved replies.
+    Automated tests cover the reported `[soft inhale — steady, focused]` output,
+    every token boundary, and descriptions longer than a speech sentence buffer.
 11. While voice training is running, ask a short unclear question that triggers
     STT retry. Below `STT_RETRY_MIN_FREE_MB`, expect a primary-model retry without
     allocating `medium.en`. After training releases VRAM, a stronger retry can be

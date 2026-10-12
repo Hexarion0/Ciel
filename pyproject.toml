@@ -25,6 +25,7 @@ dependencies = [
     "piper-tts[alignment]>=1.8.0",
     "pysilero-vad>=2.1,<3",
     "httpx>=0.24.0",
+    "ddgs>=9.5,<10",
 ]
 
 [project.optional-dependencies]

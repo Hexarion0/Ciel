@@ -1,5 +1,6 @@
 """Tests for RAPHAEL SQLite memory architecture and persistence engine."""
 
+import sqlite3
 import tempfile
 from pathlib import Path
 
@@ -172,3 +173,100 @@ def test_conversation_turns_persistence(temp_store: MemoryStore):
     assert cleared == 3
     assert len(temp_store.get_recent_turns(session_id=session_a)) == 0
     assert len(temp_store.get_recent_turns(session_id=session_b)) == 1
+
+
+def test_conversation_sources_survive_restart_without_changing_reply_text(tmp_path):
+    """Citation metadata reloads independently from the assistant's spoken content."""
+    path = tmp_path / "sources.db"
+    sources = [{"title": "Public forecast", "url": "https://example.com/weather"}]
+    store = MemoryStore(path)
+    turn = ConversationTurn(role="assistant", content="It is sunny.", sources=sources)
+    store.save_turn(turn)
+    store.close()
+    sources[0]["title"] = "Changed outside the turn"
+
+    restarted = MemoryStore(path)
+    try:
+        restored = restarted.get_recent_turns()[0]
+        assert restored.content == "It is sunny."
+        assert restored.sources == [{"title": "Public forecast", "url": "https://example.com/weather"}]
+        assert restored.to_dict()["sources"] == restored.sources
+        assert turn.sources == restored.sources
+    finally:
+        restarted.close()
+
+
+def test_existing_conversation_database_is_migrated_with_empty_sources(tmp_path):
+    """Upgrading a previous schema preserves old turns and defaults their citations."""
+    path = tmp_path / "legacy.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE conversation_turns ("
+            "id INTEGER PRIMARY KEY, session_id TEXT DEFAULT 'default', role TEXT, "
+            "content TEXT, timestamp TEXT, provider TEXT DEFAULT '', model TEXT DEFAULT '', "
+            "tokens INTEGER DEFAULT 0, latency REAL DEFAULT 0.0);"
+        )
+        connection.execute(
+            "INSERT INTO conversation_turns (id, role, content, timestamp) "
+            "VALUES (1, 'assistant', 'Existing reply', '2026-10-01T00:00:00+00:00');"
+        )
+    store = MemoryStore(path)
+    try:
+        restored = store.get_recent_turns()[0]
+        assert restored.content == "Existing reply"
+        assert restored.sources == []
+        assert store._get_connection().execute(
+            "SELECT sources_json FROM conversation_turns;"
+        ).fetchone()[0] == "[]"
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("stored_sources", ["broken JSON", "null", "{}", "[null]", "\"text\""])
+def test_corrupt_conversation_source_json_does_not_break_history(temp_store, stored_sources):
+    """Invalid citation data cannot prevent a session from being restored."""
+    turn_id = temp_store.save_turn(ConversationTurn(role="assistant", content="Saved reply"))
+    with temp_store._get_connection() as connection:
+        connection.execute(
+            "UPDATE conversation_turns SET sources_json=? WHERE id=?;", (stored_sources, turn_id),
+        )
+    restored = temp_store.get_recent_turns()[0]
+    assert restored.content == "Saved reply"
+    assert restored.sources == []
+
+
+@pytest.mark.parametrize("url", [
+    "javascript:alert(1)", "data:text/html,bad", "file:///etc/passwd", "/relative",
+    "//example.com/page", "https://user:password@example.com/", "https://@example.com/",
+    "https://example.com/\npage", "https://example.com/\x7fpage", "https://example.com/a b",
+    "https://example.com\\page", "https://example.com:99999/", "https://example.com:bad/",
+])
+def test_conversation_sources_reject_unsafe_links(temp_store, url):
+    """Only valid HTTP(S) citations with no embedded credentials are persisted."""
+    turn = ConversationTurn(
+        role="assistant", content="Answer", sources=[{"title": "Bad", "url": url}],
+    )
+    temp_store.save_turn(turn)
+    assert turn.sources == []
+    assert temp_store.get_recent_turns()[0].sources == []
+
+
+def test_conversation_sources_are_bounded_deduplicated_and_copy_metadata(temp_store):
+    """Citation lists have finite size and discard provider-specific metadata."""
+    sources = [{"title": "", "url": "https://example.com/0", "snippet": "Do not store me"}]
+    sources += [{"title": str(index), "url": f"https://example.com/{index}"} for index in range(25)]
+    sources += [{"title": "Bad\nlabel", "url": "https://example.com/control"}]
+    turn = ConversationTurn(role="assistant", content="Answer", sources=sources)
+    temp_store.save_turn(turn)
+    restored = temp_store.get_recent_turns()[0]
+    assert len(restored.sources) == 20
+    assert restored.sources[0] == {"title": "example.com", "url": "https://example.com/0"}
+    assert all(set(source) == {"title", "url"} for source in restored.sources)
+
+
+def test_conversation_default_source_lists_are_independent():
+    """The default citation list belongs to one conversation turn."""
+    first = ConversationTurn(role="assistant", content="First")
+    second = ConversationTurn(role="assistant", content="Second")
+    first.sources.append({"title": "Source", "url": "https://example.com/"})
+    assert second.sources == []

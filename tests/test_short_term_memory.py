@@ -50,6 +50,16 @@ def test_cross_restart_conversation_persistence(temp_store: MemoryStore):
     assert messages[1].content == "Hello Raphael, my name is Hexarion"
 
 
+def test_manager_persists_sources_without_injecting_them_into_provider_messages(temp_store):
+    """Links remain UI metadata instead of becoming trusted model context."""
+    manager = ConversationManager(store=temp_store, session_id="cited")
+    sources = [{"title": "Forecast reference", "url": "https://example.com/forecast"}]
+    manager.add_turn("assistant", "It is sunny.", sources=sources)
+    assert manager.get_recent_turns()[0].sources == sources
+    messages = manager.get_active_messages("Persona")
+    assert [message.content for message in messages] == ["Persona", "It is sunny."]
+
+
 def test_archived_interruption_notes_are_metadata_not_assistant_speech(temp_store):
     manager = ConversationManager(store=temp_store, session_id="interrupted")
     manager.add_turn("user", "Explain streaming.")

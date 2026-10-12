@@ -14,6 +14,7 @@ from typing import Any
 
 from raphael.conversation import strip_internal_reply_notes
 from raphael.logging import SecretMaskingFilter
+from raphael.memory.models import normalize_sources
 
 
 class DesktopWebUI:
@@ -54,12 +55,15 @@ class DesktopWebUI:
                     )
                     timestamp = getattr(turn, "timestamp", None)
                     extra = {"time": timestamp.timestamp()} if timestamp is not None else {}
+                    if turn.role == "assistant":
+                        extra["sources"] = normalize_sources(getattr(turn, "sources", []))
                     self._message(turn.role, text, **extra)
 
-    def user_message(self, text: str) -> None:
+    def user_message(self, text: str) -> int:
+        """Record a user message and return its identity for reply updates."""
         with self._lock:
             self.finish_reply()
-            self._message("user", text)
+            return self._message("user", text)["id"]
 
     def start_sentence(self) -> None:
         with self._lock:
@@ -95,6 +99,21 @@ class DesktopWebUI:
             self.finish_reply()
             self._message("assistant", text)
 
+    def set_reply_sources(
+        self, sources: list[dict[str, str]], *, user_message_id: int | None = None,
+    ) -> None:
+        """Attach safe citations only while the newest message is an assistant reply."""
+        with self._lock:
+            if user_message_id is not None:
+                current_user_id = next(
+                    (message["id"] for message in reversed(self._messages)
+                     if message["role"] == "user"), None,
+                )
+                if current_user_id != user_message_id:
+                    return
+            if self._messages and self._messages[-1]["role"] == "assistant":
+                self._messages[-1]["sources"] = normalize_sources(sources)
+
     def feedback(self, text: str, *, error: bool = False) -> None:
         with self._lock:
             self._activity.append({"text": SecretMaskingFilter._redact(text),
@@ -118,7 +137,11 @@ class DesktopWebUI:
                     "voice_enabled": self.voice_enabled, "muted": self._muted,
                     "state": "speaking" if self._speaking else self._state,
                     "provider": self._provider,
-                    "messages": [dict(message) for message in self._messages],
+                    "messages": [
+                        {**message, **({"sources": normalize_sources(message["sources"])}
+                                      if "sources" in message else {})}
+                        for message in self._messages
+                    ],
                     "activity": [dict(event) for event in self._activity]}
 
     def start(self, submit: Callable[[str], bool], *, port: int = 8765) -> str:

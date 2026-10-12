@@ -40,6 +40,48 @@ def test_unknown_leading_tag_does_not_discard_a_valid_reaction():
     assert split_speech_event("[whisper] [chuckle] Good one.") == ("[chuckle]", "Good one.")
 
 
+@pytest.mark.parametrize("direction", [
+    "[soft inhale — steady, focused]",
+    "[brief pause — quiet, not dismissive, just present]",
+    "[speaking softly]",
+    "[smiles warmly]",
+])
+def test_stage_directions_are_removed_from_speech_and_history(direction):
+    text = f"{direction} Alright. {direction} I can check."
+    assert TextToSpeech.clean_text_for_speech(text) == "Alright. I can check."
+    assert " ".join(strip_speech_events(text).split()) == "Alright. I can check."
+    assert split_speech_event(f"{direction} [chuckle] Good one.") == (
+        "[chuckle]", "Good one.",
+    )
+
+
+@pytest.mark.parametrize("engine", ["piper", "chatterbox_turbo"])
+def test_stage_directions_never_reach_either_synthesizer(monkeypatch, engine):
+    tts = TextToSpeech(engine=engine, enabled=False)
+    tts.enabled = True
+    synthesizer = MagicMock(return_value=None)
+    target = "_synthesize_chatterbox" if engine == "chatterbox_turbo" else "_synthesize_piper"
+    monkeypatch.setattr(tts, target, synthesizer)
+    tts.synthesize("[soft inhale — steady, focused] Alright.")
+    synthesizer.assert_called_once_with("Alright.")
+    synthesizer.reset_mock()
+    tts.synthesize("[brief pause — quiet, not dismissive, just present]")
+    synthesizer.assert_not_called()
+
+
+def test_bracketed_data_and_link_labels_survive_speech_cleaning():
+    text = "Use [array] and [1, 2, 3]. Read [pause](https://example.com)."
+    assert TextToSpeech.clean_text_for_speech(text) == (
+        "Use [array] and [1, 2, 3]. Read pause."
+    )
+    assert strip_speech_events("Use [array] and [1, 2, 3].") == (
+        "Use [array] and [1, 2, 3]."
+    )
+    assert split_speech_event("[array] is a placeholder.") == (
+        "", "[array] is a placeholder.",
+    )
+
+
 @pytest.mark.parametrize("mode,count", [("expressive", 2), ("natural", 1), ("off", 0)])
 def test_direct_synthesis_budget_collapses_stacks_and_preserves_words(mode, count):
     text = "[chuckle] [laugh] Good one. [sigh] Okay. [moan] Again."
@@ -145,5 +187,26 @@ def test_batch_history_is_plain_but_voice_retains_cues(tmp_path, monkeypatch):
         assert "Voice delivery:" in prompt and "relief" in prompt
         assert [t.content for t in turns if t.role == "assistant"] == ["You got me."]
         assert any(call.args[0] == "[chuckle] You got me." for call in tts.speak.call_args_list)
+    finally:
+        memory.close()
+
+
+def test_batch_stage_directions_do_not_reach_voice_or_saved_history(tmp_path, monkeypatch):
+    from tests.test_ambient import run_callbacks
+
+    router, tts = MagicMock(), MagicMock()
+    tts.engine = "chatterbox_turbo"
+    tts.enabled = True
+    router.send.return_value = LLMResponse(
+        "[soft inhale — steady, focused] Alright. "
+        "[brief pause — quiet, not dismissive, just present] I can check.", "fake", "fake",
+    )
+    _, _, _, memory, turns = run_callbacks(
+        tmp_path, monkeypatch, [("Explain that", {"input_source": "keyboard"})],
+        ambient=False, router=router, tts=tts, persona_file=tmp_path / "persona.txt",
+    )
+    try:
+        assert [t.content for t in turns if t.role == "assistant"] == ["Alright. I can check."]
+        tts.speak.assert_called_once_with("Alright. I can check.", block=True)
     finally:
         memory.close()

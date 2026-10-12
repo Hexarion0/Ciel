@@ -64,4 +64,28 @@ arguments, ambiguous matches, denied authorization, cancellation, timeout, missi
 dependencies, and permission errors. Manually verify real desktop behavior using
 `docs/release-checks.md` before recording live acceptance.
 
-Model-selected function calls, web search, and reminders remain future work.
+Model-selected function calls and reminders remain future work.
+
+## Public internet retrieval
+
+The application performs free public web search and HTML/text page reading before
+provider answer generation. This path runs separately from the trusted action
+registry. It retrieves evidence and source links; it does not execute website
+account actions, downloads, purchases, or browser automation.
+
+Current-information requests trigger searches by default. Explicit search and
+public HTTP(S) links also request retrieval; research, comparison, and double-check
+requests use larger bounded budgets. Relevant user memory and conversation context
+can refine queries. `/local` keeps retrieval disabled for the session, including
+follow-ups and restarts, until its history is cleared. `INTERNET_ENABLED=false`
+disables retrieval globally. See [internet settings](../README.md#internet-access)
+for limits and home-city setup.
+
+Search or site failures must remain visible in the answer. Current facts require
+retrieved evidence; general background after a failed lookup needs a clear label.
+Source links appear in terminal and desktop text, while spoken replies stay concise.
+PDF/media extraction and live voice/text acceptance remain pending.
+
+```bash
+pytest tests/test_internet.py tests/test_config.py
+```

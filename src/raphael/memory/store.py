@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from raphael.logging import get_logger
-from raphael.memory.models import ConversationTurn, MemoryItem, MemoryType
+from raphael.memory.models import ConversationTurn, MemoryItem, MemoryType, normalize_sources
 
 logger = get_logger("memory.store")
 
@@ -81,10 +81,19 @@ class MemoryStore:
                         provider TEXT NOT NULL DEFAULT '',
                         model TEXT NOT NULL DEFAULT '',
                         tokens INTEGER NOT NULL DEFAULT 0,
-                        latency REAL NOT NULL DEFAULT 0.0
+                        latency REAL NOT NULL DEFAULT 0.0,
+                        sources_json TEXT NOT NULL DEFAULT '[]'
                     );
                     """
                 )
+                columns = {
+                    row["name"] for row in conn.execute("PRAGMA table_info(conversation_turns)")
+                }
+                if "sources_json" not in columns:
+                    conn.execute(
+                        "ALTER TABLE conversation_turns "
+                        "ADD COLUMN sources_json TEXT NOT NULL DEFAULT '[]';"
+                    )
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(memory_type);"
                 )
@@ -468,8 +477,8 @@ class MemoryStore:
                     """
                     INSERT INTO conversation_turns (
                         session_id, role, content, timestamp,
-                        provider, model, tokens, latency
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                        provider, model, tokens, latency, sources_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """,
                     (
                         turn.session_id,
@@ -482,6 +491,7 @@ class MemoryStore:
                         turn.model,
                         turn.tokens,
                         turn.latency,
+                        json.dumps(normalize_sources(turn.sources)),
                     ),
                 )
                 turn.id = cursor.lastrowid
@@ -611,6 +621,11 @@ class MemoryStore:
         )
 
     def _row_to_turn(self, row: sqlite3.Row) -> ConversationTurn:
+        sources: Any = []
+        try:
+            sources = json.loads(row["sources_json"])
+        except (TypeError, ValueError):
+            pass
         ts = datetime.now(timezone.utc)
         try:
             ts = datetime.fromisoformat(row["timestamp"])
@@ -627,6 +642,7 @@ class MemoryStore:
             model=row["model"],
             tokens=row["tokens"],
             latency=float(row["latency"]),
+            sources=normalize_sources(sources),
         )
 
     def close(self) -> None:

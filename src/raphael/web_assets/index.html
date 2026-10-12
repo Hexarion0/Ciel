@@ -49,7 +49,8 @@
     .connection:before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--cyan); }
     .offline .connection:before { background: var(--quiet); }
     .stage { flex: 1; min-height: 0; display: flex; align-items: center; flex-direction: column; padding: 0 28px 12px; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
-    .speech-slot { height: 128px; flex-shrink: 0; width: 100%; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 12px; }
+    .speech-slot { --source-space: 0px; height: calc(128px + var(--source-space)); flex-shrink: 0; width: 100%; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 12px; }
+    .speech-slot.has-sources { --source-space: 34px; }
     .presence { flex: 1; min-height: 0; width: 100%; display: flex; align-items: center; justify-content: center; flex-direction: column; padding-bottom: 6px; }
     .orb {
       --size: clamp(230px, 36dvh, 330px);
@@ -65,7 +66,7 @@
     .orb-action svg { width: 12px; height: 12px; }
     .state-title { font-size: 23px; font-weight: 500; letter-spacing: -.55px; margin: 12px 0 5px; text-align: center; }
     .state-hint { margin: 0; color: var(--muted); font-size: 12px; text-align: center; max-width: 430px; }
-    .speech { position: relative; flex-shrink: 0; display: flex; flex-direction: column; max-height: 116px; width: fit-content; max-width: min(100%, 680px); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px 16px 13px; }
+    .speech { position: relative; flex-shrink: 0; display: flex; flex-direction: column; max-height: calc(116px + var(--source-space)); width: fit-content; max-width: min(100%, 680px); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px 16px 13px; }
     .speech:before { content: ""; position: absolute; bottom: -6px; left: calc(50% - 6px); width: 10px; height: 10px; background: var(--surface); border-top: 1px solid var(--border); border-left: 1px solid var(--border); transform: rotate(225deg); }
     .speech-heading { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 5px; color: var(--cyan); font-size: 10px; }
     .dismiss { width: 28px; height: 24px; margin: -2px -6px -2px 0; border: 0; border-radius: 4px; background: none; color: var(--muted); display: grid; place-items: center; }
@@ -75,6 +76,10 @@
     .speech.live .speech-text:after { content: ""; display: inline-block; width: 4px; height: 11px; margin-left: 5px; background: var(--cyan); }
     .speech-note { flex-shrink: 0; color: var(--muted); font-size: 11px; margin-top: 6px; }
     .speech-note:empty { display: none; }
+    .speech-sources { flex-shrink: 0; display: flex; gap: 12px; max-width: 100%; margin-top: 5px; padding: 4px 2px; overflow-x: auto; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+    .speech-sources a { flex-shrink: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--cyan); font-size: 11px; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+    .speech-sources a:hover { color: var(--text); }
+    .speech-sources a:focus-visible { outline-offset: -2px; }
     .dock { flex-shrink: 0; width: min(100%, 950px); align-self: center; padding: 0 28px 22px; }
     .feedback { min-height: 26px; max-height: 72px; overflow: auto; white-space: pre-line; overflow-wrap: anywhere; padding: 0 2px 9px; font-size: 12px; color: var(--muted); }
     .feedback.error { color: var(--error); }
@@ -102,10 +107,10 @@
       .session-meta { gap: 10px; }
       .owner-label { display: none; }
       .stage { padding: 0 18px 12px; }
-      .speech-slot { height: 144px; }
+      .speech-slot { height: calc(144px + var(--source-space)); }
       .orb { --size: clamp(210px, 34dvh, 290px); }
       .dock { padding: 0 18px 18px; }
-      .speech { padding: 8px 13px 11px; max-height: 132px; }
+      .speech { padding: 8px 13px 11px; max-height: calc(132px + var(--source-space)); }
       .speech-heading { min-height: 34px; }
       .dismiss { width: 36px; height: 36px; }
       .speech-text { font-size: 13px; max-height: 66px; }
@@ -126,8 +131,8 @@
       .topbar { padding-top: 10px; padding-bottom: 10px; }
       .brand-subtitle { display: none; }
       .stage { padding-bottom: 6px; }
-      .speech-slot { height: 110px; padding-bottom: 8px; }
-      .speech { padding-top: 5px; padding-bottom: 8px; max-height: 102px; }
+      .speech-slot { height: calc(110px + var(--source-space)); padding-bottom: 8px; }
+      .speech { padding-top: 5px; padding-bottom: 8px; max-height: calc(102px + var(--source-space)); }
       .speech-heading { margin-bottom: 1px; min-height: 0; }
       .speech-text { max-height: 32px; font-size: 12px; }
       .orb { --size: 64px; }
@@ -142,7 +147,7 @@
     }
     @media (max-height: 650px) and (max-width: 450px) {
       .state-hint { display: none; }
-      .speech-slot { height: 110px; }
+      .speech-slot { height: calc(110px + var(--source-space)); }
       .speech-text { max-height: 30px; }
     }
     @media (prefers-reduced-motion: reduce) { button { transition: none; } }
@@ -158,11 +163,12 @@
     <div class="session-meta"><span class="owner-label" id="owner-label"></span><div class="connection" id="connection" role="status">Connecting</div></div>
   </header>
   <main class="stage" aria-label="Raphael voice assistant">
-    <div class="speech-slot">
+    <div class="speech-slot" id="speech-slot">
       <div class="speech" id="speech" hidden>
         <div class="speech-heading"><span>Raphael</span><button class="dismiss" id="dismiss-speech" type="button" aria-label="Dismiss reply"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10m0-10L7 17"/></svg></button></div>
         <div class="speech-text" id="speech-text" tabindex="0" aria-label="Raphael's current reply" aria-live="off"></div>
         <div class="speech-note" id="speech-note"></div>
+        <nav class="speech-sources" id="speech-sources" aria-label="Sources for Raphael's reply" hidden></nav>
       </div>
     </div>
     <div class="sr-only" id="reply-announcement" role="status" aria-live="polite" aria-atomic="true"></div>
@@ -221,6 +227,45 @@ function hideSpeech() {
   text(element('reply-announcement'), '');
   runtime.dismissed = runtime.replyId;
   element('speech').hidden = true;
+  element('speech-slot').classList.toggle('has-sources', false);
+}
+function safeSources(sources) {
+  if (!Array.isArray(sources)) return [];
+  const result = [], seen = new Set();
+  for (const source of sources) {
+    if (!source || typeof source.url !== 'string' || typeof source.title !== 'string') continue;
+    if (!/^https?:\/\//i.test(source.url) || source.url.length > 2048
+        || /^https?:\/\/[^/?#]*@/i.test(source.url)
+        || /[\s\u0000-\u001f\u007f-\u009f\\]/.test(source.url)
+        || /[\u0000-\u001f\u007f-\u009f]/.test(source.title)) continue;
+    let url;
+    try { url = new URL(source.url); } catch { continue; }
+    if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.username || url.password) continue;
+    if (seen.has(source.url)) continue;
+    seen.add(source.url);
+    result.push({title: source.title.trim().slice(0, 300) || url.hostname, url: source.url});
+    if (result.length === 20) break;
+  }
+  return result;
+}
+function showSources(sources) {
+  const node = element('speech-sources'), safe = safeSources(sources);
+  const key = JSON.stringify(safe);
+  if (node.dataset.sources !== key) {
+    while (node.firstElementChild) node.firstElementChild.remove();
+    safe.forEach((source, index) => {
+      const link = document.createElement('a');
+      link.href = source.url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.title = source.title;
+      link.textContent = '[' + (index + 1) + '] ' + source.title;
+      node.append(link);
+    });
+    node.dataset.sources = key;
+  }
+  node.hidden = safe.length === 0;
+  element('speech-slot').classList.toggle('has-sources', safe.length > 0);
 }
 function showSpeech(reply) {
   if (runtime.replyId !== reply.id) text(element('reply-announcement'), '');
@@ -234,6 +279,7 @@ function showSpeech(reply) {
   text(node, reply.text);
   if (following) node.scrollTop = node.scrollHeight;
   text(element('speech-note'), reply.interrupted ? 'Reply stopped' : '');
+  showSources(reply.sources);
   if (!reply.live && runtime.announced !== reply.id) {
     text(element('reply-announcement'), 'Raphael: ' + reply.text);
     runtime.announced = reply.id;

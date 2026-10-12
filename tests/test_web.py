@@ -131,6 +131,89 @@ def test_history_preserves_dates_and_omits_internal_playback_notes():
     assert message["time"] == timestamp.timestamp()
 
 
+def test_history_restores_safe_sources_for_assistant_replies():
+    ui = DesktopWebUI("owner", "hey raphael")
+    ui.load_history([SimpleNamespace(
+        role="assistant", content="Verified answer", sources=[
+            {"title": "Public page", "url": "https://example.com/article"},
+            {"title": "Bad", "url": "javascript:alert(1)"},
+        ],
+    )])
+    assert ui.snapshot()["messages"][0]["sources"] == [
+        {"title": "Public page", "url": "https://example.com/article"},
+    ]
+
+
+@pytest.mark.parametrize("live", [True, False])
+def test_reply_sources_attach_to_live_or_completed_reply_and_snapshot_is_independent(live):
+    ui = DesktopWebUI("owner", "hey raphael")
+    ui.text_reply("An earlier answer")
+    ui.user_message("A current question")
+    if live:
+        ui.start_sentence()
+        ui.progress("An answer")
+    else:
+        ui.text_reply("An answer")
+    sources = [{"title": "<script>literal label</script>", "url": "https://example.com/"}]
+    ui.set_reply_sources(sources)
+    snapshot = ui.snapshot()
+    assert snapshot["messages"][-1]["sources"] == sources
+    assert "sources" not in snapshot["messages"][0]
+    snapshot["messages"][-1]["sources"][0]["title"] = "Changed snapshot"
+    sources[0]["title"] = "Changed input"
+    assert ui.snapshot()["messages"][-1]["sources"][0]["title"] == "<script>literal label</script>"
+
+
+def test_reply_sources_do_not_attach_to_an_older_reply_after_a_new_user_message():
+    ui = DesktopWebUI("owner", "hey raphael")
+    sources = [{"title": "Reference", "url": "https://example.com/"}]
+    ui.set_reply_sources(sources)
+    assert ui.snapshot()["messages"] == []
+    ui.text_reply("An earlier answer")
+    ui.user_message("A newer question")
+    ui.set_reply_sources(sources)
+    assert all("sources" not in message for message in ui.snapshot()["messages"])
+
+
+@pytest.mark.parametrize("live", [True, False])
+def test_reply_source_identity_rejects_an_older_request_after_a_new_reply(live):
+    """An older worker cannot cite the newer user's assistant reply."""
+    ui = DesktopWebUI("owner", "hey raphael")
+    first_id = ui.user_message("First question")
+    assert isinstance(first_id, int)
+    ui.text_reply("First answer")
+    second_id = ui.user_message("Second question")
+    assert second_id > first_id
+    if live:
+        ui.start_sentence()
+        ui.progress("Second answer")
+    else:
+        ui.text_reply("Second answer")
+    old_sources = [{"title": "Old reference", "url": "https://example.com/old"}]
+    new_sources = [{"title": "New reference", "url": "https://example.com/new"}]
+    ui.set_reply_sources(old_sources, user_message_id=first_id)
+    assert "sources" not in ui.snapshot()["messages"][-1]
+    ui.set_reply_sources(new_sources, user_message_id=second_id)
+    assert ui.snapshot()["messages"][-1]["sources"] == new_sources
+    ui.set_reply_sources(old_sources, user_message_id=first_id)
+    assert ui.snapshot()["messages"][-1]["sources"] == new_sources
+
+
+def test_interrupted_reply_retains_sources_attached_for_its_user_message():
+    """Citations attached at speech start remain visible after interruption."""
+    ui = DesktopWebUI("owner", "hey raphael")
+    user_id = ui.user_message("Current question")
+    ui.start_sentence()
+    ui.progress("First part")
+    sources = [{"title": "Reference", "url": "https://example.com/"}]
+    ui.set_reply_sources(sources, user_message_id=user_id)
+    ui.progress("First part", interrupted=True)
+    reply = ui.snapshot()["messages"][-1]
+    assert not reply["live"]
+    assert reply["interrupted"]
+    assert reply["sources"] == sources
+
+
 def test_http_get_rejects_untrusted_host_and_port_conflicts_are_reported(web_server):
     _ui, _submit, client = web_server
     assert client.get("/api/state", headers={"Host": "evil.example"}).status_code == 403

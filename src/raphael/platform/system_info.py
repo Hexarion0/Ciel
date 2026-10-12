@@ -228,4 +228,5 @@ def generate_system_prompt(
         memory_db=snap.memory_db,
         preferred_name=cfg.raphael_preferred_name,
         persona_preferences=load_persona_preferences(cfg.raphael_persona_file),
+        internet_enabled=cfg.internet.enabled,
     )

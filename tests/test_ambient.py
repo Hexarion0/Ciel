@@ -262,6 +262,10 @@ def run_callbacks(
     loop = SimpleNamespace(is_running=True, stop=MagicMock(), set_ambient=MagicMock())
 
     def listener(**kwargs):
+        loop.submit_text = lambda text: kwargs["on_transcription"](
+            text, {"input_source": "keyboard", "cancel_event": Event()}, None,
+        )
+
         def start():
             if interrupted:
                 kwargs['on_interruption'](interrupted)

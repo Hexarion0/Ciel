@@ -46,6 +46,28 @@ class MemoryConfig(BaseModel):
     )
 
 
+class InternetConfig(BaseModel):
+    """Free public web search and page-reading limits."""
+
+    enabled: bool = Field(default=True, description="Enable public web retrieval")
+    automatic: bool = Field(default=True, description="Search requests needing current facts")
+    home_city: str = Field(
+        default="", max_length=200, description="Optional default city and country",
+    )
+    timeout_seconds: float = Field(default=8.0, ge=0.1, le=60)
+    research_timeout_seconds: float = Field(default=20.0, ge=0.1, le=120)
+    max_results: int = Field(default=5, ge=1, le=10)
+    research_max_results: int = Field(default=8, ge=1, le=20)
+    max_pages: int = Field(default=2, ge=0, le=5)
+    research_max_pages: int = Field(default=4, ge=0, le=10)
+
+    @field_validator("home_city", mode="before")
+    @classmethod
+    def strip_home_city(cls, value: str) -> str:
+        """Normalize an optional city without inferring the user's location."""
+        return value.strip() if isinstance(value, str) else value
+
+
 class ProviderConfig(BaseModel):
     """AI Provider API keys and endpoints."""
 
@@ -218,6 +240,17 @@ class Settings(BaseSettings):
     memory_db_path: str = Field(default="data/raphael.db")
     memory_max_short_term_turns: int = Field(default=10, ge=1)
 
+    # Public internet retrieval settings
+    internet_enabled: bool = Field(default=True)
+    internet_automatic: bool = Field(default=True)
+    internet_home_city: str = Field(default="", max_length=200)
+    internet_timeout_seconds: float = Field(default=8.0, ge=0.1, le=60)
+    internet_research_timeout_seconds: float = Field(default=20.0, ge=0.1, le=120)
+    internet_max_results: int = Field(default=5, ge=1, le=10)
+    internet_research_max_results: int = Field(default=8, ge=1, le=20)
+    internet_max_pages: int = Field(default=2, ge=0, le=5)
+    internet_research_max_pages: int = Field(default=4, ge=0, le=10)
+
     # Audio & Voice settings
     wake_word: str = Field(default="hey raphael")
     wake_models: list[str] = Field(default_factory=list)
@@ -264,6 +297,12 @@ class Settings(BaseSettings):
     audio_input_device: int | str | None = Field(default=None)
     audio_output_device: int | str | None = Field(default=None)
 
+    @field_validator("internet_home_city", mode="before")
+    @classmethod
+    def strip_home_city(cls, value: str) -> str:
+        """Trim the configured default location before validation."""
+        return value.strip() if isinstance(value, str) else value
+
     @field_validator("audio_input_device", "audio_output_device", mode="before")
     @classmethod
     def parse_device(cls, value: int | str | None) -> int | str | None:
@@ -285,6 +324,21 @@ class Settings(BaseSettings):
         return MemoryConfig(
             db_path=self.memory_db_path,
             max_short_term_turns=self.memory_max_short_term_turns,
+        )
+
+    @property
+    def internet(self) -> InternetConfig:
+        """Structured public web retrieval configuration."""
+        return InternetConfig(
+            enabled=self.internet_enabled,
+            automatic=self.internet_automatic,
+            home_city=self.internet_home_city,
+            timeout_seconds=self.internet_timeout_seconds,
+            research_timeout_seconds=self.internet_research_timeout_seconds,
+            max_results=self.internet_max_results,
+            research_max_results=self.internet_research_max_results,
+            max_pages=self.internet_max_pages,
+            research_max_pages=self.internet_research_max_pages,
         )
 
     @property

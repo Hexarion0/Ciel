@@ -1,11 +1,12 @@
 # RAPHAEL
 
 A Python desktop voice assistant for Linux: speak to her, get spoken replies,
-remember useful facts, and launch supported applications.
+remember useful facts, search public information, and launch supported applications.
 
-**Current version: 0.3.6 development.** Core voice, persistent memory, and the first
-local actions are implemented. Live microphone, restart, and desktop acceptance
-checks remain open in [release checks](docs/release-checks.md).
+**Current version: 0.3.6 development.** Core voice, persistent memory, public web
+retrieval, and the first local actions are implemented. Live microphone, restart,
+internet, and desktop acceptance checks remain open in
+[release checks](docs/release-checks.md).
 
 ## What works today
 
@@ -18,11 +19,12 @@ checks remain open in [release checks](docs/release-checks.md).
 - SQLite conversation history, background summaries, and persistent facts.
   Conversational facts need confirmation; explicit `remember ...` commands save directly.
 - Local time/date, RAM usage, GPU temperature, CPU core count, and supported Linux app launching.
+- Free public web search and HTML/text page reading, with bounded requests and source links.
 - Editable personality preferences, voice-requested style adjustments, and concise
   or development console output.
 
-Web search, reminders, model-selected tool calls, a dashboard, messaging,
-Windows support, tone detection, and presence detection are **planned**.
+Reminders, model-selected tool calls, messaging, Windows support, tone detection,
+and presence detection are **planned**.
 See the [roadmap](docs/roadmap.md) for implementation status and priorities.
 
 ## Install and start
@@ -141,6 +143,8 @@ Try:
 - “Raphael, can you open Discord for me?”
 - “Raphael, my favorite game is CS2.” Then “Raphael, yes” to save it.
 - “Raphael, what's my favorite game?”
+- “Raphael, what's the weather in Paris today?”
+- “Raphael, compare current Linux gaming laptops.”
 - “Raphael, be more playful.”
 
 Local app launching supports Discord/Vesktop, Firefox, Chromium, Steam, and
@@ -153,6 +157,48 @@ Copy `persona.example.txt` to ignored `persona.txt` to customize her style.
 Preferences reload before each AI reply. Voice-requested changes update a managed
 block; “reset your persona” clears that block while preserving your own text.
 These preferences change reply style, not the actual TTS engine or playback speed.
+The default style uses simple, direct replies. Bracketed stage directions describing
+breathing, pauses, mood, or gestures are removed before speech and from saved replies.
+
+### Internet access
+
+RAPHAEL automatically recognizes common requests for changing facts such as news,
+weather, prices, and current recommendations, and reads public HTTP(S) links you
+provide. Say “search” to request
+a lookup; “research,” “compare,” and “double-check” use the larger research budget.
+She uses relevant user memory and recent conversation context to refine queries,
+keeps spoken replies concise, and shows source links in the terminal and desktop page.
+Follow-up searches keep the active user topic, and the terminal shows the query
+before retrieval. Unrelated results are discarded; source previews alone do not
+establish an exact answer.
+Web replies use a short answer with matching source excerpts, which the application
+checks before speech. Invalid output, invented quotes, and unsupported numbers receive
+an uncertainty reply. Exact anime-to-novel reading points require a page excerpt,
+not only a search preview. Web replies wait for validation before playback; ordinary
+conversation still streams when enabled.
+
+Search uses DuckDuckGo and Brave through the free `ddgs` package and needs no search API key.
+Public search and sites can block or fail requests. When no useful sources are found, RAPHAEL gives
+a local verification-failure response and offers a retry or general background.
+The first version reads public HTML and plain text. Account actions, purchases,
+file downloads, browser automation, and PDF/media extraction remain future work.
+
+Edit `.env` and restart to change these controls:
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `INTERNET_ENABLED` | `true` | Enable public search and page reading |
+| `INTERNET_AUTOMATIC` | `true` | Search current facts without an explicit search command |
+| `INTERNET_HOME_CITY` | Empty | Default city and country for local questions |
+| `INTERNET_TIMEOUT_SECONDS` / `INTERNET_RESEARCH_TIMEOUT_SECONDS` | `8.0` / `20.0` | Total lookup budgets |
+| `INTERNET_MAX_RESULTS` / `INTERNET_RESEARCH_MAX_RESULTS` | `5` / `8` | Search result limits |
+| `INTERNET_MAX_PAGES` / `INTERNET_RESEARCH_MAX_PAGES` | `2` / `4` | Page reading limits; `0` uses snippets only |
+
+A location in your request overrides the saved default. Set `INTERNET_HOME_CITY`
+to your city and country, or tell RAPHAEL the location when asked; a timezone does
+not establish your home city. `/local` keeps the conversation session private:
+internet retrieval stays disabled for follow-ups and after restarting RAPHAEL,
+until that session's history is cleared.
 
 ### Listening and performance settings
 
@@ -190,6 +236,9 @@ and suppresses known wording in provider context; it does not erase archived cha
 
 Wake recognition, transcription, and speech synthesis run locally. Cloud replies
 send conversation context and relevant saved facts to the selected provider.
+Web searches send query terms and relevant user context to public search services,
+and page reads contact the requested public sites. Use `/local` to keep the session
+private or set `INTERNET_ENABLED=false` to disable retrieval.
 In ambient mode, short background excerpts stay temporarily in RAM and may be
 sent to that provider to judge who is being addressed. There is no speaker
 identification or acoustic echo cancellation. Diagnostic transcript logging can
@@ -218,6 +267,7 @@ src/raphael/
 ├── memory/         # SQLite facts, conversations, summaries
 ├── platform/       # Linux audio and system telemetry
 ├── config.py       # environment settings
+├── internet.py     # bounded public search, page reading, source evidence
 ├── persona.py      # conversational style
 └── __main__.py     # CLI and voice loop
 scripts/            # launchers, downloads, diagnostics

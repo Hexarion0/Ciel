@@ -28,12 +28,10 @@ def voice_delivery_instruction(*, enabled: bool) -> str:
     if not enabled:
         return ""
     return (
-        "\nVoice delivery: write for the ear, with contractions, varied short clauses, and "
-        "natural punctuation. Let wording carry emotion: warm enthusiasm for good news, "
-        "gentle patience for difficult moments, dry amusement when joking, and steady focus "
-        "during tasks. Match the user's moment rather than sounding uniformly cheerful. "
-        "Occasional brief pauses can help; avoid repeated ellipses, filler, exclamation marks, "
-        "or theatrical stage directions. Never announce the emotion you are performing."
+        "\nVoice delivery: use ordinary conversational wording, short sentences, contractions, "
+        "and natural punctuation. Follow the user's latest style preference. Answer directly. "
+        "Do not write poetic language or stage directions describing breathing, pauses, "
+        "mood, gestures, or facial expressions. Do not announce how you are speaking."
     )
 
 
@@ -45,8 +43,7 @@ def speech_event_instruction(
         return ""
     supported = ", ".join(event.value for event in SpeechEvent)
     frequency = (
-        "Use at most two events in a reply, one per sentence; short replies usually need "
-        "zero or one. Let lively casual exchanges have an audible reaction when it fits."
+        "Use at most two events in a reply, one per sentence. Most replies need none."
         if expressiveness == "expressive" else
         "Use at most one event per reply, only when it adds clear meaning. Most replies need none."
     )
@@ -60,16 +57,48 @@ def speech_event_instruction(
         "at distress. Don't routinely cough, sniff, clear your throat, or shush; use those "
         "only when the conversation calls for that sound. Do not stack events, decorate "
         "every sentence, invent bracket tags or sustained mood controls, or describe the "
-        "event instead of using its marker. These markers are speech cues, not dialogue."
+        "event instead of using its marker. Only the listed native markers are supported. "
+        "Do not describe breathing, pauses, mood, or gestures in brackets. "
+        "These markers are speech cues, not dialogue."
     )
 
 
-_EVENT_PREFIX = re.compile(r"^\s*(?:\[[^\]\r\n]{1,24}\]\s*)+")
 _CANONICAL_EVENTS = {event.value.casefold(): event.value for event in SpeechEvent}
 # Application aliases; neither is an additional native Turbo token.
 _CANONICAL_EVENTS.update({"[moan]": SpeechEvent.GROAN.value,
                           "[giggle]": SpeechEvent.CHUCKLE.value})
 _EVENT_MARKERS = re.compile("|".join(map(re.escape, _CANONICAL_EVENTS)), re.IGNORECASE)
+_EVENT_PREFIX = re.compile(r"^\s*(?:(?:" + _EVENT_MARKERS.pattern + r")\s*)+", re.I)
+_BRACKETED_TEXT = re.compile(r"\[([^\[\]]+)\]")
+_STAGE_DIRECTION_START = re.compile(
+    r"^(?:(?:a|an|with)\s+)?"
+    r"(?:(?:soft|brief|short|long|deep|slow|gentle|quiet|calm|steady|focused|warm|"
+    r"thoughtful|audible|small|slight|subtle|quick|dramatic|softly|gently|quietly)\s+)*"
+    r"(?:inhal(?:e|es|ing|ation)|exhal(?:e|es|ing|ation)|breath(?:e|es|ing)?|"
+    r"paus(?:e|es|ing)|whisper(?:s|ing)?|speaking|spoken|tone|voice|"
+    r"smil(?:e|es|ing)|nod(?:s|ding)?|sigh(?:s|ing)?|laugh(?:s|ing|ter)?|"
+    r"chuckl(?:e|es|ing)|gasps?|clears?\s+(?:my|her|his|the)?\s*throat|"
+    r"calm|quiet|steady|focused|thoughtful|warm|gentle)\b",
+    re.IGNORECASE,
+)
+
+
+def is_stage_direction(content: str) -> bool:
+    """Identify performance descriptions while preserving native cues and bracketed data."""
+    content = content.strip()
+    if f"[{content.casefold()}]" in _CANONICAL_EVENTS:
+        return False
+    return _STAGE_DIRECTION_START.match(content) is not None
+
+
+def strip_stage_directions(text: str) -> str:
+    """Remove bracketed breathing, pause, mood, and gesture descriptions from dialogue."""
+    cleaned = _BRACKETED_TEXT.sub(
+        lambda match: "" if is_stage_direction(match.group(1)) else match.group(), text,
+    )
+    if cleaned != text:
+        cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    return cleaned.strip()
 
 
 class SpeechEventLimiter:
@@ -80,6 +109,7 @@ class SpeechEventLimiter:
 
     def apply(self, text: str) -> str:
         """Keep supported inline cues in place; discard excess or stacked cues."""
+        text = strip_stage_directions(text)
         last_event_end: int | None = None
 
         def replace(match: re.Match[str]) -> str:
@@ -110,13 +140,13 @@ def add_speech_event(text: str, event: SpeechEvent | None) -> str:
 
 def split_speech_event(text: str) -> tuple[str, str]:
     """Return canonical supported leading events separately from caption text."""
+    text = strip_stage_directions(text)
     match = _EVENT_PREFIX.match(text)
     if match is None:
         return "", text.strip()
     raw = match.group(0)
     tokens = re.findall(r"\[([^\]]+)\]", raw)
     events = {key[1:-1]: value for key, value in _CANONICAL_EVENTS.items()}
-    # Drop unknown leading markup without losing a valid neighboring cue.
     prefix = " ".join(
         events[token.strip().casefold()] for token in tokens
         if token.strip().casefold() in events
@@ -125,5 +155,5 @@ def split_speech_event(text: str) -> tuple[str, str]:
 
 
 def strip_speech_events(text: str) -> str:
-    """Remove native cues and application aliases from captions, transcripts, and history."""
-    return _EVENT_MARKERS.sub("", text).strip()
+    """Remove vocal cues and stage directions from captions, transcripts, and history."""
+    return _EVENT_MARKERS.sub("", strip_stage_directions(text)).strip()
