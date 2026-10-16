@@ -5,11 +5,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from raphael.memory import ConversationManager, MemoryItem, MemoryStore, MemoryType
-from raphael.memory.context import recall_context_memories
-from raphael.memory.service import MemoryService
-from raphael.persona import build_advanced_persona
-from raphael.providers.base import ChatMessage, LLMResponse
+from ciel.memory import ConversationManager, MemoryItem, MemoryStore, MemoryType
+from ciel.memory.context import recall_context_memories
+from ciel.memory.service import MemoryService
+from ciel.persona import build_advanced_persona
+from ciel.providers.base import ChatMessage, LLMResponse
 
 
 @pytest.fixture

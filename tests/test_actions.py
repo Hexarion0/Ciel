@@ -6,11 +6,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from raphael.actions import ActionRegistry
-from raphael.actions.base import ActionContext, ActionError
-from raphael.actions.open_app import OpenAppAction
-from raphael.actions.system_info import SystemInfoAction
-from raphael.platform.system_info import GpuInfo, SystemSnapshot
+from ciel.actions import ActionRegistry
+from ciel.actions.base import ActionContext, ActionError
+from ciel.actions.open_app import OpenAppAction
+from ciel.actions.system_info import SystemInfoAction
+from ciel.platform.system_info import GpuInfo, SystemSnapshot
 
 
 def test_discovery_loads_builtins_and_rejects_duplicate_names():
@@ -34,25 +34,25 @@ def test_quoted_or_compound_requests_do_not_execute(text):
 ])
 def test_launch_arguments_cannot_inject_shell_commands(monkeypatch, arguments):
     launch = MagicMock()
-    monkeypatch.setattr("raphael.actions.open_app.subprocess.Popen", launch)
+    monkeypatch.setattr("ciel.actions.open_app.subprocess.Popen", launch)
     ActionRegistry([OpenAppAction()]).execute("open_app", arguments, authorized=True)
     launch.assert_not_called()
 
 
 def test_inferred_followup_cannot_launch_an_application(monkeypatch):
     launch = MagicMock()
-    monkeypatch.setattr("raphael.actions.open_app.subprocess.Popen", launch)
+    monkeypatch.setattr("ciel.actions.open_app.subprocess.Popen", launch)
     answer = ActionRegistry([OpenAppAction()]).handle("Open Discord", authorized=False)
-    assert "address Raphael directly" in answer
+    assert "address Ciel directly" in answer
     launch.assert_not_called()
 
 
 def test_launch_uses_only_resolved_allowlisted_executable(monkeypatch):
-    monkeypatch.setattr("raphael.actions.open_app.sys.platform", "linux")
-    monkeypatch.setattr("raphael.actions.open_app.shutil.which",
+    monkeypatch.setattr("ciel.actions.open_app.sys.platform", "linux")
+    monkeypatch.setattr("ciel.actions.open_app.shutil.which",
                         lambda name: "/usr/bin/vesktop" if name == "vesktop" else None)
     launch = MagicMock()
-    monkeypatch.setattr("raphael.actions.open_app.subprocess.Popen", launch)
+    monkeypatch.setattr("ciel.actions.open_app.subprocess.Popen", launch)
     answer = ActionRegistry([OpenAppAction()]).handle("Please open Discord.", authorized=True)
     assert "sent the launch request" in answer
     assert launch.call_args.args == (["/usr/bin/vesktop"],)
@@ -60,19 +60,19 @@ def test_launch_uses_only_resolved_allowlisted_executable(monkeypatch):
 
 
 def test_missing_app_and_permissions_are_reported(monkeypatch):
-    monkeypatch.setattr("raphael.actions.open_app.sys.platform", "linux")
-    monkeypatch.setattr("raphael.actions.open_app.shutil.which", lambda name: None)
+    monkeypatch.setattr("ciel.actions.open_app.sys.platform", "linux")
+    monkeypatch.setattr("ciel.actions.open_app.shutil.which", lambda name: None)
     registry = ActionRegistry([OpenAppAction()])
     assert "couldn't find" in registry.handle("Open Firefox", authorized=True)
-    monkeypatch.setattr("raphael.actions.open_app.shutil.which", lambda name: "/bin/firefox")
-    monkeypatch.setattr("raphael.actions.open_app.subprocess.Popen",
+    monkeypatch.setattr("ciel.actions.open_app.shutil.which", lambda name: "/bin/firefox")
+    monkeypatch.setattr("ciel.actions.open_app.subprocess.Popen",
                         MagicMock(side_effect=PermissionError))
     assert "permission" in registry.handle("Open Firefox", authorized=True)
 
 
 def test_canceled_request_never_launches(monkeypatch):
     launch = MagicMock()
-    monkeypatch.setattr("raphael.actions.open_app.subprocess.Popen", launch)
+    monkeypatch.setattr("ciel.actions.open_app.subprocess.Popen", launch)
     cancel = threading.Event()
     cancel.set()
     answer = ActionRegistry([OpenAppAction()]).handle(
@@ -96,14 +96,14 @@ def test_telemetry_answers_are_local_and_allow_read_only_followups(monkeypatch, 
     snap = SystemSnapshot(ram_total_gb=16, ram_used_gb=8, ram_percent=50, cpu_count=8,
                           gpu=GpuInfo(name="Test GPU", temperature_c=50, available=True))
     snapshot = MagicMock(return_value=snap)
-    monkeypatch.setattr("raphael.actions.system_info.get_system_snapshot", snapshot)
+    monkeypatch.setattr("ciel.actions.system_info.get_system_snapshot", snapshot)
     answer = ActionRegistry([SystemInfoAction()]).handle(text, authorized=False)
     assert expected in answer
     assert 0 < snapshot.call_args.kwargs["gpu_timeout"] <= 1.5
 
 
 def test_unavailable_metrics_are_not_reported_as_zero(monkeypatch):
-    monkeypatch.setattr("raphael.actions.system_info.get_system_snapshot",
+    monkeypatch.setattr("ciel.actions.system_info.get_system_snapshot",
                         lambda **kwargs: SystemSnapshot())
     registry = ActionRegistry([SystemInfoAction()])
     assert "unavailable" in registry.handle("How much RAM am I using?", authorized=True)
@@ -134,7 +134,7 @@ def test_stale_action_confirmation_is_cleared(monkeypatch, reason):
     execute = MagicMock()
     monkeypatch.setattr(action, "execute", execute)
     clock = [100.0]
-    monkeypatch.setattr("raphael.actions.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("ciel.actions.time.monotonic", lambda: clock[0])
     registry = ActionRegistry([action])
     registry.handle("Open Discord", authorized=True)
     if reason == "timeout":
@@ -173,19 +173,19 @@ def test_handler_failures_are_local_and_do_not_leak_details(monkeypatch, error, 
 def test_discovery_finds_new_module_without_registry_changes(tmp_path, monkeypatch):
     import sys
 
-    import raphael.actions as package
+    import ciel.actions as package
 
     (tmp_path / 'test_extension.py').write_text(
-        'from raphael.actions.system_info import SystemInfoAction\n'
+        'from ciel.actions.system_info import SystemInfoAction\n'
         'ACTION = SystemInfoAction()\nACTION.name = "test_extension"\n'
     )
     monkeypatch.setattr(package, '__path__', [str(tmp_path)])
     # Restore sys.modules after discovery so the fixture doesn't leak a plugin.
-    monkeypatch.delitem(sys.modules, 'raphael.actions.test_extension', raising=False)
+    monkeypatch.delitem(sys.modules, 'ciel.actions.test_extension', raising=False)
     try:
         assert set(ActionRegistry.discover().actions) == {'test_extension'}
     finally:
-        sys.modules.pop('raphael.actions.test_extension', None)
+        sys.modules.pop('ciel.actions.test_extension', None)
 
 
 def test_failed_matcher_does_not_prevent_other_actions(monkeypatch):
@@ -242,7 +242,7 @@ def test_context_does_not_authorize_stale_or_inferred_launches(monkeypatch, reas
     execute = MagicMock(return_value='Launch requested')
     monkeypatch.setattr(action, 'execute', execute)
     clock = [100.0]
-    monkeypatch.setattr('raphael.actions.time.monotonic', lambda: clock[0])
+    monkeypatch.setattr('ciel.actions.time.monotonic', lambda: clock[0])
     registry = ActionRegistry([action])
     registry.handle('I meant Discord', authorized=True)
     if reason == 'expired':
@@ -254,7 +254,7 @@ def test_context_does_not_authorize_stale_or_inferred_launches(monkeypatch, reas
     elif reason == 'restart':
         registry = ActionRegistry([action])
     result = registry.handle('Can you open it for me?', authorized=reason != 'unauthorized')
-    assert 'address Raphael directly' in result if reason == 'unauthorized' else (
+    assert 'address Ciel directly' in result if reason == 'unauthorized' else (
         'Which application' in result
     )
     execute.assert_not_called()

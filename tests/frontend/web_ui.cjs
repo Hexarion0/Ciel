@@ -30,7 +30,7 @@ class Element {
   requestSubmit() { return this.listeners.submit({preventDefault() {}}); }
 }
 
-const html = fs.readFileSync('src/raphael/web_assets/index.html', 'utf8');
+const html = fs.readFileSync('src/ciel/web_assets/index.html', 'utf8');
 const elements = new Map(
   [...html.matchAll(/<[a-z][^>]*\bid="([^"]+)"[^>]*>/gi)].map(match => {
     const node = new Element();
@@ -45,7 +45,7 @@ const timers = new Map();
 let nextTimer = 0;
 const starters = [new Element(), new Element()];
 const state = {
-  owner: 'a different owner', wake_phrase: 'hey raphael', state: 'listening_wake',
+  owner: 'a different owner', wake_phrase: 'hey ciel', state: 'listening_wake',
   muted: false, voice_enabled: true, activity: [], messages: [
     {id: 1, role: 'user', text: '<script>literal text</script>', time: 1},
     {id: 2, role: 'assistant', text: 'Hello.', time: 2}

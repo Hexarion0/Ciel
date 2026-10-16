@@ -47,7 +47,7 @@ used as review inputs. This is a broad code review, not live audio acceptance or
 a line-by-line certification of every file.
 
 During the original review, application code was not changed. The existing edits to
-`src/raphael/web_assets/index.html` and `tests/frontend/orb_animation.cjs` were
+`src/ciel/web_assets/index.html` and `tests/frontend/orb_animation.cjs` were
 preserved. This report is the only repository file added by the review.
 
 ## Validation
@@ -57,7 +57,7 @@ preserved. This report is the only repository file added by the review.
 | `.venv/bin/pytest` | **707 passed, 3 deselected** |
 | `.venv/bin/ruff check src tests` | Passed |
 | `.venv/bin/python -m pip check` | No broken requirements |
-| `bash -n setup.sh scripts/install_raphael_command.sh scripts/launch_raphael_gpu.sh` | Passed |
+| `bash -n setup.sh scripts/install_ciel_command.sh scripts/launch_ciel_gpu.sh` | Passed |
 | `git diff --check` | Passed for the existing working changes |
 | CLI `--help` and `--version` | Passed; version 0.3.6 |
 | Wheel build with declared isolated build backend | Passed; web page included |
@@ -78,8 +78,8 @@ recording, speech playback, or application launches were needed for the probes.
 
 ### 1. High: `/local` can send the conversation to a cloud provider
 
-Sources: [router.py](../src/raphael/providers/router.py), line 126;
-[manager.py](../src/raphael/providers/manager.py), lines 90 and 144.
+Sources: [router.py](../src/ciel/providers/router.py), line 126;
+[manager.py](../src/ciel/providers/manager.py), lines 90 and 144.
 
 The router chooses Ollama for `/local`, but the manager treats that choice as a
 preference and appends the usual cloud fallback chain. If Ollama fails and a
@@ -96,7 +96,7 @@ conversation intended to stay local as well.
 
 ### 2. High: forgetting an absent topic can delete a different fact
 
-Source: [service.py](../src/raphael/memory/service.py), line 269.
+Source: [service.py](../src/ciel/memory/service.py), line 269.
 
 If a recognized fact key is absent, `_forget()` falls back to ranked search.
 One candidate is accepted regardless of how weak or generic the overlap is.
@@ -113,7 +113,7 @@ specific evidence or ask the user to confirm the exact candidate before deletion
 
 ### 3. Medium: saving a new value removes suppression of forgotten old values
 
-Source: [store.py](../src/raphael/memory/store.py), `upsert_fact()`, line 269.
+Source: [store.py](../src/ciel/memory/store.py), `upsert_fact()`, line 269.
 
 Saving a keyed fact deletes its entire entry from `forgotten_memories`, including
 patterns belonging to older values. Archived conversations are intentionally
@@ -129,7 +129,7 @@ not automatically re-authorize all old values in archived text.
 
 ### 4. Medium: restarting an active microphone stream deadlocks
 
-Source: [linux.py](../src/raphael/platform/linux.py), line 215.
+Source: [linux.py](../src/ciel/platform/linux.py), line 215.
 
 `start_stream()` holds a non-reentrant `threading.Lock` and calls
 `stop_stream()`, which acquires the same lock. The active-stream replacement
@@ -146,7 +146,7 @@ replacement and recovery after a stream-start failure with mocked devices.
 
 ### 5. Medium: wake interruption mode also interrupts on loud noise
 
-Source: [listener.py](../src/raphael/audio/listener.py), line 367.
+Source: [listener.py](../src/ciel/audio/listener.py), line 367.
 
 When ambient listening is disabled, `barge_in_mode='wake'` still checks RMS
 and stops output if it exceeds the default 0.030 threshold. This contradicts
@@ -164,8 +164,8 @@ this behavior, so its expectations should be reviewed alongside the change.
 
 ### 6. Medium: canceling a persona edit does not cancel the pending edit
 
-Sources: [__main__.py](../src/raphael/__main__.py), lines 531 and 562;
-[persona.py](../src/raphael/persona.py), line 55.
+Sources: [__main__.py](../src/ciel/__main__.py), lines 531 and 562;
+[persona.py](../src/ciel/persona.py), line 55.
 
 The stop/cancel path clears memory and action proposals but leaves
 `persona_change_pending` true. In that mode, the parser accepts almost any
@@ -174,9 +174,9 @@ expiry, allowing an unrelated later request to become a persistent preference.
 
 **Reproduction through the real CLI callbacks, with mocked audio:**
 
-1. `Raphael, can you update your persona?`
-2. `Raphael, cancel`
-3. `Raphael, what's the time?`
+1. `Ciel, can you update your persona?`
+2. `Ciel, cancel`
+3. `Ciel, what's the time?`
 
 The third turn writes `what's the time` into the managed persona block and
 acknowledges a style update instead of answering the clock question.
@@ -187,9 +187,9 @@ questions as style preferences even while a proposal is pending.
 
 ### 7. Medium: custom wake training is disconnected from normal configuration
 
-Sources: [config.py](../src/raphael/config.py), lines 102 and 292;
-[trainer.py](../src/raphael/audio/trainer.py), `train_custom_wakeword()`;
-[wake.py](../src/raphael/audio/wake.py), `_resolve_model_paths()`.
+Sources: [config.py](../src/ciel/config.py), lines 102 and 292;
+[trainer.py](../src/ciel/audio/trainer.py), `train_custom_wakeword()`;
+[wake.py](../src/ciel/audio/wake.py), `_resolve_model_paths()`.
 
 `AudioConfig` defines `wake_models`, but environment-facing `Settings` does
 not define it or forward it into the audio configuration. The CLI reads
@@ -197,7 +197,7 @@ not define it or forward it into the audio configuration. The CLI reads
 does not automatically discover the model written by `train-wake`.
 
 **Reproduction:** constructing `Settings(_env_file=None,
-wake_models=['models/custom/hey_raphael.onnx'])` silently ignores the value;
+wake_models=['models/custom/hey_ciel.onnx'])` silently ignores the value;
 `settings.audio.wake_models` is `[]`.
 
 **Suggested change:** expose and forward a documented `WAKE_MODELS` setting,
@@ -207,7 +207,7 @@ current "now calibrated" success message overstates the runtime result.
 
 ### 8. Medium: a failed summary permanently skips most of its batch
 
-Source: [manager.py](../src/raphael/memory/manager.py), line 263.
+Source: [manager.py](../src/ciel/memory/manager.py), line 263.
 
 When the provider fails, the fallback describes only the first three older
 turns. The saved cursor nevertheless advances to the end of the entire batch,
@@ -272,15 +272,15 @@ adding more capabilities.
 ## Probe artifacts
 
 The temporary review harnesses are available locally at
-`/tmp/raphael-audit-probes.py` and `/tmp/raphael-audit-persona-probe.py`.
-The wheel is under `/tmp/raphael-audit-wheel/`. These are disposable review
+`/tmp/ciel-audit-probes.py` and `/tmp/ciel-audit-persona-probe.py`.
+The wheel is under `/tmp/ciel-audit-wheel/`. These are disposable review
 artifacts and are not part of the tracked test suite.
 
 Run the probes from the repository root:
 
 ```bash
-.venv/bin/python /tmp/raphael-audit-probes.py
-PYTHONPATH=.:src .venv/bin/python /tmp/raphael-audit-persona-probe.py
+.venv/bin/python /tmp/ciel-audit-probes.py
+PYTHONPATH=.:src .venv/bin/python /tmp/ciel-audit-persona-probe.py
 ```
 
 The audio restart probe uses a daemon thread to demonstrate the lock deadlock;

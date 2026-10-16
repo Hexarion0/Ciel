@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay existing human speech through RAPHAEL VAD; optionally measure actual STT.
+"""Replay existing human speech through CIEL VAD; optionally measure actual STT.
 
 This is a repeatable proxy, not a measurement of this user's microphone or intent
 to finish speaking. A later spoken word in a passage flags a potential early cut.
@@ -16,9 +16,9 @@ import numpy as np
 import soundfile as sf
 from scipy.signal import resample_poly
 
-from raphael.audio.activity import SpeechActivity
-from raphael.audio.recorder import VoiceRecorder
-from raphael.config import get_settings
+from ciel.audio.activity import SpeechActivity
+from ciel.audio.recorder import VoiceRecorder
+from ciel.config import get_settings
 
 
 def load_audio(path: Path) -> np.ndarray:
@@ -63,11 +63,11 @@ def main() -> None:
     args = parser.parse_args()
     root = Path("data/diagnostics/conversation-latency")
     root.mkdir(parents=True, exist_ok=True)
-    refs = Path("data/voice/references/raphael")
+    refs = Path("data/voice/references/ciel")
     rows = []
     stt = None
     if args.stt:
-        from raphael.audio.stt import SpeechToText
+        from ciel.audio.stt import SpeechToText
 
         cfg = get_settings().audio
         began = time.monotonic()

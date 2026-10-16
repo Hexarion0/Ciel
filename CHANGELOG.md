@@ -2,6 +2,31 @@
 
 ## Unreleased — 0.3.6 development
 
+- Keep superseded speech handling off the provider path, clear stale fragments
+  when typing, and share one controller deadline across follow-up checks. Route
+  supported personal corrections locally and explain when an unaddressed memory
+  change has not been saved; preserve explicit authorization and exact values.
+- Honor stream cancellation independently of playback state, keep installed wake
+  assets in writable user storage, hide saved keys in setup prompts, and preserve
+  legacy voice-only Ciel configuration consistently with setup.
+- Reject aliased archive members and symlinked partial downloads in optional
+  voice-training tools. Require explicit Kaggle account selection and keep
+  diagnostic downloads under private local data.
+- Keep explicitly addressed local clock, memory, and supported desktop commands
+  available without NIM; retain authorization, cancellation, and private routing.
+  Share terminal/web session handling in a runtime module outside CLI startup.
+- Align fresh configuration and setup with the Pocket CPU default while preserving
+  existing voices. Bundle the Turbo worker and default manifest in wheels, with
+  writable per-user voice paths and explicit asset overrides.
+- Extend script lint and shell checks, verify bundled wheel resources in CI, and
+  remove machine-specific repository/account defaults from the Kaggle runner.
+- Advance memory with full-collection indexed recall, Unicode matching, current-fact
+  deduplication, bounded conversation replay, and atomic background summary commits.
+  Add selectable automatic learning, confirmed replacements, persistent recall
+  pause/resume, project journals, inspection, revision history, and private backups.
+  Prevent forgotten wording from leaking through speech gates and local fact reads.
+- Rename the project to Ciel, including the `ciel` package and command, `CIEL_*`
+  settings, desktop branding, custom voice profile, and default “Hey Ciel” wake phrase.
 - Fix faint sigh/groan output using optional separate effect-style conditioning,
   retained speaker identity, cached cues, and bounded level balancing. Restore
   normal conditionals after each effect, including failures; reject inaudible cues.
@@ -35,7 +60,7 @@
   high-DPI resolution, and reduce frame rates while waiting and speaking.
 - Buffer TTS playback in 1,024-frame blocks with configurable
   `TTS_PLAYBACK_LATENCY=0.12` to tolerate scheduling delays, and report underruns.
-- Add `raphael web`, a PC-local desktop page using the existing microphone,
+- Add `ciel web`, a PC-local desktop page using the existing microphone,
   speakers, conversation worker, memory, and actions. Display current speech,
   status, and mute/stop/shutdown controls without new dependencies.
 - Replace the web conversation feed with a voice orb, a temporary current-reply
@@ -64,7 +89,7 @@
   and concise/development console modes.
 - Integrate the persistent custom Chatterbox Turbo voice with Piper fallback;
   remove retired voice experiments and training tools.
-- Offer custom RAPHAEL or default Amy in setup. Check missing custom assets,
+- Offer custom CIEL or default Amy in setup. Check missing custom assets,
   preserve existing settings, and use CPU/Amy for the fresh-install example.
 - Pin Turbo downloads to the revision accepted by the worker, refreshing an
   incompatible cached inventory. Keep the custom reference assets private.
@@ -114,11 +139,11 @@
   like a robot” and brief conversational tags such as “do you know?” or “right”.
   Quoted speech, other listeners and unrelated appended instructions still need
   the ambient intent decision.
-- Recover bounded clock questions ending in RAPHAEL's name when STT drops “it”,
-  such as “What time is Raphael?”. Use the local clock and retain the original
+- Recover bounded clock questions ending in CIEL's name when STT drops “it”,
+  such as “What time is Ciel?”. Use the local clock and retain the original
   wording in history. Inferred address does not authorize memory writes.
 - Answer normal trailing-name clock questions locally as well, avoiding a cloud
-  request for “What's the time Raphael?”.
+  request for “What's the time Ciel?”.
 
 ## 0.3.2 — 2026-10-04 (development)
 

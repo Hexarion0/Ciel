@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 from dotenv import dotenv_values
 
-from raphael import setup_wizard
+from ciel import setup_wizard
 
 
 @pytest.fixture(autouse=True)
@@ -37,7 +37,7 @@ def test_selected_voice_persists_matching_engine(tmp_path, monkeypatch):
 def test_setup_preserves_custom_settings_and_reports_playback_failure(
     tmp_path, monkeypatch, capsys
 ):
-    from raphael.config import Settings
+    from ciel.config import Settings
 
     monkeypatch.chdir(tmp_path)
     original = (
@@ -75,7 +75,7 @@ def test_setup_preserves_custom_settings_and_reports_playback_failure(
 def test_setup_can_reset_devices_and_change_voice(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".env").write_text(
-        "TTS_VOICE=raphael\nTTS_ENGINE=chatterbox_turbo\nAUDIO_INPUT_DEVICE=3\n"
+        "TTS_VOICE=ciel\nTTS_ENGINE=chatterbox_turbo\nAUDIO_INPUT_DEVICE=3\n"
     )
     answers = iter(["", "", "", "2", "default", "USB Speaker"])
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
@@ -95,10 +95,17 @@ def test_setup_can_reset_devices_and_change_voice(tmp_path, monkeypatch):
 @pytest.mark.parametrize(
     ("existing", "choice", "voice", "engine"),
     [
-        ("", "", "en_US-amy-medium", "piper"),
-        ("TTS_VOICE=en_US-amy-medium\nTTS_ENGINE=piper\n", "1", "raphael", "chatterbox_turbo"),
-        ("TTS_VOICE=raphael\nTTS_ENGINE=chatterbox_turbo\n", "", "raphael", "chatterbox_turbo"),
-        ("TTS_VOICE=raphael\n", "", "raphael", "chatterbox_turbo"),
+        ("", "", "ciel", "pocket"),
+        ("TTS_VOICE=en_US-amy-medium\n", "", "en_US-amy-medium", "piper"),
+        ("TTS_ENGINE=piper\n", "", "en_US-amy-medium", "piper"),
+        ("TTS_ENGINE=pocket\n", "", "ciel", "pocket"),
+        ("TTS_VOICE=en_US-custom-medium\nTTS_ENGINE=auto\n", "",
+         "en_US-custom-medium", "auto"),
+        ("TTS_VOICE=en_US-amy-medium\nTTS_ENGINE=piper\n", "1", "ciel", "chatterbox_turbo"),
+        ("TTS_VOICE=ciel\nTTS_ENGINE=chatterbox_turbo\n", "", "ciel", "chatterbox_turbo"),
+        ("TTS_VOICE=ciel\n", "", "ciel", "chatterbox_turbo"),
+        ("", "3", "ciel", "pocket"),
+        ("TTS_VOICE=ciel\nTTS_ENGINE=pocket\n", "", "ciel", "pocket"),
     ],
 )
 def test_setup_voice_choices(tmp_path, monkeypatch, existing, choice, voice, engine):
@@ -144,11 +151,11 @@ def test_missing_custom_assets_save_choice_without_claiming_success(tmp_path, mo
     setup_wizard.run_setup_wizard()
 
     saved = dotenv_values(tmp_path / ".env")
-    assert saved["TTS_VOICE"] == "raphael"
+    assert saved["TTS_VOICE"] == "ciel"
     assert saved["TTS_ENGINE"] == "chatterbox_turbo"
     tts.assert_not_called()
     output = capsys.readouterr().out
-    assert "Please enter 1 for RAPHAEL or 2 for Amy" in output
+    assert "Please enter 1 for Turbo HQ, 2 for Amy, or 3 for CPU Pocket" in output
     assert "reference_audio: /private/reference.wav" in output
     assert "choose Amy" in output
     assert "Setup Complete!" not in output
@@ -157,7 +164,7 @@ def test_missing_custom_assets_save_choice_without_claiming_success(tmp_path, mo
 
 def test_custom_asset_check_uses_configured_paths(tmp_path):
     config = {
-        "TTS_VOICE": "raphael",
+        "TTS_VOICE": "ciel",
         "TTS_VOICE_PROFILES": str(tmp_path / "profiles"),
         "TTS_CHATTERBOX_MODEL": str(tmp_path / "model"),
         "TTS_CHATTERBOX_PYTHON": str(tmp_path / "env/bin/python"),
@@ -166,7 +173,7 @@ def test_custom_asset_check_uses_configured_paths(tmp_path):
     assert any("Turbo Python environment" in problem for problem in problems)
     assert any("voice profile" in problem for problem in problems)
     assert any("Turbo model file" in problem for problem in problems)
-    profile = tmp_path / "profiles/raphael"
+    profile = tmp_path / "profiles/ciel"
     profile.mkdir(parents=True)
     (profile / "voice.json").write_text(json.dumps({
         "engine": "chatterbox_turbo",

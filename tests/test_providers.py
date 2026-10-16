@@ -5,12 +5,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from raphael.providers.base import ChatMessage, LLMProvider, LLMResponse, LLMStreamChunk
-from raphael.providers.groq import GroqProvider
-from raphael.providers.manager import ProviderManager
-from raphael.providers.nim import NimProvider
-from raphael.providers.ollama import OllamaProvider
-from raphael.providers.openrouter import OpenRouterProvider
+from ciel.providers.base import ChatMessage, LLMProvider, LLMResponse, LLMStreamChunk
+from ciel.providers.groq import GroqProvider
+from ciel.providers.manager import ProviderManager
+from ciel.providers.nim import NimProvider
+from ciel.providers.ollama import OllamaProvider
+from ciel.providers.openrouter import OpenRouterProvider
 
 
 def test_chat_message_serialization():
@@ -213,7 +213,7 @@ def test_stream_cancel_control_is_not_sent_to_api(provider_class, monkeypatch):
 def test_http_stream_client_closes_when_canceled(monkeypatch):
     from threading import Event
 
-    from raphael.providers.streaming import streaming_client
+    from ciel.providers.streaming import streaming_client
 
     canceled, closed = Event(), Event()
     client = MagicMock()
@@ -319,7 +319,7 @@ def test_nim_template_options_are_model_specific_for_streams():
 
 
 @patch("httpx.Client.post")
-@patch("raphael.providers.nim.time.sleep")
+@patch("ciel.providers.nim.time.sleep")
 def test_nim_transient_http_errors_retry_then_use_backup(mock_sleep, mock_post):
     import httpx
 
@@ -366,7 +366,7 @@ def test_nim_http_fallback_policy(monkeypatch, streaming, status):
         transport=httpx.MockTransport(handle), **kw,
     ))
     sleeper = MagicMock()
-    monkeypatch.setattr("raphael.providers.nim.time.sleep", sleeper)
+    monkeypatch.setattr("ciel.providers.nim.time.sleep", sleeper)
 
     def reply():
         if streaming:
@@ -489,3 +489,30 @@ def test_nim_only_falls_back_before_visible_stream_content(monkeypatch, partial)
         assert chunks[-1].is_final
         assert all(chunk.model == 'backup' for chunk in chunks)
         assert client.stream.call_count == 2
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_controller_nim_never_falls_back_to_heavy_model(monkeypatch, streaming):
+    import httpx
+
+    requests = []
+    provider = NimProvider(api_key="test", model="nvidia/nemotron-3.5-lightning-30b-a3b")
+
+    def handle(request):
+        payload = json.loads(request.content)
+        requests.append(payload)
+        return httpx.Response(404)
+
+    client_class = httpx.Client
+    monkeypatch.setattr("httpx.Client", lambda **kw: client_class(
+        transport=httpx.MockTransport(handle), **kw,
+    ))
+    with pytest.raises(httpx.HTTPStatusError):
+        if streaming:
+            list(provider.stream("Decide", allow_model_fallback=False))
+        else:
+            provider.send("Decide", allow_model_fallback=False)
+    assert len(requests) == 1
+    assert requests[0]["model"] == provider.default_model
+    assert "allow_model_fallback" not in requests[0]
+    assert requests[0]["chat_template_kwargs"]["enable_thinking"] is False

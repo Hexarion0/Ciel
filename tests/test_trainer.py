@@ -8,7 +8,7 @@ import onnxruntime as ort
 import pytest
 import soundfile as sf
 
-from raphael.audio.trainer import train_custom_wakeword
+from ciel.audio.trainer import train_custom_wakeword
 
 
 @pytest.mark.integration

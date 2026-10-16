@@ -7,9 +7,9 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from raphael.platform import get_audio_backend
-from raphael.platform.base import AudioBackend, AudioDeviceInfo
-from raphael.platform.linux import LinuxAudioBackend
+from ciel.platform import get_audio_backend
+from ciel.platform.base import AudioBackend, AudioDeviceInfo
+from ciel.platform.linux import LinuxAudioBackend
 
 
 def test_audio_device_info():

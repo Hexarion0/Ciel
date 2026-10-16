@@ -6,19 +6,19 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from raphael.audio.alignment import CharacterTimeline
-from raphael.audio.tts import TextToSpeech
+from ciel.audio.alignment import CharacterTimeline
+from ciel.audio.tts import TextToSpeech
 
 
 def timed_playback(monkeypatch, *, stop_at=None):
     """Model a one-second output buffer with a known device latency."""
     clock = [100.0]
-    tts = TextToSpeech(enabled=False)
+    tts = TextToSpeech(engine="piper", enabled=False)
     tts.enabled = True
     audio = np.ones(100, dtype=np.float32)
     timeline = CharacterTimeline('ABC', (0.2, 0.4, 0.8), 'phoneme')
     monkeypatch.setattr(tts, '_prepare_playback', lambda text: (audio, 100, timeline))
-    monkeypatch.setattr('raphael.audio.tts.time.monotonic', lambda: clock[0])
+    monkeypatch.setattr('ciel.audio.tts.time.monotonic', lambda: clock[0])
 
     class OutputStream:
         latency = 0.1
@@ -36,7 +36,7 @@ def timed_playback(monkeypatch, *, stop_at=None):
 
     tts._stop_event = AudioClock()
     played, stopped = [], []
-    monkeypatch.setattr('raphael.audio.tts.sd', SimpleNamespace(
+    monkeypatch.setattr('ciel.audio.tts.sd', SimpleNamespace(
         play=lambda *args, **kwargs: played.append(1),
         get_stream=lambda: OutputStream(), stop=lambda: stopped.append(1),
     ))

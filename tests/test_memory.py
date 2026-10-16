@@ -1,4 +1,4 @@
-"""Tests for RAPHAEL SQLite memory architecture and persistence engine."""
+"""Tests for CIEL SQLite memory architecture and persistence engine."""
 
 import sqlite3
 import tempfile
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from raphael.memory import ConversationTurn, MemoryItem, MemoryStore, MemoryType
+from ciel.memory import ConversationTurn, MemoryItem, MemoryStore, MemoryType
 
 
 @pytest.fixture
@@ -69,7 +69,7 @@ def test_memory_search_and_filtering(temp_store: MemoryStore):
     )
     temp_store.save_memory(
         MemoryItem(
-            content="Project RAPHAEL is a desktop voice assistant",
+            content="Project CIEL is a desktop voice assistant",
             memory_type=MemoryType.PROJECT,
         )
     )
@@ -132,7 +132,7 @@ def test_conversation_turns_persistence(temp_store: MemoryStore):
 
     # Add turns to session A
     temp_store.save_turn(
-        ConversationTurn(session_id=session_a, role="user", content="Hello Raphael")
+        ConversationTurn(session_id=session_a, role="user", content="Hello Ciel")
     )
     temp_store.save_turn(
         ConversationTurn(
@@ -157,7 +157,7 @@ def test_conversation_turns_persistence(temp_store: MemoryStore):
     turns = temp_store.get_recent_turns(session_id=session_a, limit=10)
     assert len(turns) == 3
     assert turns[0].role == "user"
-    assert turns[0].content == "Hello Raphael"
+    assert turns[0].content == "Hello Ciel"
     assert turns[1].role == "assistant"
     assert turns[1].provider == "nim"
     assert turns[2].content == "What is my GPU?"

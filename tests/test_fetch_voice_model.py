@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-REVISION = json.loads((ROOT / "voice_profiles/raphael/voice.json").read_text())["model_revision"]
+REVISION = json.loads((ROOT / "voice_profiles/ciel/voice.json").read_text())["model_revision"]
 
 
 @pytest.fixture

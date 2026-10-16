@@ -8,7 +8,7 @@ import threading
 import time
 from unittest.mock import MagicMock
 
-from raphael.terminal import TerminalInput
+from ciel.terminal import TerminalInput
 
 
 def make_terminal(**overrides):
@@ -32,15 +32,15 @@ def test_commands_are_local_and_mute_is_a_toggle():
     messages = [call.args[0] for call in callbacks["write"].call_args_list]
     assert messages[0].startswith("Microphone muted")
     assert messages[1] == "Microphone unmuted."
-    assert messages[-1].startswith("Exiting RAPHAEL")
+    assert messages[-1].startswith("Exiting CIEL")
 
 
 def test_text_and_provider_overrides_are_forwarded_intact():
     terminal, callbacks = make_terminal()
-    for text in ["What is Raphael?", "/fast explain this", "  Hello.  "]:
+    for text in ["What is Ciel?", "/fast explain this", "  Hello.  "]:
         terminal.handle_line(text)
     assert [call.args[0] for call in callbacks["submit"].call_args_list] == [
-        "What is Raphael?", "/fast explain this", "Hello.",
+        "What is Ciel?", "/fast explain this", "Hello.",
     ]
 
 
@@ -104,7 +104,7 @@ def test_interactive_prompt_returns_after_command_and_not_after_exit():
         assert not terminal._thread.is_alive()
         assert output.getvalue() == (
             "[hexarion]: [system]: Microphone muted; typed messages still work.\n"
-            "[hexarion]: [system]: Exiting RAPHAEL; shutting down the microphone "
+            "[hexarion]: [system]: Exiting CIEL; shutting down the microphone "
             "and voice worker.\n"
         )
     finally:
@@ -114,8 +114,8 @@ def test_interactive_prompt_returns_after_command_and_not_after_exit():
 
 
 def test_typing_during_speech_preserves_draft_and_restores_terminal_mode():
-    from raphael.audio.captions import TerminalCaptions
-    from raphael.terminal_output import TerminalOutput
+    from ciel.audio.captions import TerminalCaptions
+    from ciel.terminal_output import TerminalOutput
 
     class TtyBuffer(io.StringIO):
         def isatty(self):
@@ -155,7 +155,7 @@ def test_typing_during_speech_preserves_draft_and_restores_terminal_mode():
             speech.write_log("INFO: background work")
             speech.update("Hello world.", finished=True)
             speech.close()
-            assert buffer.getvalue().endswith("RAPHAEL: Hello world.\n[hexarion]: draft")
+            assert buffer.getvalue().endswith("CIEL: Hello world.\n[hexarion]: draft")
             os.write(master, b"\x7f!\n")
             assert submitted.wait(timeout=1)
             assert received == ["draf!"]

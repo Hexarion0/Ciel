@@ -1,6 +1,6 @@
 import pytest
 
-from raphael.conversation import is_farewell
+from ciel.conversation import is_farewell
 
 
 @pytest.mark.parametrize(
@@ -9,7 +9,7 @@ from raphael.conversation import is_farewell
         "bye",
         "Goodbye!",
         "good night",
-        "thanks, bye Raphael!",
+        "thanks, bye Ciel!",
         "See you tomorrow.",
         "take care",
         "bye-bye",
@@ -38,28 +38,28 @@ def test_farewell_words_in_questions_do_not_end_session(text):
 @pytest.mark.parametrize(
     "text, expected",
     [
-        ("Hey Raphael.", ""),
-        ("Hey Raphael!", ""),
-        ("Raphael?", ""),
-        ("Hey Raphael, are you good?", "are you good?"),
-        ("hey raphael. Hey Raphael, what's the time?", "what's the time?"),
-        ("Raphaelite art", "Raphaelite art"),
-        ("Tell me about Raphael.", "Tell me about Raphael."),
-        ("So Raphael, what's on your mind?", "what's on your mind?"),
-        ("Well, um, hey Raphael, what's the time?", "what's the time?"),
-        ("So what's good Raphael?", "So what's good Raphael?"),
+        ("Hey Ciel.", ""),
+        ("Hey Ciel!", ""),
+        ("Ciel?", ""),
+        ("Hey Ciel, are you good?", "are you good?"),
+        ("hey ciel. Hey Ciel, what's the time?", "what's the time?"),
+        ("Cielite art", "Cielite art"),
+        ("Tell me about Ciel.", "Tell me about Ciel."),
+        ("So Ciel, what's on your mind?", "what's on your mind?"),
+        ("Well, um, hey Ciel, what's the time?", "what's the time?"),
+        ("So what's good Ciel?", "So what's good Ciel?"),
         ("So what's good?", "So what's good?"),
-        ("So I hate Raphael.", "So I hate Raphael."),
+        ("So I hate Ciel.", "So I hate Ciel."),
     ],
 )
 def test_wake_phrase_is_removed_with_its_punctuation(text, expected):
-    from raphael.conversation import strip_wake_phrase
+    from ciel.conversation import strip_wake_phrase
 
     assert strip_wake_phrase(text) == expected
 
 
 def test_custom_wake_phrase_is_removed():
-    from raphael.conversation import strip_wake_phrase
+    from ciel.conversation import strip_wake_phrase
 
     assert strip_wake_phrase("Hey Jarvis. Open the browser.", "hey jarvis") == "Open the browser."
     assert strip_wake_phrase("So computer, open the browser.", "so computer") == "open the browser."

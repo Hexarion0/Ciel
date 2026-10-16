@@ -32,17 +32,33 @@ jobs:
           python -m pip install -e ".[dev]"
       - name: Lint and test
         run: |
-          ruff check src tests
+          ruff check src tests scripts
           pytest
           python -m pip check
-          bash -n setup.sh scripts/install_raphael_command.sh scripts/launch_raphael_gpu.sh
+          for script in setup.sh scripts/*.sh; do
+            bash -n "$script" || exit
+          done
       - name: Build wheel
         run: python -m pip wheel . --no-deps -w dist
       - name: Install wheel
-        run: python -m pip install --force-reinstall --no-deps dist/raphael-*.whl
+        run: python -m pip install --force-reinstall --no-deps dist/ciel-*.whl
       - name: Smoke test installed CLI outside checkout
         working-directory: ${{ runner.temp }}
         run: |
-          python -m raphael --help
-          raphael --version
-          python -c 'from importlib.resources import files; assert files("raphael").joinpath("web_assets/index.html").is_file()'
+          python -m ciel --help
+          ciel --version
+          python - <<'PY'
+          import subprocess
+          import sys
+          from importlib.resources import files
+          from ciel.paths import bundled_worker_path, development_root, voice_profile_path
+
+          assert development_root() is None
+          assert files("ciel").joinpath("web_assets/index.html").is_file()
+          assert bundled_worker_path().is_file()
+          assert voice_profile_path("ciel").is_file()
+          subprocess.run(
+              [sys.executable, "-I", "-S", str(bundled_worker_path()), "--help"],
+              check=True,
+          )
+          PY

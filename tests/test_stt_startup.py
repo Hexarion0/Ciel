@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from raphael.audio.stt import SpeechToText
+from ciel.audio.stt import SpeechToText
 
 
 @pytest.mark.parametrize('cuda_failure', [False, True])
@@ -27,7 +27,7 @@ def test_startup_consumes_cuda_warmup_before_reporting_ready(monkeypatch, cuda_f
 
     gpu_model.transcribe.return_value = (segments(), MagicMock())
     factory = MagicMock(side_effect=[gpu_model, cpu_model])
-    monkeypatch.setattr('raphael.audio.stt.WhisperModel', factory)
+    monkeypatch.setattr('ciel.audio.stt.WhisperModel', factory)
     stt._load_model_bg()
     assert inference == ['ran']  # Creating the generator alone does not load cuBLAS.
     assert stt.is_ready() and stt._load_error is None

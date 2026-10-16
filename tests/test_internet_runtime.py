@@ -6,9 +6,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from raphael.internet import InternetResult, InternetService, InternetSource
-from raphael.memory import MemoryItem, MemoryStore, MemoryType
-from raphael.providers.base import LLMResponse, LLMStreamChunk
+from ciel.internet import InternetResult, InternetService, InternetSource
+from ciel.memory import MemoryItem, MemoryStore, MemoryType
+from ciel.providers.base import LLMResponse, LLMStreamChunk
 from tests.test_ambient import run_callbacks
 
 
@@ -18,7 +18,7 @@ def stub_internet(monkeypatch, result):
     service.prepare.return_value = result
     factory = MagicMock(return_value=service)
     factory._context = InternetService._context
-    monkeypatch.setattr("raphael.internet.InternetService", factory)
+    monkeypatch.setattr("ciel.internet.InternetService", factory)
     return service
 
 
@@ -42,7 +42,7 @@ def test_voice_and_text_use_evidence_and_persist_sources(
     ])
     info = {"input_source": "keyboard"} if typed else {}
     _, tts, _, store, turns = run_callbacks(
-        tmp_path, monkeypatch, [("Raphael, what are today's headlines?", info)],
+        tmp_path, monkeypatch, [("Ciel, what are today's headlines?", info)],
         router=router, streaming=streaming,
     )
     try:
@@ -55,7 +55,7 @@ def test_voice_and_text_use_evidence_and_persist_sources(
         assert "older assistant claims" in messages[0].content
         expected_query = "what are today's headlines?"
         if typed:
-            expected_query = "Raphael, " + expected_query
+            expected_query = "Ciel, " + expected_query
         assert service.prepare.call_args.args[0] == expected_query
         assert all(message.role != "system"
                    for message in service.prepare.call_args.kwargs["recent_messages"])
@@ -82,7 +82,7 @@ def test_relevant_saved_memory_is_available_for_query_enrichment(tmp_path, monke
     router = MagicMock()
     router.send.return_value = LLMResponse("Here are options.", "test", "test")
     _, _, _, store, _ = run_callbacks(
-        tmp_path, monkeypatch, [("Raphael, compare laptops for me.", {})], router=router,
+        tmp_path, monkeypatch, [("Ciel, compare laptops for me.", {})], router=router,
     )
     try:
         assert any("budget laptops" in memory
@@ -92,7 +92,7 @@ def test_relevant_saved_memory_is_available_for_query_enrichment(tmp_path, monke
 
 
 def test_weather_recalls_an_explicit_saved_city(tmp_path, monkeypatch):
-    from raphael.memory.service import MemoryService
+    from ciel.memory.service import MemoryService
 
     seed = MemoryStore(str(tmp_path / "memory.db"))
     try:
@@ -103,7 +103,7 @@ def test_weather_recalls_an_explicit_saved_city(tmp_path, monkeypatch):
     router = MagicMock()
     router.send.return_value = LLMResponse("Here is the forecast.", "test", "test")
     _, _, _, store, _ = run_callbacks(
-        tmp_path, monkeypatch, [("Raphael, what's the weather here?", {})], router=router,
+        tmp_path, monkeypatch, [("Ciel, what's the weather here?", {})], router=router,
     )
     try:
         assert any("Ulaanbaatar" in memory
@@ -117,7 +117,7 @@ def test_missing_city_is_a_local_clarification_without_provider(tmp_path, monkey
     stub_internet(monkeypatch, InternetResult(attempted=True, reply=reply))
     router = MagicMock()
     _, tts, _, store, turns = run_callbacks(
-        tmp_path, monkeypatch, [("Raphael, what's the weather here?", {})], router=router,
+        tmp_path, monkeypatch, [("Ciel, what's the weather here?", {})], router=router,
     )
     try:
         router.send.assert_not_called()
@@ -134,7 +134,7 @@ def test_lookup_failure_cannot_generate_a_fabricated_answer(tmp_path, monkeypatc
     router = MagicMock()
     router.send.return_value = LLMResponse("I cannot search. Made-up current news.", "test", "test")
     _, tts, _, store, turns = run_callbacks(
-        tmp_path, monkeypatch, [("Raphael, what's today's news?", {})], router=router,
+        tmp_path, monkeypatch, [("Ciel, what's today's news?", {})], router=router,
     )
     try:
         router.send.assert_not_called()
@@ -159,7 +159,7 @@ def test_canceled_lookup_cannot_generate_speak_or_save_an_answer(tmp_path, monke
     router = MagicMock()
     _, tts, _, store, turns = run_callbacks(
         tmp_path, monkeypatch,
-        [("Raphael, today's news?", {"cancel_event": cancel_event})], router=router,
+        [("Ciel, today's news?", {"cancel_event": cancel_event})], router=router,
     )
     try:
         router.send.assert_not_called()
@@ -195,7 +195,7 @@ def test_search_free_conversation_keeps_accurate_internet_capability(tmp_path, m
     router = MagicMock()
     router.send.return_value = LLMResponse("I'm here to help.", "test", "test")
     _, _, _, store, _ = run_callbacks(
-        tmp_path, monkeypatch, [("Raphael, explain photosynthesis.", {})], router=router,
+        tmp_path, monkeypatch, [("Ciel, explain photosynthesis.", {})], router=router,
     )
     try:
         prompt = router.send.call_args.args[0][0].content
@@ -211,8 +211,8 @@ def test_search_free_conversation_keeps_accurate_internet_capability(tmp_path, m
 def test_logged_wrong_topic_results_cannot_reach_generation_or_speech(
     tmp_path, monkeypatch, streaming,
 ):
-    from raphael.memory import ConversationManager
-    from raphael.persona import PERSONA_CONTEXT_VERSION
+    from ciel.memory import ConversationManager
+    from ciel.persona import PERSONA_CONTEXT_VERSION
 
     seed = MemoryStore(str(tmp_path / "memory.db"))
     try:
@@ -232,7 +232,7 @@ def test_logged_wrong_topic_results_cannot_reach_generation_or_speech(
         "title": "How to Search the Internet", "href": "https://example.com/search-tips",
         "body": "Learn how to search the internet and select a search engine.",
     }])
-    monkeypatch.setattr("raphael.internet.InternetService._search", search)
+    monkeypatch.setattr("ciel.internet.InternetService._search", search)
     router = MagicMock()
     router.send.return_value = LLMResponse("Another unsupported answer.", "test", "test")
     _, tts, _, store, turns = run_callbacks(
@@ -256,7 +256,7 @@ def test_logged_wrong_topic_results_cannot_reach_generation_or_speech(
 def test_local_clock_bypasses_retrieval(tmp_path, monkeypatch):
     service = stub_internet(monkeypatch, InternetResult())
     _, _, _, store, _ = run_callbacks(
-        tmp_path, monkeypatch, [("Raphael, what time is it?", {})],
+        tmp_path, monkeypatch, [("Ciel, what time is it?", {})],
     )
     store.close()
     service.prepare.assert_not_called()
@@ -266,8 +266,8 @@ def test_local_clock_bypasses_retrieval(tmp_path, monkeypatch):
 def test_web_sources_are_visible_during_playback_and_survive_interruption(
     tmp_path, monkeypatch, streaming,
 ):
-    from raphael import web
-    from raphael.audio.tts import TextToSpeech
+    from ciel import web
+    from ciel.audio.tts import TextToSpeech
 
     reply = "Here is the news from a public announcement."
     source = InternetSource("Public announcement", "https://example.com/news", reply)
@@ -282,7 +282,7 @@ def test_web_sources_are_visible_during_playback_and_survive_interruption(
     router.stream.side_effect = lambda *_args, **_kwargs: iter([
         LLMStreamChunk(reply, "test", "test"),
     ])
-    ui = web.DesktopWebUI("owner", "hey raphael")
+    ui = web.DesktopWebUI("owner", "hey ciel")
     ui.start = MagicMock(return_value="http://127.0.0.1:8765")
     monkeypatch.setattr(web, "DesktopWebUI", lambda *_args, **_kwargs: ui)
     canceled = Event()
@@ -300,7 +300,7 @@ def test_web_sources_are_visible_during_playback_and_survive_interruption(
     tts.speak.side_effect = speak
     _, _, _, store, turns = run_callbacks(
         tmp_path, monkeypatch,
-        [("Raphael, today's news?", {"cancel_event": canceled})],
+        [("Ciel, today's news?", {"cancel_event": canceled})],
         router=router, tts=tts, streaming=streaming,
         cli_args=("web", "--no-open-browser"),
     )

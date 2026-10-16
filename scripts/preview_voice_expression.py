@@ -29,8 +29,8 @@ def main() -> int:
     import torch
     from chatterbox.tts_turbo import ChatterboxTurboTTS
 
-    from raphael.audio.speech_events import SpeechEventLimiter
-    from raphael.audio.vocal_cues import create_turbo_renderer
+    from ciel.audio.speech_events import SpeechEventLimiter
+    from ciel.audio.vocal_cues import create_turbo_renderer
 
     out = args.output or root / "data/voice/expressive-previews" / datetime.now().strftime(
         "%Y%m%d-%H%M%S"
@@ -44,10 +44,10 @@ def main() -> int:
             str(root / "data/voice/models/chatterbox-turbo"), device="cpu",
         )
         model.prepare_conditionals(
-            str(root / "data/voice/references/raphael/reference-1.wav"), exaggeration=0.0,
+            str(root / "data/voice/references/ciel/reference-1.wav"), exaggeration=0.0,
         )
-        event_reference = root / "data/voice/references/raphael/event-style.wav"
-        cue_audio = {key: root / f"data/voice/references/raphael/{key}.wav"
+        event_reference = root / "data/voice/references/ciel/event-style.wav"
+        cue_audio = {key: root / f"data/voice/references/ciel/{key}.wav"
                      for key in ("sigh", "groan")}
         renderer = (
             create_turbo_renderer(model, event_reference, cue_audio)

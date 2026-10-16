@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from raphael.audio.alignment import (
+from ciel.audio.alignment import (
     CharacterTimeline,
     character_timeline,
     estimated_timeline,

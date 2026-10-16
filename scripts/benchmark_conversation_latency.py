@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Trace free configured NIM requests against a frozen, private RAPHAEL context.
+"""Trace free configured NIM requests against a frozen, private CIEL context.
 
 No production settings, conversation records, or TTS are changed. Outputs contain
 private prompt/response text and must remain in the ignored data directory.
@@ -16,21 +16,21 @@ from pathlib import Path
 
 import httpx
 
-from raphael.audio.speech_events import speech_event_instruction
-from raphael.audio.streaming import SentenceBuffer, VisibleText
-from raphael.config import get_settings
-from raphael.memory.context import recall_context_memories
-from raphael.memory.manager import ConversationManager
-from raphael.memory.store import MemoryStore
-from raphael.persona import PERSONA_CONTEXT_VERSION
-from raphael.platform import generate_system_prompt
-from raphael.providers.base import ChatMessage
-from raphael.providers.nim import NimProvider
+from ciel.audio.speech_events import speech_event_instruction
+from ciel.audio.streaming import SentenceBuffer, VisibleText
+from ciel.config import get_settings
+from ciel.memory.context import recall_context_memories
+from ciel.memory.manager import ConversationManager
+from ciel.memory.store import MemoryStore
+from ciel.persona import PERSONA_CONTEXT_VERSION
+from ciel.platform import generate_system_prompt
+from ciel.providers.base import ChatMessage
+from ciel.providers.nim import NimProvider
 
 CASES = {
     "time": "What's the time right now?",
     "date": "What's today's date?",
-    "greeting": "Hey Raphael, how are you?",
+    "greeting": "Hey Ciel, how are you?",
     "normal": "I've had a tiring day. What would be a good way to unwind tonight?",
     "difficult": (
         "Explain how to design a distributed job queue that avoids duplicate payments "
@@ -61,7 +61,7 @@ def snapshot(root: Path) -> None:
     )
     name = store.get_fact("user:preferred_name")
     if name is not None:
-        settings = settings.model_copy(update={"raphael_preferred_name": name.metadata["value"]})
+        settings = settings.model_copy(update={"ciel_preferred_name": name.metadata["value"]})
     cases = {}
     for key, query in CASES.items():
         started = time.monotonic()

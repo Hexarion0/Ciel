@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ciel · Blind voice comparison</title>
+<style>
+:root{color-scheme:light;--ink:#202b34;--muted:#586671;--line:#d6dde1;--accent:#15605b}
+*{box-sizing:border-box}
+body{margin:0;background:#fafaf8;color:var(--ink);font:16px/1.55 system-ui,sans-serif}
+main{max-width:1180px;margin:auto;padding:32px 28px 70px}
+.eyebrow{font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+h1{font:normal 40px/1.15 Georgia,serif;margin:12px 0 18px}
+h2{font-size:22px;margin:0 0 12px}h3{font-size:17px;margin:0 0 12px}
+p{margin:8px 0 16px}.intro{max-width:850px}.muted,.status{font-size:14px;color:var(--muted)}
+.reference{padding:20px 0;border-block:1px solid var(--line);margin-top:24px}
+audio{display:block;width:100%;height:44px;max-width:500px}
+.toolbar,.decision{display:flex;gap:16px;align-items:end;flex-wrap:wrap}
+.toolbar{padding:18px 0}.round{padding:32px 0;border-top:1px solid var(--line)}
+.text{max-width:920px;font-style:italic;margin-bottom:24px}
+.samples{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:24px}
+.sample{min-width:0}.identity{font-size:14px;color:var(--accent);min-height:22px;margin-top:12px}
+button,select,textarea{font:inherit;border:1px solid #a7b5bd;border-radius:3px;padding:8px 12px;
+color:var(--ink);background:white}
+button{cursor:pointer}button:disabled{color:#727d84;background:#f1f3f3;cursor:default}
+.primary{background:var(--accent);color:white;border-color:var(--accent)}
+:focus-visible{outline:3px solid #e2963e;outline-offset:3px}
+label{display:flex;flex-direction:column;gap:6px;font-size:14px}
+.ratings{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0}
+.ratings select{width:100%;min-width:0}.decision{margin:22px 0 16px}
+.notes{max-width:920px}textarea{resize:vertical;min-height:72px}
+summary{cursor:pointer;color:var(--accent);margin-top:16px}.audio-error{color:#a32f26;font-size:14px}
+.empty{padding:16px;background:#eef3f1}
+@media(max-width:750px){main{padding:22px 16px 48px}h1{font-size:31px}
+.samples{grid-template-columns:1fr}.sample{padding:8px 0 12px}.toolbar>*,.decision>*{width:100%}
+.identity:empty{display:none}audio{max-width:none}}
+</style>
+</head>
+<body><main>
+<header><div class="eyebrow">Ciel / Quality shootout / __RUN__</div>
+<h1>Ciel voice comparison</h1>
+<p class="intro">Listen for a person you would enjoy talking to. Every sample uses the same
+Ciel reference and text. Choose by naturalness, speaker identity, and conversational feel.
+Engine names stay hidden until you record ratings, make a choice, and reveal them.</p>
+<p class="intro muted">Rate from 1 (low) to 5 (high). For robotic quality, a higher score means
+more robotic. Choose Unsure when you cannot judge a rating. Complete all ratings before revealing.
+Sample letters are shuffled separately for each comparison.
+Your notes stay local; nothing here changes Ciel's active voice.</p></header>
+<section class="reference"><h2>Shared Ciel speaker reference</h2>
+<audio controls preload="none" src="reference.wav" aria-label="Shared Ciel reference"></audio>
+<p class="audio-error" hidden>Reference unavailable. Keep reference.wav beside this page.</p></section>
+<div class="toolbar"><button class="primary" id="export">Download listening notes</button>
+<span class="status" id="save-status" aria-live="polite">Notes stay in this browser.</span></div>
+__ROUNDS__
+</main>
+<script>
+const settings=__SETTINGS__;
+const storageKey=`ciel-quality-shootout-${settings.run_id}`;
+let notes={};
+try{notes=JSON.parse(localStorage.getItem(storageKey)||'{}')}catch{}
+const status=document.getElementById('save-status');
+function ready(round,choice){return !!choice.value&&Array.from(round.querySelectorAll('[data-rating]')).every(control=>!!control.value)}
+function save(){
+ try{localStorage.setItem(storageKey,JSON.stringify(notes));status.textContent='Listening notes saved locally.'}
+ catch{status.textContent='Browser storage unavailable. Download your notes before closing.'}
+}
+for(const round of document.querySelectorAll('[data-round]')){
+ const id=round.dataset.round;
+ const data=notes[id]||(notes[id]={choice:'',notes:'',ratings:{}});
+ const choice=round.querySelector('[data-choice]');
+ const reveal=round.querySelector('[data-reveal]');
+ const field=round.querySelector('[data-notes]');
+ choice.value=data.choice||'';field.value=data.notes||'';
+ // Persisted choices enable a new explicit reveal, without silently disclosing identities.
+ reveal.disabled=!ready(round,choice);
+ choice.addEventListener('change',()=>{data.choice=choice.value;reveal.disabled=!ready(round,choice);save()});
+ field.addEventListener('input',()=>{data.notes=field.value;save()});
+ for(const sample of round.querySelectorAll('[data-label]')){
+  const label=sample.dataset.label;
+  const ratings=data.ratings[label]||(data.ratings[label]={});
+  for(const control of sample.querySelectorAll('[data-rating]')){
+   const key=control.dataset.rating;control.value=ratings[key]||'';
+   control.addEventListener('change',()=>{ratings[key]=control.value;reveal.disabled=!ready(round,choice);save()});
+  }
+ }
+ reveal.disabled=!ready(round,choice);
+ reveal.addEventListener('click',()=>{
+  if(!ready(round,choice))return;
+  if(!data.choice_before_reveal){
+   data.choice_before_reveal=data.choice;
+   data.ratings_before_reveal=JSON.parse(JSON.stringify(data.ratings));
+  }
+  for(const sample of round.querySelectorAll('[data-label]')){
+   sample.querySelector('.identity').textContent=settings.identities[id][sample.dataset.label];
+  }
+  data.revealed=true;save();reveal.textContent='Identities revealed';reveal.disabled=true;
+ });
+}
+for(const player of document.querySelectorAll('audio')){
+ player.addEventListener('play',()=>{
+  for(const other of document.querySelectorAll('audio'))if(other!==player)other.pause();
+ });
+ player.addEventListener('error',()=>{
+  player.parentElement.querySelector('.audio-error').hidden=false;
+ });
+}
+document.getElementById('export').addEventListener('click',()=>{
+ const result={run_id:settings.run_id,recorded_at:new Date().toISOString(),notes};
+ const blob=new Blob([JSON.stringify(result,null,2)],{type:'application/json'});
+ const url=URL.createObjectURL(blob);const link=document.createElement('a');
+ link.href=url;link.download=`ciel-quality-notes-${settings.run_id}.json`;link.click();
+ setTimeout(()=>URL.revokeObjectURL(url),1000);
+ status.textContent='Listening notes downloaded.';
+});
+</script>
+</body></html>

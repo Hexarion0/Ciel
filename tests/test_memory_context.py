@@ -4,17 +4,17 @@ from datetime import datetime, timezone
 
 import pytest
 
-from raphael.memory import MemoryItem, MemoryStore, MemoryType
-from raphael.memory.context import recall_context_memories
+from ciel.memory import MemoryItem, MemoryStore, MemoryType
+from ciel.memory.context import recall_context_memories
 
 
 def project_start(value="2026-09-28"):
     """Create a user-confirmed project date without relying on generated summaries."""
     return MemoryItem(
-        content=f"RAPHAEL project development began on {value}.",
+        content=f"CIEL project development began on {value}.",
         memory_type=MemoryType.PROJECT,
         source="user_explicit",
-        metadata={"project": "raphael", "fact_key": "project_start_date", "value": value},
+        metadata={"project": "ciel", "fact_key": "project_start_date", "value": value},
     )
 
 
@@ -61,7 +61,7 @@ def test_project_anchor_is_not_duplicated_when_query_already_matches():
     store = MemoryStore(":memory:")
     try:
         store.save_memory(project_start())
-        context = recall_context_memories(store, "RAPHAEL", datetime(2026, 10, 3))
+        context = recall_context_memories(store, "CIEL", datetime(2026, 10, 3))
         assert len(context) == 2  # One saved anchor and one dated calculation.
     finally:
         store.close()

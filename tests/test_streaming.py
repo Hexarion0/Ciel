@@ -8,9 +8,9 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from raphael.audio.streaming import SentenceBuffer, VisibleText, _SentencePipeline, stream_reply
-from raphael.audio.tts import TextToSpeech
-from raphael.providers.base import ChatMessage, LLMStreamChunk
+from ciel.audio.streaming import SentenceBuffer, VisibleText, _SentencePipeline, stream_reply
+from ciel.audio.tts import TextToSpeech
+from ciel.providers.base import ChatMessage, LLMStreamChunk
 
 
 @pytest.fixture
@@ -21,7 +21,7 @@ def speech(monkeypatch):
     monkeypatch.setattr(tts, "synthesize", lambda text: (
         np.ones(160, dtype=np.float32), 16000,
     ))
-    monkeypatch.setattr("raphael.audio.tts.sd", SimpleNamespace(
+    monkeypatch.setattr("ciel.audio.tts.sd", SimpleNamespace(
         play=lambda *args, **kwargs: played.append(1),
         get_stream=lambda: SimpleNamespace(active=False), stop=lambda: None,
     ))
@@ -133,7 +133,7 @@ def test_first_sentence_plays_before_provider_finishes(speech, monkeypatch):
         played.append(1)
         first_audio.set()
 
-    monkeypatch.setattr("raphael.audio.tts.sd.play", play)
+    monkeypatch.setattr("ciel.audio.tts.sd.play", play)
 
     def generate(*args, **kwargs):
         yield chunk("First sentence. ")
@@ -445,8 +445,8 @@ def test_cancel_during_playback_stops_rest_of_reply(speech, monkeypatch):
         played.append(1)
         cancel.set()
 
-    monkeypatch.setattr("raphael.audio.tts.sd.play", play)
-    monkeypatch.setattr("raphael.audio.tts.sd.get_stream", lambda: SimpleNamespace(active=True))
+    monkeypatch.setattr("ciel.audio.tts.sd.play", play)
+    monkeypatch.setattr("ciel.audio.tts.sd.get_stream", lambda: SimpleNamespace(active=True))
     router = SimpleNamespace(stream=lambda *a, **k: iter([chunk("First. Second. ")]))
     result = stream_reply(router, [], tts, lambda: not cancel.is_set(), cancel_event=cancel)
     assert result.canceled and len(played) == 1
@@ -514,12 +514,12 @@ def test_empty_or_reasoning_only_reply_never_plays(speech):
 def test_stream_interruption_reports_completed_and_current_sentences(speech, monkeypatch):
     tts, _played = speech
     clock = [100.0]
-    monkeypatch.setattr("raphael.audio.tts.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("ciel.audio.tts.time.monotonic", lambda: clock[0])
     monkeypatch.setattr(tts, "synthesize", lambda text: (np.ones(100), 10))
     generation = tts.begin_stream()
     tts.update_stream(generation, "First complete sentence. One two three four. Last sentence.")
     assert tts.speak("First complete sentence.", generation=generation)
-    monkeypatch.setattr("raphael.audio.tts.sd.get_stream", lambda: SimpleNamespace(active=True))
+    monkeypatch.setattr("ciel.audio.tts.sd.get_stream", lambda: SimpleNamespace(active=True))
     assert tts.speak("One two three four.", generation=generation, block=False)
     clock[0] += 5
     interrupted = tts.stop()
@@ -540,7 +540,7 @@ def test_disabled_speech_still_consumes_and_returns_reply():
 def test_interruption_between_sentences_does_not_count_previous_audio_twice(speech, monkeypatch):
     tts, _played = speech
     clock = [100.0]
-    monkeypatch.setattr("raphael.audio.tts.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("ciel.audio.tts.time.monotonic", lambda: clock[0])
     monkeypatch.setattr(tts, "synthesize", lambda text: (np.ones(100), 10))
     generation = tts.begin_stream()
     tts.update_stream(generation, "First sentence. Second sentence.")

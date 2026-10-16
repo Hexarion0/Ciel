@@ -14,7 +14,7 @@ SOURCE = str(Path(__file__).resolve().parents[1] / "src")
     ['--no-ambient', '--no-show-transcripts'], False,
 )])
 def test_env_listening_defaults_and_cli_overrides(tmp_path, monkeypatch, arguments, enabled):
-    from raphael import __main__, audio, config, platform, providers
+    from ciel import __main__, audio, config, platform, providers
 
     settings = config.Settings(
         _env_file=None, memory_db_path=str(tmp_path / 'memory.db'),
@@ -36,7 +36,7 @@ def test_env_listening_defaults_and_cli_overrides(tmp_path, monkeypatch, argumen
     monkeypatch.setattr(__main__, 'time', SimpleNamespace(
         sleep=interrupt, monotonic=__main__.time.monotonic,
     ))
-    monkeypatch.setattr(sys, 'argv', ['raphael', *arguments])
+    monkeypatch.setattr(sys, 'argv', ['ciel', *arguments])
     assert __main__.main() == 0
     assert constructor.call_args.kwargs['ambient'] is enabled
     assert constructor.call_args.kwargs['show_transcripts'] is enabled
@@ -46,7 +46,7 @@ def test_env_listening_defaults_and_cli_overrides(tmp_path, monkeypatch, argumen
 @pytest.mark.parametrize(
     "text, wake_info, expected_reply",
     [
-        ("Hey Raphael.", {}, "Hey! What's on your mind?"),
+        ("Hey Ciel.", {}, "Hey! What's on your mind?"),
         ("", {"stt_needs_repeat": True}, "I didn't catch that clearly. Could you say it again?"),
         ("So what's the time right now?", {}, "It's 3:16 AM."),
         ("My favorite game is CS2.", {},
@@ -54,13 +54,13 @@ def test_env_listening_defaults_and_cli_overrides(tmp_path, monkeypatch, argumen
     ],
 )
 @pytest.mark.parametrize("launch_args", [["--listen"], ["start"], ["start", "dev"]])
-def test_listen_wake_or_uncertain_speech_does_not_call_provider(
+def test_legacy_listen_wake_or_uncertain_speech_does_not_call_provider(
     tmp_path, monkeypatch, text, wake_info, expected_reply, launch_args
 ):
     from datetime import datetime
 
-    from raphael import __main__, audio, config, platform, providers
-    from raphael.providers import intents
+    from ciel import __main__, audio, config, platform, providers
+    from ciel.providers import intents
 
     clock_answer = intents.answer_clock_query
     monkeypatch.setattr(
@@ -69,7 +69,9 @@ def test_listen_wake_or_uncertain_speech_does_not_call_provider(
         lambda text: clock_answer(text, datetime(2026, 10, 3, 3, 16)),
     )
 
-    settings = config.Settings(_env_file=None, memory_db_path=str(tmp_path / "memory.db"))
+    settings = config.Settings(
+        _env_file=None, memory_db_path=str(tmp_path / "memory.db"), controller_enabled=False,
+    )
     monkeypatch.setattr(config, "get_settings", lambda: settings)
     monkeypatch.setattr(platform, "get_audio_backend", MagicMock())
     router = MagicMock()
@@ -92,7 +94,7 @@ def test_listen_wake_or_uncertain_speech_does_not_call_provider(
     monkeypatch.setattr(__main__, "time", SimpleNamespace(
         sleep=interrupt, monotonic=__main__.time.monotonic,
     ))
-    monkeypatch.setattr(sys, "argv", ["raphael", *launch_args])
+    monkeypatch.setattr(sys, "argv", ["ciel", *launch_args])
     assert __main__.main() == 0
     assert followup == [True]
     router.send.assert_not_called()
@@ -102,13 +104,13 @@ def test_listen_wake_or_uncertain_speech_does_not_call_provider(
 def test_help_does_not_import_audio_or_training(tmp_path):
     script = """
 import runpy, sys
-sys.argv = ["raphael", "--help"]
+sys.argv = ["ciel", "--help"]
 try:
-    runpy.run_module("raphael", run_name="__main__")
+    runpy.run_module("ciel", run_name="__main__")
 except SystemExit as error:
     assert error.code == 0
 assert "sounddevice" not in sys.modules
-assert "raphael.audio.trainer" not in sys.modules
+assert "ciel.audio.trainer" not in sys.modules
 assert "faster_whisper" not in sys.modules
 assert "onnx" not in sys.modules
 """
@@ -125,7 +127,7 @@ assert "onnx" not in sys.modules
 
 
 def test_keyboard_exit_cleans_up_listener_and_tts(tmp_path, monkeypatch, capsys):
-    from raphael import __main__, audio, config, platform, providers, terminal
+    from ciel import __main__, audio, config, platform, providers, terminal
 
     settings = config.Settings(_env_file=None, memory_db_path=str(tmp_path / "memory.db"))
     monkeypatch.setattr(config, "get_settings", lambda: settings)
@@ -149,7 +151,7 @@ def test_keyboard_exit_cleans_up_listener_and_tts(tmp_path, monkeypatch, capsys)
                 self.handle_line(line)
 
     monkeypatch.setattr(terminal, "TerminalInput", ImmediateTerminal)
-    monkeypatch.setattr(sys, "argv", ["raphael", "start", "--text-input"])
+    monkeypatch.setattr(sys, "argv", ["ciel", "start", "--text-input"])
     assert __main__.main() == 0
     loop.toggle_microphone_mute.assert_called_once()
     assert loop.cancel_response.call_count == 2
@@ -160,23 +162,26 @@ def test_keyboard_exit_cleans_up_listener_and_tts(tmp_path, monkeypatch, capsys)
     output = capsys.readouterr().out
     assert "[system]: Microphone muted" in output
     assert "[system]: Stopped the current reply." in output
-    assert "[system]: Exiting RAPHAEL" in output
+    assert "[system]: Exiting CIEL" in output
 
 
 def test_web_mode_reuses_voice_callbacks_and_controls(tmp_path, monkeypatch):
     from threading import Event
 
-    from raphael import __main__, audio, config, platform, providers, web
-    from raphael.providers.base import LLMResponse
+    from ciel import __main__, audio, config, platform, providers, web
+    from ciel.providers.base import LLMResponse
 
     settings = config.Settings(
         _env_file=None, memory_db_path=str(tmp_path / "memory.db"), tts_streaming=False,
-        show_ai_transcripts=False, raphael_persona_file="", raphael_preferred_name="owner",
+        show_ai_transcripts=False, ciel_persona_file="", ciel_preferred_name="owner",
     )
     monkeypatch.setattr(config, "get_settings", lambda: settings)
     monkeypatch.setattr(platform, "get_audio_backend", MagicMock())
     router = MagicMock()
-    router.send.return_value = LLMResponse("Hi there.", "test", "test")
+    router.send.side_effect = [
+        LLMResponse('{"action":"answer","confidence":0.99}', "light", "nim"),
+        LLMResponse("Hi there.", "test", "test"),
+    ]
     monkeypatch.setattr(providers, "get_model_router", lambda: router)
     for component in ("WakeWordDetector", "SpeechToText", "VoiceRecorder"):
         monkeypatch.setattr(audio, component, MagicMock())
@@ -202,7 +207,7 @@ def test_web_mode_reuses_voice_callbacks_and_controls(tmp_path, monkeypatch):
         return loop
 
     monkeypatch.setattr(audio, "WakeListenerLoop", make_loop)
-    ui = web.DesktopWebUI("owner", "hey raphael")
+    ui = web.DesktopWebUI("owner", "hey ciel")
     monkeypatch.setattr(web, "DesktopWebUI", lambda *_args, **_kwargs: ui)
 
     def start(submit, **_kwargs):
@@ -212,7 +217,7 @@ def test_web_mode_reuses_voice_callbacks_and_controls(tmp_path, monkeypatch):
 
     ui.start = start
     ui.close = MagicMock()
-    monkeypatch.setattr(sys, "argv", ["raphael", "web", "--no-open-browser"])
+    monkeypatch.setattr(sys, "argv", ["ciel", "web", "--no-open-browser"])
     assert __main__.main() == 0
     assert [entry["text"] for entry in ui.snapshot()["messages"]] == ["hello there", "Hi there."]
     assert ui.snapshot()["muted"]
@@ -224,10 +229,10 @@ def test_web_mode_reuses_voice_callbacks_and_controls(tmp_path, monkeypatch):
 
 def test_listen_archives_legacy_style_but_keeps_saved_facts(tmp_path, monkeypatch):
     """Exercise the provider request after switching away from the legacy persona."""
-    from raphael import __main__, audio, config, platform, providers
-    from raphael.memory import ConversationManager, MemoryItem, MemoryStore, MemoryType
-    from raphael.persona import PERSONA_CONTEXT_VERSION
-    from raphael.providers.base import LLMResponse
+    from ciel import __main__, audio, config, platform, providers
+    from ciel.memory import ConversationManager, MemoryItem, MemoryStore, MemoryType
+    from ciel.persona import PERSONA_CONTEXT_VERSION
+    from ciel.providers.base import LLMResponse
 
     settings = config.Settings(
         _env_file=None, memory_db_path=str(tmp_path / "memory.db"), tts_streaming=False,
@@ -252,11 +257,10 @@ def test_listen_archives_legacy_style_but_keeps_saved_facts(tmp_path, monkeypatc
     monkeypatch.setattr(config, "get_settings", lambda: settings)
     monkeypatch.setattr(platform, "get_audio_backend", MagicMock())
     router = MagicMock()
-    router.send.return_value = LLMResponse(
-        content="I'm here to help.",
-        model="test",
-        provider="test",
-    )
+    router.send.side_effect = [
+        LLMResponse('{"action":"answer","confidence":0.99}', "light", "nim"),
+        LLMResponse("I'm here to help.", "test", "test"),
+    ]
     monkeypatch.setattr(providers, "get_model_router", lambda: router)
     for component in ("WakeWordDetector", "SpeechToText", "VoiceRecorder", "TextToSpeech"):
         monkeypatch.setattr(audio, component, MagicMock())
@@ -277,7 +281,7 @@ def test_listen_archives_legacy_style_but_keeps_saved_facts(tmp_path, monkeypatc
     monkeypatch.setattr(__main__, "time", SimpleNamespace(
         sleep=interrupt, monotonic=__main__.time.monotonic,
     ))
-    monkeypatch.setattr(sys, "argv", ["raphael", "--listen"])
+    monkeypatch.setattr(sys, "argv", ["ciel", "--listen"])
 
     assert __main__.main() == 0
     messages = router.send.call_args.args[0]
@@ -303,8 +307,8 @@ class NoTraining(importlib.abc.MetaPathFinder):
         if fullname in {"onnx", "sklearn"}:
             raise ImportError("training extra not installed")
 sys.meta_path.insert(0, NoTraining())
-from raphael.audio import VoiceRecorder
-from raphael.audio.trainer import train_custom_wakeword
+from ciel.audio import VoiceRecorder
+from ciel.audio.trainer import train_custom_wakeword
 assert "sounddevice" not in sys.modules
 try:
     train_custom_wakeword()
@@ -322,3 +326,39 @@ else:
         timeout=10,
     )
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("engine", ["pocket", "chatterbox_turbo", "piper"])
+def test_tts_prepares_once_before_normal_listening(tmp_path, monkeypatch, engine):
+    from ciel import __main__, audio, config, platform, providers
+
+    settings = config.Settings(
+        _env_file=None, memory_db_path=str(tmp_path / "memory.db"), tts_engine=engine,
+    )
+    monkeypatch.setattr(config, "get_settings", lambda: settings)
+    monkeypatch.setattr(platform, "get_audio_backend", MagicMock())
+    monkeypatch.setattr(providers, "get_model_router", MagicMock())
+    for component in ("WakeWordDetector", "VoiceRecorder"):
+        monkeypatch.setattr(audio, component, MagicMock())
+    stt = MagicMock()
+    stt.wait_ready.return_value = True
+    monkeypatch.setattr(audio, "SpeechToText", MagicMock(return_value=stt))
+    events = []
+    speech = MagicMock(engine=engine, enabled=True)
+    speech.warmup.side_effect = lambda: events.append("warmup") or True
+    monkeypatch.setattr(audio, "TextToSpeech", MagicMock(return_value=speech))
+    loop = SimpleNamespace(
+        is_running=True, start=lambda: events.append("listen"), stop=lambda: None,
+    )
+    monkeypatch.setattr(audio, "WakeListenerLoop", MagicMock(return_value=loop))
+
+    def interrupt(_seconds):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(__main__, "time", SimpleNamespace(
+        sleep=interrupt, monotonic=__main__.time.monotonic,
+    ))
+    monkeypatch.setattr(sys, "argv", ["ciel", "--listen"])
+    assert __main__.main() == 0
+    assert events == (["listen"] if engine == "piper" else ["warmup", "listen"])
+    speech.close.assert_called_once()

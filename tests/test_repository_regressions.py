@@ -7,14 +7,14 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from raphael.audio.listener import ListenerState, WakeListenerLoop
-from raphael.config import Settings
-from raphael.memory import ConversationManager, MemoryStore
-from raphael.memory.service import MemoryService
-from raphael.platform.linux import LinuxAudioBackend
-from raphael.providers.base import ChatMessage, LLMResponse, LLMStreamChunk
-from raphael.providers.manager import ProviderManager
-from raphael.providers.router import ModelRouter
+from ciel.audio.listener import ListenerState, WakeListenerLoop
+from ciel.config import Settings
+from ciel.memory import ConversationManager, MemoryStore
+from ciel.memory.service import MemoryService
+from ciel.platform.linux import LinuxAudioBackend
+from ciel.providers.base import ChatMessage, LLMResponse, LLMStreamChunk
+from ciel.providers.manager import ProviderManager
+from ciel.providers.router import ModelRouter
 from tests.test_ambient import run_callbacks
 
 
@@ -83,7 +83,7 @@ def test_active_stream_can_be_replaced(monkeypatch):
     old.active = True
     backend._stream = old
     monkeypatch.setattr(backend, "resolve_device", lambda *args, **kwargs: 0)
-    monkeypatch.setattr("raphael.platform.linux.sd", SimpleNamespace(
+    monkeypatch.setattr("ciel.platform.linux.sd", SimpleNamespace(
         InputStream=MagicMock(return_value=replacement),
     ))
     errors = []
@@ -117,7 +117,7 @@ def test_wake_mode_requires_wake_evidence_for_interruption():
     loop._handle_frame(np.full(1280, .05, dtype=np.float32))
     assert not previous.is_set()
     tts.stop.assert_not_called()
-    detector.process_frame.return_value = {"wake_phrase": "hey raphael"}
+    detector.process_frame.return_value = {"wake_phrase": "hey ciel"}
     loop._handle_frame(np.full(1280, .05, dtype=np.float32))
     assert previous.is_set()
     assert loop.state == ListenerState.RECORDING
@@ -132,8 +132,8 @@ def test_persona_proposal_does_not_capture_later_clock_question(
     router.send.return_value = LLMResponse("Four.", "fake", "fake")
     _, tts, _, store, _ = run_callbacks(
         tmp_path, monkeypatch,
-        [("Raphael, can you update your persona?", {}),
-         ("Raphael, " + intervening, {}), ("Raphael, what's the time?", {})],
+        [("Ciel, can you update your persona?", {}),
+         ("Ciel, " + intervening, {}), ("Ciel, what's the time?", {})],
         persona_file=persona, router=router,
     )
     try:
@@ -144,8 +144,8 @@ def test_persona_proposal_does_not_capture_later_clock_question(
 
 
 def test_wake_models_flow_from_environment_to_audio(monkeypatch):
-    monkeypatch.setenv("WAKE_MODELS", '["models/custom/hey_raphael.onnx"]')
-    assert Settings(_env_file=None).audio.wake_models == ["models/custom/hey_raphael.onnx"]
+    monkeypatch.setenv("WAKE_MODELS", '["models/custom/hey_ciel.onnx"]')
+    assert Settings(_env_file=None).audio.wake_models == ["models/custom/hey_ciel.onnx"]
 
 
 def test_failed_summary_does_not_skip_turns_on_recovery(memory):
@@ -182,7 +182,7 @@ def test_local_summary_and_restart_keep_private_context_on_ollama(memory, provid
 
 
 def test_private_speech_gate_never_contacts_cloud(providers):
-    from raphael.audio.ambient import AmbientConversation
+    from ciel.audio.ambient import AmbientConversation
 
     ambient = AmbientConversation()
     ambient.record_addressed("assistant", "How can I help?")
@@ -194,7 +194,7 @@ def test_private_speech_gate_never_contacts_cloud(providers):
 
 @pytest.mark.parametrize("source", ["transcript", "interaction", "unfinished"])
 def test_private_gate_payload_sources_never_contact_cloud(providers, source):
-    from raphael.audio.ambient import AmbientConversation
+    from ciel.audio.ambient import AmbientConversation
 
     ambient = AmbientConversation()
     if source == "interaction":
@@ -253,7 +253,7 @@ def test_persona_proposal_expires(tmp_path, monkeypatch):
     )
     _, _, _, store, _ = run_callbacks(
         tmp_path, monkeypatch,
-        [("Raphael, can you update your persona?", {}), ("Be more playful", {})],
+        [("Ciel, can you update your persona?", {}), ("Be more playful", {})],
         persona_file=persona, router=router, clock=lambda: next(ticks),
     )
     try:
@@ -267,7 +267,7 @@ def test_persona_proposal_expires(tmp_path, monkeypatch):
     "Remember my favorite game is CS2", "Open Firefox", "The weather is sunny today",
 ])
 def test_pending_persona_requires_style_evidence(text):
-    from raphael.persona import parse_persona_request
+    from ciel.persona import parse_persona_request
 
     assert parse_persona_request(text, pending=True) is None
 
@@ -277,7 +277,7 @@ def test_failed_stream_start_closes_device_and_allows_retry(monkeypatch):
     failed, replacement = MagicMock(), MagicMock()
     failed.start.side_effect = RuntimeError("device disappeared")
     monkeypatch.setattr(backend, "resolve_device", lambda *args, **kwargs: 0)
-    monkeypatch.setattr("raphael.platform.linux.sd", SimpleNamespace(
+    monkeypatch.setattr("ciel.platform.linux.sd", SimpleNamespace(
         InputStream=MagicMock(side_effect=[failed, replacement]),
     ))
     with pytest.raises(RuntimeError, match="device disappeared"):
@@ -290,7 +290,7 @@ def test_failed_stream_start_closes_device_and_allows_retry(monkeypatch):
 
 
 def test_stt_failed_load_is_not_ready():
-    from raphael.audio.stt import SpeechToText
+    from ciel.audio.stt import SpeechToText
 
     stt = SpeechToText.__new__(SpeechToText)
     stt._ready = threading.Event()
@@ -302,7 +302,7 @@ def test_stt_failed_load_is_not_ready():
 
 
 def test_stt_loading_wait_has_a_deadline():
-    from raphael.audio.stt import SpeechToText
+    from ciel.audio.stt import SpeechToText
 
     stt = SpeechToText.__new__(SpeechToText)
     stt._ready = threading.Event()
@@ -312,7 +312,7 @@ def test_stt_loading_wait_has_a_deadline():
 
 
 def test_alive_but_unresponsive_turbo_worker_times_out(tmp_path, monkeypatch):
-    from raphael.audio.chatterbox_worker import ChatterboxTurboWorker, ChatterboxWorkerError
+    from ciel.audio.chatterbox_worker import ChatterboxTurboWorker, ChatterboxWorkerError
 
     worker = ChatterboxTurboWorker(
         tmp_path / "python", tmp_path / "worker.py", tmp_path / "model",

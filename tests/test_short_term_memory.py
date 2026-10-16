@@ -1,4 +1,4 @@
-"""Tests for RAPHAEL short-term memory, sliding context window, and rolling summarization."""
+"""Tests for CIEL short-term memory, sliding context window, and rolling summarization."""
 
 import tempfile
 from pathlib import Path
@@ -6,8 +6,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from raphael.memory import ConversationManager, MemoryStore
-from raphael.providers.base import LLMResponse, LLMStreamChunk
+from ciel.memory import ConversationManager, MemoryStore
+from ciel.providers.base import LLMResponse, LLMStreamChunk
 
 
 @pytest.fixture
@@ -29,7 +29,7 @@ def test_cross_restart_conversation_persistence(temp_store: MemoryStore):
     """Verify turns saved in session A are preserved and restored upon restarting manager."""
     # 1. First session run
     manager1 = ConversationManager(store=temp_store, session_id="test_session", max_turns=5)
-    manager1.add_turn(role="user", content="Hello Raphael, my name is Hexarion")
+    manager1.add_turn(role="user", content="Hello Ciel, my name is Hexarion")
     manager1.add_turn(role="assistant", content="Hey Hexarion! Great to meet you.")
     manager1.add_turn(role="user", content="What GPU do I have?")
     manager1.add_turn(role="assistant", content="You have a GTX 1660 SUPER.")
@@ -39,7 +39,7 @@ def test_cross_restart_conversation_persistence(temp_store: MemoryStore):
     turns = manager2.get_recent_turns()
     assert len(turns) == 4
     assert turns[0].role == "user"
-    assert turns[0].content == "Hello Raphael, my name is Hexarion"
+    assert turns[0].content == "Hello Ciel, my name is Hexarion"
     assert turns[3].content == "You have a GTX 1660 SUPER."
 
     # Verify active messages structure
@@ -47,7 +47,7 @@ def test_cross_restart_conversation_persistence(temp_store: MemoryStore):
     assert len(messages) == 5  # 1 system + 4 turns
     assert messages[0].role == "system"
     assert messages[0].content == "System Persona"
-    assert messages[1].content == "Hello Raphael, my name is Hexarion"
+    assert messages[1].content == "Hello Ciel, my name is Hexarion"
 
 
 def test_manager_persists_sources_without_injecting_them_into_provider_messages(temp_store):
@@ -220,7 +220,7 @@ def test_background_summary_does_not_delay_or_duplicate_requests(temp_store):
 
 
 def test_summary_restores_and_clears_only_exact_session(temp_store):
-    from raphael.memory.models import MemoryItem, MemoryType
+    from ciel.memory.models import MemoryItem, MemoryType
 
     for session in ("desk", "desk-other"):
         temp_store.save_memory(
@@ -243,8 +243,8 @@ def test_summary_restores_and_clears_only_exact_session(temp_store):
 
 
 def test_summary_is_incremental_bounded_and_resumes_after_restart(temp_store):
-    from raphael.memory.manager import SUMMARY_BATCH_TURNS
-    from raphael.memory.models import MemoryType
+    from ciel.memory.manager import SUMMARY_BATCH_TURNS
+    from ciel.memory.models import MemoryType
 
     manager = ConversationManager(store=temp_store, max_turns=2, auto_summarize_threshold=2)
     for index in range(70):
@@ -311,7 +311,7 @@ def test_clearing_during_summary_does_not_recreate_context(temp_store):
 
 
 def test_legacy_summary_cursor_prevents_repeated_request(temp_store):
-    from raphael.memory.models import MemoryItem, MemoryType
+    from ciel.memory.models import MemoryItem, MemoryType
 
     manager = ConversationManager(store=temp_store, max_turns=2, auto_summarize_threshold=2)
     for index in range(6):
@@ -370,9 +370,9 @@ def test_background_summary_waits_for_new_turn_batch(temp_store):
 
 
 def test_real_router_uses_summary_purpose_even_for_code_transcript(temp_store):
-    from raphael.config import get_settings
-    from raphael.providers.manager import ProviderManager
-    from raphael.providers.router import ModelRouter
+    from ciel.config import get_settings
+    from ciel.providers.manager import ProviderManager
+    from ciel.providers.router import ModelRouter
 
     providers = MagicMock(spec=ProviderManager)
     for name in ("nim", "groq", "openrouter", "ollama"):

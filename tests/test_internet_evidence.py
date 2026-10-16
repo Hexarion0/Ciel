@@ -8,9 +8,9 @@ from unittest.mock import Mock
 
 import pytest
 
-from raphael.config import InternetConfig
-from raphael.internet import InternetService
-from raphael.providers.base import ChatMessage
+from ciel.config import InternetConfig
+from ciel.internet import InternetService
+from ciel.providers.base import ChatMessage
 
 TEENSURA_REQUEST = (
     "Can you find like the Teensura anime in last episode and when it ends on the "

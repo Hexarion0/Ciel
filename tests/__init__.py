@@ -1,1 +1,1 @@
-"""RAPHAEL test suite."""
+"""CIEL test suite."""

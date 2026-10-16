@@ -5,8 +5,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from raphael.audio.ambient import AmbientConversation
-from raphael.providers.base import ChatMessage, LLMResponse
+from ciel.audio.ambient import AmbientConversation
+from ciel.providers.base import ChatMessage, LLMResponse
 
 
 def judgment_router(result):
@@ -20,9 +20,9 @@ def judgment_router(result):
 @pytest.fixture
 def active_conversation(monkeypatch):
     clock = [100.0]
-    monkeypatch.setattr("raphael.audio.ambient.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("ciel.audio.ambient.time.monotonic", lambda: clock[0])
     ambient = AmbientConversation()
-    ambient.record_addressed("user", "Raphael, what are you good at?")
+    ambient.record_addressed("user", "Ciel, what are you good at?")
     ambient.record_addressed("assistant", "What's something you'd like to work on today?")
     return ambient, clock
 
@@ -83,7 +83,7 @@ def test_family_address_remains_silent_after_assistant_question(active_conversat
 @pytest.mark.parametrize("policy, addressed", [("conversation", True), ("strict", False)])
 def test_legacy_uncertain_listener_result_respects_selected_policy(policy, addressed):
     ambient = AmbientConversation(followup_policy=policy)
-    ambient.record_addressed("user", "Raphael, let's chat.")
+    ambient.record_addressed("user", "Ciel, let's chat.")
     ambient.record_addressed("assistant", "What would you like to talk about?")
     router = judgment_router({"addressed": False, "confidence": 0.6})
     decision = ambient.decide("What do you want to talk about?", router, [])
@@ -97,7 +97,7 @@ def test_legacy_uncertain_listener_result_respects_selected_policy(policy, addre
 ])
 def test_strict_policy_keeps_uncertainty_silent(listener, confidence):
     ambient = AmbientConversation(followup_policy="strict")
-    ambient.record_addressed("user", "Raphael, let's chat.")
+    ambient.record_addressed("user", "Ciel, let's chat.")
     ambient.record_addressed("assistant", "What would you like to talk about?")
     router = judgment_router({"listener": listener, "confidence": confidence})
     assert not ambient.decide("What do you want to talk about?", router, []).addressed
@@ -105,7 +105,7 @@ def test_strict_policy_keeps_uncertainty_silent(listener, confidence):
 
 def test_strict_policy_accepts_clear_followup_without_memory_permission():
     ambient = AmbientConversation(followup_policy="strict")
-    ambient.record_addressed("user", "Raphael, let's chat.")
+    ambient.record_addressed("user", "Ciel, let's chat.")
     ambient.record_addressed("assistant", "What would you like to talk about?")
     router = judgment_router({"listener": "assistant", "confidence": 0.95})
     decision = ambient.decide("What do you want to talk about?", router, [])
@@ -120,7 +120,7 @@ def test_active_default_requires_recent_assistant_turn(active_conversation, stat
         ambient = AmbientConversation()
     elif state == "user_only":
         ambient = AmbientConversation()
-        ambient.record_addressed("user", "Raphael, let's chat.")
+        ambient.record_addressed("user", "Ciel, let's chat.")
     elif state == "expired":
         clock[0] = ambient.deadline + 1
     else:
@@ -152,7 +152,7 @@ def test_new_address_after_idle_cannot_reuse_stale_assistant_turn(active_convers
     ambient, clock = active_conversation
     clock[0] = 130.0
     router = judgment_router({"listener": "uncertain", "confidence": 0.6})
-    direct_text = "Raphael, explain a new feature."
+    direct_text = "Ciel, explain a new feature."
     assert ambient.decide(direct_text, router, []).explicit
     ambient.record_addressed("user", direct_text)
     decision = ambient.decide("What do you want to talk about?", router, [])
@@ -207,7 +207,7 @@ def test_gate_receives_actual_recent_reply_and_active_dialogue_state(active_conv
     assert payload["active_conversation"] is True
     assert payload["transcript"] == transcript
     assert payload["recent_dialogue"] == [
-        {"role": "user", "content": "Raphael, what are you good at?"},
+        {"role": "user", "content": "Ciel, what are you good at?"},
         {"role": "assistant", "content": "What's something you'd like to work on today?"},
     ]
     assert request.kwargs["purpose"] == "speech_gate"

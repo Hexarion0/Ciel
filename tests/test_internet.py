@@ -14,12 +14,12 @@ from unittest.mock import Mock
 import httpx
 import pytest
 
-from raphael.config import InternetConfig
-from raphael.internet import InternetService, InternetSource
-from raphael.memory import MemoryStore
-from raphael.memory.context import recall_context_memories
-from raphael.memory.service import MemoryService
-from raphael.providers.base import ChatMessage
+from ciel.config import InternetConfig
+from ciel.internet import InternetService, InternetSource
+from ciel.memory import MemoryStore
+from ciel.memory.context import recall_context_memories
+from ciel.memory.service import MemoryService
+from ciel.providers.base import ChatMessage
 
 
 @pytest.fixture(autouse=True)
@@ -102,7 +102,7 @@ def test_information_finding_and_last_installment_requests_search(service, query
 
 
 def test_compact_query_preserves_names_ordinals_and_redacts_secrets(service, caplog):
-    with caplog.at_level("INFO", logger="raphael.internet"):
+    with caplog.at_level("INFO", logger="ciel.internet"):
         result = service.prepare(
             "Can you search like The Last Guardian 3rd edition? Like search the internet?"
         )
@@ -277,7 +277,7 @@ def test_explicit_project_reference_uses_real_confirmed_profile_value(service):
     with closing(MemoryStore(":memory:")) as store:
         memory = MemoryService(store)
         assert "saved" in memory.handle(
-            "Remember that my current project is RAPHAEL, a Linux voice assistant."
+            "Remember that my current project is CIEL, a Linux voice assistant."
         )
         assert "saved" in memory.handle("Remember that my occupation is a doctor.")
         recalled = recall_context_memories(store, "Research my current project")
@@ -286,7 +286,7 @@ def test_explicit_project_reference_uses_real_confirmed_profile_value(service):
             "[type=project; source=assistant_summary]"
         )
         result = service.prepare("Research my current project", memories=recalled)
-        assert result.sources and "RAPHAEL Linux voice assistant" in result.query
+        assert result.sources and "CIEL Linux voice assistant" in result.query
         assert "my current project" not in result.query
         assert "doctor" not in result.query and "bananas" not in result.query
 
@@ -511,7 +511,7 @@ def mock_http(monkeypatch, handler, addresses=None):
         settings.append(kwargs)
         return original(transport=transport, **kwargs)
 
-    monkeypatch.setattr("raphael.internet.httpx.Client", client)
+    monkeypatch.setattr("ciel.internet.httpx.Client", client)
     return resolve, settings
 
 

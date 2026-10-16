@@ -8,19 +8,19 @@ is documented in the [README](../README.md).
 
 ## Result
 
-RAPHAEL was not waiting for the complete reply. It already requested an SSE stream,
+CIEL was not waiting for the complete reply. It already requested an SSE stream,
 read each event as it arrived, filtered hidden/code text incrementally, and sent complete
 sentences into the existing bounded Chatterbox synthesis/playback pipeline. On the
-original live requests, RAPHAEL's “First reply text” measurement was the first usable
+original live requests, CIEL's “First reply text” measurement was the first usable
 visible provider content, not the end of generation.
 
 The observed wait is before NIM's first streamed content. The original 24–25 second
 live events included 25.35s and 23.85s to first text. In isolated requests with the
-same frozen RAPHAEL persona, memories, recent turns, and spoken-input instructions,
+same frozen CIEL persona, memories, recent turns, and spoken-input instructions,
 TCP plus TLS took about 0.27–0.30s while NIM took 12.56–13.48s to send the first
 content in the initial trials. Later trials of the same Lightning model ranged from
 0.65s to 34.98s, with occasional read timeouts and one corrupted reply. This variation
-is upstream of RAPHAEL's first-token display: HTTP headers were sometimes withheld for
+is upstream of CIEL's first-token display: HTTP headers were sometimes withheld for
 many seconds, and no chunks could be buffered or filtered locally before those headers.
 
 Nemotron 3.5 thinking was already explicitly disabled in the request. In the captured
@@ -35,7 +35,7 @@ the hosted endpoint's response-header boundary.
 ## Model comparison
 
 The six comparison cases used byte-for-byte identical messages per case and two serial
-repeats per model. The test preserved the current RAPHAEL context snapshot and used
+repeats per model. The test preserved the current CIEL context snapshot and used
 the same streaming payload shape and 400-token ceiling as the live path.
 
 | Model | Cases | First content | Output quality check |
@@ -57,7 +57,7 @@ an empty SSE stream; the configured 90B fallback had timed out at 40s in an earl
 direct test. Super completed that same question with a coherent 226-token answer in
 2.75s.
 Exact clock/date intents
-already have local answer code, so these cases do not need an LLM after RAPHAEL has
+already have local answer code, so these cases do not need an LLM after CIEL has
 accepted the utterance. The benchmark includes counterfactual model responses for those
 queries to compare hosted TTFT; the normal product flow answers them locally.
 

@@ -1,6 +1,6 @@
 # Local actions
 
-RAPHAEL discovers modules inside the installed `raphael.actions` package. Each
+CIEL discovers modules inside the installed `ciel.actions` package. Each
 module exports an `ACTION` instance implementing `Action`. Adding a trusted
 module does not require editing the voice handler or registry. Restart after
 adding one. This is Python code loaded with the application's privileges;
@@ -21,7 +21,7 @@ launch: ambient side effects still require a confident direct address.
 
 ## Contract
 
-Implement the interface in `src/raphael/actions/base.py`:
+Implement the interface in `src/ciel/actions/base.py`:
 
 - Give the action a unique `name` and a short `description`.
 - `match(text)` returns an argument dictionary for one complete command, or `None`.
@@ -64,14 +64,22 @@ arguments, ambiguous matches, denied authorization, cancellation, timeout, missi
 dependencies, and permission errors. Manually verify real desktop behavior using
 `docs/release-checks.md` before recording live acceptance.
 
-Model-selected function calls and reminders remain future work.
+Explicit, reliably transcribed requests for existing local handlers bypass the AI
+controller. Other requests can reach the local-tool path through its decision.
+Execution still parses the original
+user request and applies the existing authorization checks; model-generated arguments
+cannot create shell commands or approve memory writes. General function calling and
+reminders remain future work.
 
 ## Public internet retrieval
 
-The application performs free public web search and HTML/text page reading before
-provider answer generation. This path runs separately from the trusted action
+The lightweight NIM controller selects search or public HTML/text page reading,
+speaks a short acknowledgment, then retrieves evidence before reporting an answer.
+It can refine a query or read a page when evidence is insufficient, within
+`CONTROLLER_MAX_TOOL_STEPS`. This path runs separately from the trusted action
 registry. It retrieves evidence and source links; it does not execute website
-account actions, downloads, purchases, or browser automation.
+account actions, downloads, purchases, or browser automation. Tool output cannot
+authorize a local action.
 
 Current-information requests trigger searches by default. Explicit search and
 public HTTP(S) links also request retrieval; research, comparison, and double-check
@@ -87,5 +95,5 @@ Source links appear in terminal and desktop text, while spoken replies stay conc
 PDF/media extraction and live voice/text acceptance remain pending.
 
 ```bash
-pytest tests/test_internet.py tests/test_config.py
+pytest tests/test_controller.py tests/test_controller_runtime.py tests/test_internet.py
 ```

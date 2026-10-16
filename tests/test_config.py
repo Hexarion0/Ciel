@@ -7,30 +7,67 @@ from unittest.mock import patch
 import pytest
 from pydantic import ValidationError
 
-from raphael.config import InternetConfig, Settings
+from ciel.config import AudioConfig, InternetConfig, Settings
 
 
 def test_default_settings():
     """Verify default settings values when no environment variables are set."""
     settings = Settings(
         _env_file=None,
-        raphael_env="development",
-        raphael_log_level="INFO",
-        wake_word="raphael",
+        ciel_env="development",
+        ciel_log_level="INFO",
+        wake_word="ciel",
     )
     assert settings.app.env == "development"
     assert settings.app.log_level == "INFO"
-    assert settings.audio.wake_word == "raphael"
+    assert settings.audio.wake_word == "ciel"
     assert settings.audio.sample_rate == 16000
     assert settings.providers.nim_api_key is None
 
 
-def test_example_configuration_starts_with_cpu_amy():
+@pytest.mark.parametrize("configuration", [Settings, AudioConfig])
+def test_fresh_voice_defaults_use_cpu_pocket(configuration):
+    with patch.dict(os.environ, {}, clear=True):
+        selected = configuration(_env_file=None) if configuration is Settings else configuration()
+    audio = selected.audio if configuration is Settings else selected
+    assert (audio.tts_engine, audio.tts_voice) == ("pocket", "ciel")
+    assert audio.tts_fallback_voice == "en_US-ciel-medium"
+
+
+@pytest.mark.parametrize("configuration", [Settings, AudioConfig])
+@pytest.mark.parametrize(
+    ("values", "engine", "voice"),
+    [
+        ({"tts_engine": "piper"}, "piper", "en_US-amy-medium"),
+        ({"tts_engine": "auto"}, "auto", "en_US-amy-medium"),
+        ({"tts_engine": "chatterbox_turbo"}, "chatterbox_turbo", "ciel"),
+        ({"tts_voice": "en_US-custom-medium"}, "auto", "en_US-custom-medium"),
+        ({"tts_engine": "piper", "tts_voice": "custom.onnx"}, "piper", "custom.onnx"),
+    ],
+)
+def test_voice_defaults_preserve_explicit_legacy_choices(configuration, values, engine, voice):
+    with patch.dict(os.environ, {}, clear=True):
+        selected = (configuration(_env_file=None, **values)
+                    if configuration is Settings else configuration(**values))
+    audio = selected.audio if configuration is Settings else selected
+    assert (audio.tts_engine, audio.tts_voice) == (engine, voice)
+
+
+def test_legacy_voice_only_environment_keeps_piper(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("TTS_VOICE=en_US-custom-medium\n")
+    with patch.dict(os.environ, {}, clear=True):
+        audio = Settings(_env_file=env_file).audio
+    assert (audio.tts_engine, audio.tts_voice) == ("auto", "en_US-custom-medium")
+
+
+def test_example_configuration_starts_with_cpu_pocket():
     example = Path(__file__).resolve().parents[1] / ".env.example"
     with patch.dict(os.environ, {}, clear=True):
         settings = Settings(_env_file=example)
     audio = settings.audio
-    assert (audio.tts_engine, audio.tts_voice) == ("piper", "en_US-amy-medium")
+    assert (audio.tts_engine, audio.tts_voice) == ("pocket", "ciel")
+    assert audio.tts_pocket_device == "cpu" and audio.tts_pocket_quantization == "none"
     assert (audio.stt_model, audio.stt_device, audio.stt_compute_type) == ("base.en", "cpu", "int8")
     assert not audio.ambient_listening and not audio.show_transcripts
     assert audio.barge_in_mode == "wake"
@@ -40,8 +77,8 @@ def test_example_configuration_starts_with_cpu_amy():
 def test_environment_override():
     """Verify settings pick up environment variables."""
     env_vars = {
-        "RAPHAEL_ENV": "production",
-        "RAPHAEL_LOG_LEVEL": "DEBUG",
+        "CIEL_ENV": "production",
+        "CIEL_LOG_LEVEL": "DEBUG",
         "NIM_API_KEY": "nvapi-test-key-1234567890",
         "WAKE_WORD": "jarvis",
     }
@@ -66,13 +103,13 @@ def test_engine_defaults_to_voice_detection():
 def test_chatterbox_voice_profile_and_fallback_settings_reach_audio_config(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "TTS_ENGINE=chatterbox_turbo\nTTS_VOICE=raphael\n"
+        "TTS_ENGINE=chatterbox_turbo\nTTS_VOICE=ciel\n"
         "TTS_FALLBACK_VOICE=en_US-amy-medium\nTTS_AUDIO_QUEUE_SIZE=1\n"
     )
     with patch.dict(os.environ, {}, clear=True):
         audio = Settings(_env_file=env_file).audio
     assert audio.tts_engine == "chatterbox_turbo"
-    assert audio.tts_voice == "raphael"
+    assert audio.tts_voice == "ciel"
     assert audio.tts_fallback_voice == "en_US-amy-medium"
     assert audio.tts_audio_queue_size == 1
 
@@ -91,7 +128,7 @@ def test_tts_playback_latency_is_configurable_and_validated():
 
 
 def test_audio_device_indices_and_names_from_env(tmp_path):
-    from raphael.config import AudioConfig
+    from ciel.config import AudioConfig
 
     env_path = tmp_path / ".env"
     env_path.write_text('AUDIO_INPUT_DEVICE=3\nAUDIO_OUTPUT_DEVICE="USB Speaker"\n')
@@ -117,7 +154,7 @@ def test_stt_quality_thresholds_are_exposed_and_validated():
 
 
 def test_default_speech_endpoint_allows_quick_conversation_turns():
-    from raphael.config import Settings
+    from ciel.config import Settings
 
     audio = Settings(_env_file=None).audio
     assert audio.utterance_silence_seconds == 0.7
@@ -127,10 +164,10 @@ def test_default_speech_endpoint_allows_quick_conversation_turns():
 
 def test_persona_file_can_be_configured_or_disabled():
     with patch.dict(os.environ, {}, clear=True):
-        assert Settings(_env_file=None).raphael_persona_file == "persona.txt"
+        assert Settings(_env_file=None).ciel_persona_file == "persona.txt"
     for path in ("data/custom-persona.txt", ""):
-        with patch.dict(os.environ, {"RAPHAEL_PERSONA_FILE": path}, clear=True):
-            assert Settings(_env_file=None).raphael_persona_file == path
+        with patch.dict(os.environ, {"CIEL_PERSONA_FILE": path}, clear=True):
+            assert Settings(_env_file=None).ciel_persona_file == path
 
 
 def test_wake_sensitivity_settings_reach_audio_config():
@@ -270,3 +307,21 @@ def test_blank_internet_city_stays_unset():
     with patch.dict(os.environ, {"INTERNET_HOME_CITY": "  "}, clear=True):
         assert Settings(_env_file=None).internet.home_city == ""
     assert InternetConfig(home_city="  ").home_city == ""
+
+
+def test_controller_configuration_from_environment():
+    with patch.dict(os.environ, {
+        "CONTROLLER_ENABLED": "true", "CONTROLLER_MODEL": "custom-light",
+        "CONTROLLER_TIMEOUT_SECONDS": "4.0", "CONTROLLER_MAX_TOOL_STEPS": "2",
+    }, clear=True):
+        controller = Settings(_env_file=None).controller
+    assert controller.enabled and controller.model == "custom-light"
+    assert controller.timeout_seconds == 4 and controller.max_tool_steps == 2
+
+
+@pytest.mark.parametrize("options", [
+    {"controller_timeout_seconds": 0}, {"controller_max_tool_steps": 6},
+])
+def test_controller_rejects_unbounded_settings(options):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **options)

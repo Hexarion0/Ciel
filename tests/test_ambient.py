@@ -8,16 +8,16 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from raphael.audio.ambient import AmbientConversation
-from raphael.providers.base import ChatMessage, LLMResponse
+from ciel.audio.ambient import AmbientConversation
+from ciel.providers.base import ChatMessage, LLMResponse
 
 
 @pytest.mark.parametrize(
     "text", [
-        "Hey, Raphael.", "Raphael, help me.", "Can you help me, Raphael?",
-        "What's up Raphael?", "What's up, Raphel?", "Hi Ralph!", "Hello, Raphael.",
-        "So what's good Raphael?", "So Raphael, what's on your mind?",
-        "Well, hey Raphael, what's the time?", "Uh, what's up, Rafael?",
+        "Hey, Ciel.", "Ciel, help me.", "Can you help me, Ciel?",
+        "What's up Ciel?", "What's up, Ciell?", "Hi Siel!", "Hello, Ciel.",
+        "So what's good Ciel?", "So Ciel, what's on your mind?",
+        "Well, hey Ciel, what's the time?", "Uh, what's up, Siel?",
     ]
 )
 def test_direct_address_needs_no_cloud_judgment(text):
@@ -29,13 +29,13 @@ def test_direct_address_needs_no_cloud_judgment(text):
 
 def test_unaddressed_speech_is_temporary_and_expires(monkeypatch):
     clock = [100.0]
-    monkeypatch.setattr("raphael.audio.ambient.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("ciel.audio.ambient.time.monotonic", lambda: clock[0])
     ambient = AmbientConversation()
     router = MagicMock()
-    assert not ambient.decide("I hate Raphael.", router, []).addressed
-    assert not ambient.decide("Raphael is an assistant.", router, []).addressed
-    assert not ambient.decide("What do you think about Raphael?", router, []).addressed
-    assert not ambient.decide("Who is Raphael?", router, []).addressed
+    assert not ambient.decide("I hate Ciel.", router, []).addressed
+    assert not ambient.decide("Ciel is an assistant.", router, []).addressed
+    assert not ambient.decide("What do you think about Ciel?", router, []).addressed
+    assert not ambient.decide("Who is Ciel?", router, []).addressed
     assert not ambient.decide("Dad, what's for dinner?", router, []).addressed
     assert "Dad" in ambient.context_note()
     router.send.assert_not_called()
@@ -44,9 +44,9 @@ def test_unaddressed_speech_is_temporary_and_expires(monkeypatch):
 
 
 @pytest.mark.parametrize("text", [
-    "So Raphael is an assistant.", "Well, Raphael said hello.",
-    "So what do you think about Raphael?", "Um, who is Raphael?",
-    "So I hate Raphael.", "So what's good?", "Well, Mom, what's for dinner?",
+    "So Ciel is an assistant.", "Well, Ciel said hello.",
+    "So what do you think about Ciel?", "Um, who is Ciel?",
+    "So I hate Ciel.", "So what's good?", "Well, Mom, what's for dinner?",
 ])
 def test_fillers_do_not_turn_background_mentions_into_addresses(text):
     router = MagicMock()
@@ -132,7 +132,7 @@ def test_provider_failure_defaults_to_silence():
 
 def test_long_followup_is_judged_using_when_speech_started(monkeypatch):
     clock = [100.0]
-    monkeypatch.setattr("raphael.audio.ambient.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("ciel.audio.ambient.time.monotonic", lambda: clock[0])
     ambient = AmbientConversation(followup_seconds=20)
     ambient.replied()
     clock[0] = 130.0  # Speech began during the window but took time to finish.
@@ -144,10 +144,10 @@ def test_long_followup_is_judged_using_when_speech_started(monkeypatch):
 
 
 def test_long_pause_followup_uses_recent_dialogue_but_requires_context_match(monkeypatch):
-    from raphael.providers.base import ChatMessage
+    from ciel.providers.base import ChatMessage
 
     clock = [100.0]
-    monkeypatch.setattr('raphael.audio.ambient.time.monotonic', lambda: clock[0])
+    monkeypatch.setattr('ciel.audio.ambient.time.monotonic', lambda: clock[0])
     ambient = AmbientConversation(followup_seconds=20)
     ambient.record_addressed('user', 'What are we working on next?')
     ambient.record_addressed('assistant', 'We could improve the roadmap and memory system.')
@@ -171,10 +171,10 @@ def test_long_pause_followup_uses_recent_dialogue_but_requires_context_match(mon
 
 
 def test_unrelated_speech_after_active_window_is_context_checked_not_accepted(monkeypatch):
-    from raphael.providers.base import ChatMessage
+    from ciel.providers.base import ChatMessage
 
     clock = [100.0]
-    monkeypatch.setattr('raphael.audio.ambient.time.monotonic', lambda: clock[0])
+    monkeypatch.setattr('ciel.audio.ambient.time.monotonic', lambda: clock[0])
     ambient = AmbientConversation(followup_seconds=20)
     ambient.record_addressed('assistant', 'The roadmap is ready.')
     clock[0] += 90
@@ -190,7 +190,7 @@ def test_unrelated_speech_after_active_window_is_context_checked_not_accepted(mo
 
 
 def test_interrupted_followup_gate_receives_persistent_and_inflight_context():
-    from raphael.providers.base import ChatMessage
+    from ciel.providers.base import ChatMessage
 
     ambient = AmbientConversation()
     ambient.record_addressed('user', 'Help me understand the roadmap.')
@@ -217,7 +217,7 @@ def test_interrupted_followup_gate_receives_persistent_and_inflight_context():
 
 
 def test_vad_preserves_partial_chunks_and_converts_integer_audio(monkeypatch):
-    from raphael.audio.activity import SpeechActivity
+    from ciel.audio.activity import SpeechActivity
 
     model = MagicMock()
     model.chunk_samples.return_value = 512
@@ -237,19 +237,21 @@ def run_callbacks(
     tmp_path, monkeypatch, utterances, *, ambient=True, router=None, observed=None,
     tts=None, interrupted=None, persona_file=None,
     streaming=False, clock=None, ai_transcripts=False, cli_args=(), tts_enabled=True,
+    controller=False,
 ):
     """Run real CLI callbacks using an isolated DB and no audio hardware."""
     import sys
 
-    from raphael import __main__, audio, config, platform, providers
-    from raphael.memory import MemoryStore
-    from raphael.persona import PERSONA_CONTEXT_VERSION
+    from ciel import __main__, audio, config, platform, providers
+    from ciel.memory import MemoryStore
+    from ciel.persona import PERSONA_CONTEXT_VERSION
 
     settings = config.Settings(
         _env_file=None, memory_db_path=str(tmp_path / "memory.db"), tts_streaming=streaming,
         show_ai_transcripts=ai_transcripts,
         tts_enabled=tts_enabled,
-        raphael_persona_file=str(persona_file) if persona_file else "persona.txt",
+        controller_enabled=controller,
+        ciel_persona_file=str(persona_file) if persona_file else "persona.txt",
     )
     monkeypatch.setattr(config, "get_settings", lambda: settings)
     monkeypatch.setattr(platform, "get_audio_backend", MagicMock())
@@ -286,7 +288,7 @@ def run_callbacks(
         sleep=interrupt, monotonic=clock or __main__.time.monotonic,
     ))
     monkeypatch.setattr(sys, "argv", [
-        "raphael", "--ambient" if ambient else "--listen", *cli_args,
+        "ciel", "--ambient" if ambient else "--listen", *cli_args,
     ])
     assert __main__.main() == 0
     store = MemoryStore(settings.memory.db_path)
@@ -332,14 +334,14 @@ def test_keyboard_memory_confirmation_needs_no_wake_phrase(tmp_path, monkeypatch
 def test_live_ai_transcript_config_and_cli_override_at_local_playback(
     tmp_path, monkeypatch, capsys, configured, arguments, enabled,
 ):
-    from raphael.audio.tts import TextToSpeech
+    from ciel.audio.tts import TextToSpeech
 
     tts = MagicMock()
     tts.clean_text_for_speech.side_effect = TextToSpeech.clean_text_for_speech
 
     def speak(text, **controls):
         lines = capsys.readouterr().out.splitlines()
-        assert not any(line.startswith('RAPHAEL: ') for line in lines)
+        assert not any(line.startswith('CIEL: ') for line in lines)
         if enabled:
             assert "Hey! What's on your mind?" not in '\n'.join(lines)
         callback = controls.get('on_start')
@@ -355,13 +357,13 @@ def test_live_ai_transcript_config_and_cli_override_at_local_playback(
 
     tts.speak.side_effect = speak
     _router, _tts, _loop, store, _turns = run_callbacks(
-        tmp_path, monkeypatch, [('Hey Raphael.', {})], tts=tts,
+        tmp_path, monkeypatch, [('Hey Ciel.', {})], tts=tts,
         ai_transcripts=configured, cli_args=arguments,
     )
     try:
         output = capsys.readouterr().out
-        assert ("RAPHAEL: Hey! What's on your mind?" in output) is enabled
-        from raphael import audio
+        assert ("CIEL: Hey! What's on your mind?" in output) is enabled
+        from ciel import audio
 
         assert audio.TextToSpeech.call_args.kwargs.get('include_alignments', False) is enabled
     finally:
@@ -372,8 +374,8 @@ def test_live_ai_transcript_config_and_cli_override_at_local_playback(
 def test_live_ai_transcripts_show_clean_speech_and_persist_one_reply(
     tmp_path, monkeypatch, capsys, streaming,
 ):
-    from raphael.audio.tts import TextToSpeech
-    from raphael.providers.base import LLMStreamChunk
+    from ciel.audio.tts import TextToSpeech
+    from ciel.providers.base import LLMStreamChunk
 
     router, tts = MagicMock(), MagicMock()
     text = '**First** sentence. Second sentence.'
@@ -392,16 +394,16 @@ def test_live_ai_transcripts_show_clean_speech_and_persist_one_reply(
 
     tts.speak.side_effect = speak
     _router, _tts, _loop, store, turns = run_callbacks(
-        tmp_path, monkeypatch, [('Raphael, explain this.', {})],
+        tmp_path, monkeypatch, [('Ciel, explain this.', {})],
         router=router, tts=tts, streaming=streaming, ai_transcripts=True,
     )
     try:
         output = capsys.readouterr().out
-        live_lines = [line for line in output.splitlines() if line.startswith('RAPHAEL: ')]
+        live_lines = [line for line in output.splitlines() if line.startswith('CIEL: ')]
         expected = [
             'First sentence. Second sentence.',
         ]
-        assert [line.removeprefix('RAPHAEL: ') for line in live_lines] == expected
+        assert [line.removeprefix('CIEL: ') for line in live_lines] == expected
         assert [turn.content for turn in turns if turn.role == 'assistant'] == [text]
     finally:
         store.close()
@@ -411,12 +413,12 @@ def test_failed_local_playback_has_no_live_ai_transcript(tmp_path, monkeypatch, 
     tts = MagicMock()
     tts.speak.return_value = False  # No on_start when synthesis/playback fails.
     _router, _tts, _loop, store, _turns = run_callbacks(
-        tmp_path, monkeypatch, [('Hey Raphael.', {})], tts=tts, ai_transcripts=True,
+        tmp_path, monkeypatch, [('Hey Ciel.', {})], tts=tts, ai_transcripts=True,
     )
     try:
         lines = capsys.readouterr().out.splitlines()
-        assert not any(line.startswith('RAPHAEL: ') for line in lines)
-        assert any('RAPHAEL (text): "Hey! What\'s on your mind?"' in line for line in lines)
+        assert not any(line.startswith('CIEL: ') for line in lines)
+        assert any('CIEL (text): "Hey! What\'s on your mind?"' in line for line in lines)
     finally:
         store.close()
 
@@ -434,12 +436,12 @@ def test_cancellation_before_batch_playback_callback_has_no_live_ai_transcript(
 
     tts.speak.side_effect = speak
     _router, _tts, _loop, store, turns = run_callbacks(
-        tmp_path, monkeypatch, [('Raphael, explain this.', {'cancel_event': Event()})],
+        tmp_path, monkeypatch, [('Ciel, explain this.', {'cancel_event': Event()})],
         router=router, tts=tts, ai_transcripts=True,
     )
     try:
         lines = capsys.readouterr().out.splitlines()
-        assert not any(line.startswith('RAPHAEL: ') for line in lines)
+        assert not any(line.startswith('CIEL: ') for line in lines)
         assert [turn.content for turn in turns if turn.role == 'assistant'] == ['Canceled reply.']
     finally:
         store.close()
@@ -450,14 +452,14 @@ def test_caption_logging_uses_root_handler_and_restores_on_shutdown(
 ):
     import logging
 
-    from raphael.audio import captions
-    from raphael.audio.tts import TextToSpeech
+    from ciel.audio import captions
+    from ciel.audio.tts import TextToSpeech
 
     installer = captions.install_caption_logging
     restored = []
 
     def install(renderer, logger=None):
-        assert logger is None  # RAPHAEL's console handler belongs to the root logger.
+        assert logger is None  # CIEL's console handler belongs to the root logger.
         root = logging.getLogger()
         originals = root.handlers[:]
         restore = installer(renderer)
@@ -482,11 +484,11 @@ def test_caption_logging_uses_root_handler_and_restores_on_shutdown(
 
     tts.speak.side_effect = speak
     _router, _tts, _loop, store, _turns = run_callbacks(
-        tmp_path, monkeypatch, [('Hey Raphael.', {})], tts=tts, ai_transcripts=True,
+        tmp_path, monkeypatch, [('Hey Ciel.', {})], tts=tts, ai_transcripts=True,
     )
     try:
         assert restored == [True]
-        assert 'RAPHAEL: Hey [interrupted]' in capsys.readouterr().out
+        assert 'CIEL: Hey [interrupted]' in capsys.readouterr().out
     finally:
         store.close()
 
@@ -498,8 +500,8 @@ def test_full_response_is_not_revealed_before_playback_progress(
 ):
     import io
 
-    from raphael.audio import captions
-    from raphael.audio.tts import TextToSpeech
+    from ciel.audio import captions
+    from ciel.audio.tts import TextToSpeech
 
     class CaptionStream(io.StringIO):
         def isatty(self):
@@ -526,8 +528,8 @@ def test_full_response_is_not_revealed_before_playback_progress(
 
     tts.speak.side_effect = speak
     text = {
-        'greeting': 'Hey Raphael.', 'clock': 'Raphael, what time is it?',
-        'batch': 'Raphael, explain this.',
+        'greeting': 'Hey Ciel.', 'clock': 'Ciel, what time is it?',
+        'batch': 'Ciel, explain this.',
     }[kind]
     _router, _tts, _loop, store, turns = run_callbacks(
         tmp_path, monkeypatch, [(text, {})], router=router, tts=tts, ai_transcripts=True,
@@ -557,12 +559,12 @@ def test_audio_failure_keeps_full_reply_available_as_text(
         return False
 
     tts.speak.side_effect = speak
-    text = 'Hey Raphael.' if kind == 'greeting' else 'Raphael, explain this.'
+    text = 'Hey Ciel.' if kind == 'greeting' else 'Ciel, explain this.'
     _router, _tts, _loop, store, turns = run_callbacks(
         tmp_path, monkeypatch, [(text, {})], router=router, tts=tts, ai_transcripts=True,
     )
     try:
-        assert f'RAPHAEL (text): "{full}"' in capsys.readouterr().out
+        assert f'CIEL (text): "{full}"' in capsys.readouterr().out
         if kind == 'batch':
             assert [turn.content for turn in turns if turn.role == 'assistant'] == [full]
     finally:
@@ -577,30 +579,30 @@ def test_regular_reply_logs_remain_when_playback_captions_are_inactive(
     full = "Hey! What's on your mind?"
 
     def speak(_text, **controls):
-        assert f'RAPHAEL: "{full}"' in capsys.readouterr().out
+        assert f'CIEL: "{full}"' in capsys.readouterr().out
         return tts_enabled
 
     tts.speak.side_effect = speak
     _router, _tts, _loop, store, _turns = run_callbacks(
-        tmp_path, monkeypatch, [('Hey Raphael.', {})], tts=tts,
+        tmp_path, monkeypatch, [('Hey Ciel.', {})], tts=tts,
         ai_transcripts=captions_enabled, tts_enabled=tts_enabled,
     )
     store.close()
 
 
 def test_generated_stream_without_audio_retains_full_text_answer(tmp_path, monkeypatch, capsys):
-    from raphael.providers.base import LLMStreamChunk
+    from ciel.providers.base import LLMStreamChunk
 
     full = 'This generated answer is still available without audio.'
     router, tts = MagicMock(), MagicMock()
     router.stream.side_effect = lambda *args, **kwargs: iter([LLMStreamChunk(full, 'test', 'test')])
     tts.speak.return_value = False
     _router, _tts, _loop, store, turns = run_callbacks(
-        tmp_path, monkeypatch, [('Raphael, explain this.', {})], router=router, tts=tts,
+        tmp_path, monkeypatch, [('Ciel, explain this.', {})], router=router, tts=tts,
         streaming=True, ai_transcripts=True,
     )
     try:
-        assert f'RAPHAEL (text): "{full}"' in capsys.readouterr().out
+        assert f'CIEL (text): "{full}"' in capsys.readouterr().out
         assert [turn.content for turn in turns if turn.role == 'assistant'] == [full]
     finally:
         store.close()
@@ -608,7 +610,7 @@ def test_generated_stream_without_audio_retains_full_text_answer(tmp_path, monke
 
 def test_followup_window_begins_after_long_playback(tmp_path, monkeypatch):
     clock = [100.0]
-    monkeypatch.setattr('raphael.audio.ambient.time.monotonic', lambda: clock[0])
+    monkeypatch.setattr('ciel.audio.ambient.time.monotonic', lambda: clock[0])
     tts = MagicMock()
 
     def speak(*_args, **_kwargs):
@@ -622,7 +624,7 @@ def test_followup_window_begins_after_long_playback(tmp_path, monkeypatch):
         LLMResponse('Let us continue.', 'test', 'test'),
     ]
     _router, tts, _loop, store, _turns = run_callbacks(
-        tmp_path, monkeypatch, [('Hey Raphael.', {}), ('Continue?', {})],
+        tmp_path, monkeypatch, [('Hey Ciel.', {}), ('Continue?', {})],
         router=router, tts=tts,
     )
     try:
@@ -633,7 +635,7 @@ def test_followup_window_begins_after_long_playback(tmp_path, monkeypatch):
 
 
 def test_live_stream_speaks_sentences_once_and_persists_one_assistant_turn(tmp_path, monkeypatch):
-    from raphael.providers.base import LLMStreamChunk
+    from ciel.providers.base import LLMStreamChunk
 
     router, tts = MagicMock(), MagicMock()
     router.stream.side_effect = lambda *args, **kwargs: iter([
@@ -647,7 +649,7 @@ def test_live_stream_speaks_sentences_once_and_persists_one_assistant_turn(tmp_p
 
     tts.speak.side_effect = speak
     _router, _tts, _loop, store, turns = run_callbacks(
-        tmp_path, monkeypatch, [("Raphael, explain streaming.", {})],
+        tmp_path, monkeypatch, [("Ciel, explain streaming.", {})],
         router=router, tts=tts, streaming=True,
     )
     try:
@@ -664,7 +666,7 @@ def test_live_stream_speaks_sentences_once_and_persists_one_assistant_turn(tmp_p
 
 
 def test_canceled_stream_and_new_addition_preserve_combined_request(tmp_path, monkeypatch):
-    from raphael.providers.base import LLMStreamChunk
+    from ciel.providers.base import LLMStreamChunk
 
     canceled, replacement = Event(), Event()
     router = MagicMock()
@@ -679,7 +681,7 @@ def test_canceled_stream_and_new_addition_preserve_combined_request(tmp_path, mo
     router.stream.side_effect = generate
     _router, tts, _loop, store, turns = run_callbacks(
         tmp_path, monkeypatch,
-        [("Raphael, explain streaming.", {"cancel_event": canceled}),
+        [("Ciel, explain streaming.", {"cancel_event": canceled}),
          ("And include interruptions.", {
              "cancel_event": replacement, "supersedes_cancel_event": canceled,
          })], router=router, streaming=True,
@@ -697,7 +699,7 @@ def test_canceled_stream_and_new_addition_preserve_combined_request(tmp_path, mo
 
 
 def test_live_stream_interrupted_after_audio_starts_archives_partial_reply(tmp_path, monkeypatch):
-    from raphael.providers.base import LLMStreamChunk
+    from ciel.providers.base import LLMStreamChunk
 
     cancel = Event()
     router, tts = MagicMock(), MagicMock()
@@ -713,7 +715,7 @@ def test_live_stream_interrupted_after_audio_starts_archives_partial_reply(tmp_p
     tts.speak.side_effect = speak
     _router, _tts, _loop, store, turns = run_callbacks(
         tmp_path, monkeypatch,
-        [("Raphael, explain streaming.", {"cancel_event": cancel}),
+        [("Ciel, explain streaming.", {"cancel_event": cancel}),
          ("", {"supersedes_cancel_event": cancel})],
         router=router, tts=tts, streaming=True,
     )
@@ -732,7 +734,7 @@ def test_live_stream_interrupted_after_audio_starts_archives_partial_reply(tmp_p
 def test_reply_cannot_speak_internal_interruption_note(
     tmp_path, monkeypatch, capsys, streaming, answer,
 ):
-    from raphael.providers.base import LLMStreamChunk
+    from ciel.providers.base import LLMStreamChunk
 
     router = MagicMock()
     router.send.return_value = LLMResponse(
@@ -745,7 +747,7 @@ def test_reply_cannot_speak_internal_interruption_note(
     tts = MagicMock()
     tts.supports_sentence_pipeline = False
     _router, tts, _loop, store, turns = run_callbacks(
-        tmp_path, monkeypatch, [("Raphael, tell me a joke.", {})], router=router,
+        tmp_path, monkeypatch, [("Ciel, tell me a joke.", {})], router=router,
         streaming=streaming, tts=tts,
     )
     try:
@@ -760,7 +762,7 @@ def test_reply_cannot_speak_internal_interruption_note(
 
 
 def test_live_partial_stream_failure_speaks_notice_without_repeating_answer(tmp_path, monkeypatch):
-    from raphael.providers.base import LLMStreamChunk
+    from ciel.providers.base import LLMStreamChunk
 
     router, tts = MagicMock(), MagicMock()
 
@@ -776,7 +778,7 @@ def test_live_partial_stream_failure_speaks_notice_without_repeating_answer(tmp_
     router.stream.side_effect = generate
     tts.speak.side_effect = speak
     _router, _tts, _loop, store, turns = run_callbacks(
-        tmp_path, monkeypatch, [("Raphael, explain streaming.", {})],
+        tmp_path, monkeypatch, [("Ciel, explain streaming.", {})],
         router=router, tts=tts, streaming=True,
     )
     try:
@@ -791,7 +793,7 @@ def test_live_partial_stream_failure_speaks_notice_without_repeating_answer(tmp_
 
 def test_interruption_during_long_reply_can_be_judged_after_deadline(monkeypatch):
     clock = [100.0]
-    monkeypatch.setattr('raphael.audio.ambient.time.monotonic', lambda: clock[0])
+    monkeypatch.setattr('ciel.audio.ambient.time.monotonic', lambda: clock[0])
     ambient = AmbientConversation()
     ambient.record_addressed('assistant', 'Let me explain the next steps.')
     clock[0] = 130.0
@@ -815,7 +817,7 @@ def test_superseded_request_and_added_words_reach_one_response(tmp_path, monkeyp
     ]
     _router, tts, _loop, store, turns = run_callbacks(
         tmp_path, monkeypatch, [('And include headphone support.', {})], router=router,
-        observed=[('Raphael, explain always listening.', {'superseded': True})],
+        observed=[('Ciel, explain always listening.', {'superseded': True})],
     )
     try:
         messages = router.send.call_args.args[0]
@@ -843,7 +845,7 @@ def test_live_canceled_request_and_short_addition_are_merged(tmp_path, monkeypat
     _router, tts, _loop, store, turns = run_callbacks(
         tmp_path, monkeypatch,
         [
-            ('Hey Raphael, what is it that you are special?', {'cancel_event': canceled}),
+            ('Hey Ciel, what is it that you are special?', {'cancel_event': canceled}),
             ('And good.', {
                 'cancel_event': replacement, 'supersedes_cancel_event': canceled,
                 'response_pending': True, 'during_reply': True, 'stt_confidence': 0.54,
@@ -881,7 +883,7 @@ def test_linked_superseded_stt_request_is_merged_before_reply_gate(tmp_path, mon
             'response_pending': True,
         })],
         router=router,
-        observed=[('Raphael, explain always listening.', {
+        observed=[('Ciel, explain always listening.', {
             'superseded': True, 'cancel_event': canceled,
         })],
     )
@@ -911,7 +913,7 @@ def test_repeated_additions_keep_the_original_request(tmp_path, monkeypatch):
     router.send.side_effect = respond
     _router, tts, _loop, store, _turns = run_callbacks(
         tmp_path, monkeypatch,
-        [('Raphael, explain this in five steps.', {'cancel_event': first}),
+        [('Ciel, explain this in five steps.', {'cancel_event': first}),
          ('And include examples.', {'cancel_event': second, 'supersedes_cancel_event': first}),
          ('No, three steps, not five.', {
              'cancel_event': third, 'supersedes_cancel_event': second,
@@ -943,7 +945,7 @@ def test_unrelated_recording_cannot_inherit_canceled_request(tmp_path, monkeypat
     router.send.side_effect = respond
     _router, tts, _loop, store, turns = run_callbacks(
         tmp_path, monkeypatch,
-        [('Raphael, explain this.', {'cancel_event': canceled}), ('And good.', {
+        [('Ciel, explain this.', {'cancel_event': canceled}), ('And good.', {
             'supersedes_cancel_event': other_token, 'response_pending': True,
         })], router=router,
     )
@@ -964,7 +966,7 @@ def test_merge_permission_does_not_override_other_listener_or_save_facts(tmp_pat
         tmp_path, monkeypatch,
         [('Actually, Mom, pass me that.', {'supersedes_cancel_event': canceled}),
          ('Actually my favorite game is CS2.', {'supersedes_cancel_event': canceled})],
-        router=router, observed=[('Raphael, explain this.', {
+        router=router, observed=[('Ciel, explain this.', {
             'superseded': True, 'cancel_event': canceled,
         })],
     )
@@ -986,7 +988,7 @@ def test_continue_receives_interrupted_playback_context(tmp_path, monkeypatch):
         'played_seconds': 2.0, 'duration_seconds': 4.0,
     }
     _router, tts, _loop, store, _turns = run_callbacks(
-        tmp_path, monkeypatch, [('Raphael, continue.', {})], router=router, interrupted=context,
+        tmp_path, monkeypatch, [('Ciel, continue.', {})], router=router, interrupted=context,
     )
     try:
         system = router.send.call_args.args[0][0].content
@@ -1015,9 +1017,9 @@ def test_voice_mode_controls_and_background_silence(tmp_path, monkeypatch):
     router, tts, loop, store, turns = run_callbacks(
         tmp_path, monkeypatch,
         [
-            ("Raphael, listen continuously.", {}),
+            ("Ciel, listen continuously.", {}),
             ("Mom, pass me that.", {"ambient": True}),
-            ("Raphael, stop listening.", {"ambient": True}),
+            ("Ciel, stop listening.", {"ambient": True}),
         ],
         ambient=False,
     )
@@ -1080,14 +1082,14 @@ def test_ambient_local_greeting_opens_followup_with_actual_context(tmp_path, mon
     ]
     _router, tts, _loop, store, turns = run_callbacks(
         tmp_path, monkeypatch,
-        [("Raphael.", {}), ("What are you good at?", {"ambient": True})],
+        [("Ciel.", {}), ("What are you good at?", {"ambient": True})],
         router=router,
     )
     try:
         assert tts.speak.call_count == 2
         gate_request = router.send.call_args_list[0]
         payload = json.loads(gate_request.args[0][1].content)
-        assert payload["recent_dialogue"][0]["content"] == "Raphael."
+        assert payload["recent_dialogue"][0]["content"] == "Ciel."
         assert payload["recent_dialogue"][1]["role"] == "assistant"
         assert [turn.role for turn in turns] == ["user", "assistant"]
     finally:
@@ -1099,7 +1101,7 @@ def test_explicit_persona_request_updates_file_without_calling_provider(tmp_path
     persona_file.write_text("Keep a warm tone.\n", encoding="utf-8")
     router = MagicMock()
     _router, tts, _loop, store, turns = run_callbacks(
-        tmp_path, monkeypatch, [("Raphael, be more playful.", {})],
+        tmp_path, monkeypatch, [("Ciel, be more playful.", {})],
         router=router, persona_file=persona_file,
     )
     try:
@@ -1125,7 +1127,7 @@ def test_persona_change_question_collects_and_saves_next_followup(tmp_path, monk
     _router, tts, _loop, store, turns = run_callbacks(
         tmp_path, monkeypatch,
         [
-            ("Raphael, can you update your persona?", {}),
+            ("Ciel, can you update your persona?", {}),
             ("Curious, and ask more questions when you don't know something.", {}),
         ],
         router=router,
@@ -1150,7 +1152,7 @@ def test_inferred_ambient_followup_never_auto_saves_personal_facts(tmp_path, mon
     ]
     _router, _tts, _loop, store, turns = run_callbacks(
         tmp_path, monkeypatch,
-        [("Raphael.", {}), ("My favorite game is CS2.", {"ambient": True})],
+        [("Ciel.", {}), ("My favorite game is CS2.", {"ambient": True})],
         router=router,
     )
     try:
@@ -1168,11 +1170,11 @@ def test_superseded_direct_address_opens_temporary_followup_without_saving(tmp_p
     ]
     _router, _tts, _loop, store, turns = run_callbacks(
         tmp_path, monkeypatch, [("What are you good at?", {"ambient": True})],
-        router=router, observed=[("Hey Raphael.", {"superseded": True})],
+        router=router, observed=[("Hey Ciel.", {"superseded": True})],
     )
     try:
         gate = json.loads(router.send.call_args_list[0].args[0][1].content)
-        assert gate["recent_dialogue"][0]["content"] == "Hey Raphael."
+        assert gate["recent_dialogue"][0]["content"] == "Hey Ciel."
         assert len(turns) == 2
         assert turns[0].content == "What are you good at?"
     finally:
@@ -1182,7 +1184,7 @@ def test_superseded_direct_address_opens_temporary_followup_without_saving(tmp_p
 def test_unclear_direct_speech_gets_repeat_without_saving(tmp_path, monkeypatch):
     router, tts, _loop, store, turns = run_callbacks(
         tmp_path, monkeypatch,
-        [("", {"stt_raw_text": "Hey Raphael.", "stt_needs_repeat": True})],
+        [("", {"stt_raw_text": "Hey Ciel.", "stt_needs_repeat": True})],
     )
     try:
         router.send.assert_not_called()
@@ -1224,8 +1226,8 @@ def test_verified_wake_allows_local_time_without_name_in_stt(tmp_path, monkeypat
 
 
 @pytest.mark.parametrize("text, query", [
-    ("So what's good Raphael?", "So what's good Raphael?"),
-    ("So Raphael, what's on your mind?", "what's on your mind?"),
+    ("So what's good Ciel?", "So what's good Ciel?"),
+    ("So Ciel, what's on your mind?", "what's on your mind?"),
 ])
 def test_live_log_addresses_reply_without_speech_gate(tmp_path, monkeypatch, text, query):
     router = MagicMock()
@@ -1253,7 +1255,7 @@ def test_empty_interruption_restores_superseded_question(tmp_path, monkeypatch, 
         tmp_path, monkeypatch,
         [('', {'cancel_event': replacement, 'supersedes_cancel_event': canceled})],
         ambient=ambient, router=router,
-        observed=[('Raphael, what are you good at?', {
+        observed=[('Ciel, what are you good at?', {
             'superseded': True, 'cancel_event': canceled,
         })],
     )
@@ -1281,7 +1283,7 @@ def test_empty_interruption_retries_without_duplicate_history(tmp_path, monkeypa
     router.send.side_effect = respond
     _router, tts, _loop, store, turns = run_callbacks(
         tmp_path, monkeypatch,
-        [('Raphael, explain this.', {'cancel_event': canceled}),
+        [('Ciel, explain this.', {'cancel_event': canceled}),
          ('', {'cancel_event': replacement, 'supersedes_cancel_event': canceled})],
         router=router,
     )
@@ -1317,7 +1319,7 @@ def test_empty_audio_does_not_restore_unrelated_or_unclear_requests(tmp_path, mo
     router.send.return_value = LLMResponse('{"addressed": false}', 'test', 'test')
     _router, _tts, _loop, store, turns = run_callbacks(
         tmp_path, monkeypatch, [('', info)], router=router, clock=clock,
-        observed=[('Raphael, explain this.', {'superseded': True, 'cancel_event': canceled})],
+        observed=[('Ciel, explain this.', {'superseded': True, 'cancel_event': canceled})],
     )
     try:
         assert all(
@@ -1333,13 +1335,13 @@ def test_empty_recovery_cannot_execute_a_memory_write(tmp_path, monkeypatch, amb
     canceled = Event()
     canceled.set()
     handler = MagicMock(return_value=None)
-    monkeypatch.setattr('raphael.memory.service.MemoryService.handle', handler)
+    monkeypatch.setattr('ciel.memory.service.MemoryService.handle', handler)
     router = MagicMock()
     router.send.return_value = LLMResponse('I heard your request.', 'test', 'test')
     _router, _tts, _loop, store, _turns = run_callbacks(
         tmp_path, monkeypatch, [('', {'supersedes_cancel_event': canceled})],
         ambient=ambient, router=router,
-        observed=[('Raphael, remember my name is Alex.', {
+        observed=[('Ciel, remember my name is Alex.', {
             'superseded': True, 'cancel_event': canceled,
         })],
     )
@@ -1384,7 +1386,7 @@ def test_speech_feedback_does_not_bypass_other_listener_or_quoted_speech(text):
 
 def test_feedback_requires_recent_assistant_speech(monkeypatch):
     clock = [100.0]
-    monkeypatch.setattr('raphael.audio.ambient.time.monotonic', lambda: clock[0])
+    monkeypatch.setattr('ciel.audio.ambient.time.monotonic', lambda: clock[0])
     ambient = AmbientConversation()
     router = MagicMock()
     router.send.return_value = LLMResponse(
@@ -1395,13 +1397,13 @@ def test_feedback_requires_recent_assistant_speech(monkeypatch):
     ambient.record_addressed('assistant', 'Hello.')
     clock[0] += 21
     assert not ambient.decide(feedback, router, []).addressed
-    ambient.record_addressed('user', 'Raphael?')
+    ambient.record_addressed('user', 'Ciel?')
     assert not ambient.decide(feedback, router, []).addressed
 
 
 def test_uncertain_fragment_keeps_original_followup_deadline(monkeypatch):
     clock = [100.0]
-    monkeypatch.setattr('raphael.audio.ambient.time.monotonic', lambda: clock[0])
+    monkeypatch.setattr('ciel.audio.ambient.time.monotonic', lambda: clock[0])
     ambient = AmbientConversation(followup_policy='strict')
     ambient.record_addressed('assistant', 'Here is what I can do.')
     original_deadline = ambient.deadline
@@ -1422,7 +1424,7 @@ def test_live_voice_feedback_after_reply_reaches_conversation(tmp_path, monkeypa
     router.send.return_value = LLMResponse('Here is what I can do.', 'test', 'test')
     _router, tts, _loop, store, turns = run_callbacks(
         tmp_path, monkeypatch,
-        [('Raphael, what are you good at?', {}),
+        [('Ciel, what are you good at?', {}),
          ('Why are you talking so fast right now?', {})], router=router,
     )
     try:
@@ -1437,7 +1439,7 @@ def test_live_voice_feedback_after_reply_reaches_conversation(tmp_path, monkeypa
 
 
 @pytest.mark.parametrize('original_question', [
-    'What time is Raphael?', "What's the time Raphael?", 'What time is it Rafael?',
+    'What time is Ciel?', "What's the time Ciel?", 'What time is it Siel?',
 ])
 def test_live_clock_recovery_then_robot_feedback_get_two_replies(
     tmp_path, monkeypatch, original_question,
@@ -1480,7 +1482,7 @@ def test_live_active_conversation_accepts_uncertain_followup(tmp_path, monkeypat
     ]
     _router, tts, _loop, store, turns = run_callbacks(
         tmp_path, monkeypatch,
-        [('Raphael, what are you good at?', {}), (followup, {})], router=router,
+        [('Ciel, what are you good at?', {}), (followup, {})], router=router,
     )
     try:
         assert router.send.call_count == 3
@@ -1494,16 +1496,16 @@ def test_live_active_conversation_accepts_uncertain_followup(tmp_path, monkeypat
         store.close()
 
 
-@pytest.mark.parametrize('answer, saved', [('Raphael, yes.', True), ('Raphael, no.', False)])
+@pytest.mark.parametrize('answer, saved', [('Ciel, yes.', True), ('Ciel, no.', False)])
 def test_memory_proposal_confirmation_in_real_voice_handler(tmp_path, monkeypatch, answer, saved):
     router, tts, _loop, store, turns = run_callbacks(
         tmp_path, monkeypatch,
-        [('Raphael, my favorite game is CS2.', {}), (answer, {})],
+        [('Ciel, my favorite game is CS2.', {}), (answer, {})],
     )
     try:
         assert (store.get_fact('user:favorite_game') is not None) is saved
         assert 'Should I remember' in tts.speak.call_args_list[0].args[0]
-        assert 'hey raphael, yes' in tts.speak.call_args_list[0].args[0]
+        assert 'hey ciel, yes' in tts.speak.call_args_list[0].args[0]
         assert len(turns) == 4
         router.send.assert_not_called()
     finally:
@@ -1511,8 +1513,8 @@ def test_memory_proposal_confirmation_in_real_voice_handler(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize('interruption', [
-    ('Raphael, cancel.', {}), ('Raphael, what time is it?', {}),
-    ('Raphael, yes.', {'stt_confidence': 0.45}),
+    ('Ciel, cancel.', {}), ('Ciel, what time is it?', {}),
+    ('Ciel, yes.', {'stt_confidence': 0.45}),
 ])
 def test_memory_proposal_does_not_survive_cancel_topic_change_or_uncertainty(
     tmp_path, monkeypatch, interruption,
@@ -1521,7 +1523,7 @@ def test_memory_proposal_does_not_survive_cancel_topic_change_or_uncertainty(
     router.send.return_value = LLMResponse('Okay.', 'test', 'test')
     _router, _tts, _loop, store, _turns = run_callbacks(
         tmp_path, monkeypatch,
-        [('Raphael, my favorite game is CS2.', {}), interruption, ('Raphael, yes.', {})],
+        [('Ciel, my favorite game is CS2.', {}), interruption, ('Ciel, yes.', {})],
         router=router,
     )
     try:
@@ -1531,12 +1533,12 @@ def test_memory_proposal_does_not_survive_cancel_topic_change_or_uncertainty(
 
 
 def test_local_action_voice_handler_uses_telemetry_without_provider(tmp_path, monkeypatch):
-    from raphael.platform.system_info import SystemSnapshot
+    from ciel.platform.system_info import SystemSnapshot
 
-    monkeypatch.setattr('raphael.actions.system_info.get_system_snapshot',
+    monkeypatch.setattr('ciel.actions.system_info.get_system_snapshot',
                         lambda **kwargs: SystemSnapshot(ram_used_gb=8, ram_total_gb=16))
     router, tts, _loop, store, turns = run_callbacks(
-        tmp_path, monkeypatch, [('Raphael, how much RAM am I using?', {})],
+        tmp_path, monkeypatch, [('Ciel, how much RAM am I using?', {})],
     )
     try:
         router.send.assert_not_called()
@@ -1550,21 +1552,21 @@ def test_local_action_voice_handler_uses_telemetry_without_provider(tmp_path, mo
 @pytest.mark.parametrize('direct', [True, False])
 def test_application_launch_requires_direct_address_in_voice_handler(tmp_path, monkeypatch, direct):
     launch = MagicMock()
-    monkeypatch.setattr('raphael.actions.open_app.subprocess.Popen', launch)
-    monkeypatch.setattr('raphael.actions.open_app.sys.platform', 'linux')
-    monkeypatch.setattr('raphael.actions.open_app.shutil.which', lambda name: '/usr/bin/discord')
+    monkeypatch.setattr('ciel.actions.open_app.subprocess.Popen', launch)
+    monkeypatch.setattr('ciel.actions.open_app.sys.platform', 'linux')
+    monkeypatch.setattr('ciel.actions.open_app.shutil.which', lambda name: '/usr/bin/discord')
     router = MagicMock()
     router.send.return_value = LLMResponse(
         '{"listener": "assistant", "confidence": 0.99}', 'test', 'test',
     )
     _router, tts, _loop, store, _turns = run_callbacks(
         tmp_path, monkeypatch,
-        [('Raphael.', {}), ('Raphael, open Discord.' if direct else 'Open Discord.', {})],
+        [('Ciel.', {}), ('Ciel, open Discord.' if direct else 'Open Discord.', {})],
         router=router,
     )
     try:
         assert launch.call_count == int(direct)
-        assert ('sent the launch request' if direct else 'address Raphael directly') in (
+        assert ('sent the launch request' if direct else 'address Ciel directly') in (
             tts.speak.call_args.args[0]
         )
     finally:
@@ -1574,13 +1576,13 @@ def test_application_launch_requires_direct_address_in_voice_handler(tmp_path, m
 @pytest.mark.parametrize('ambient', [True, False])
 def test_natural_discord_request_uses_local_launcher(tmp_path, monkeypatch, ambient):
     launch = MagicMock()
-    monkeypatch.setattr('raphael.actions.open_app.subprocess',
+    monkeypatch.setattr('ciel.actions.open_app.subprocess',
                         SimpleNamespace(Popen=launch, DEVNULL=-3))
-    monkeypatch.setattr('raphael.actions.open_app.sys.platform', 'linux')
-    monkeypatch.setattr('raphael.actions.open_app.shutil.which',
+    monkeypatch.setattr('ciel.actions.open_app.sys.platform', 'linux')
+    monkeypatch.setattr('ciel.actions.open_app.shutil.which',
                         lambda name: '/usr/bin/discord' if name == 'discord' else None)
     router, tts, _loop, store, turns = run_callbacks(
-        tmp_path, monkeypatch, [('Raphael, can you open Discord for me?', {})],
+        tmp_path, monkeypatch, [('Ciel, can you open Discord for me?', {})],
         ambient=ambient,
     )
     try:
@@ -1595,10 +1597,10 @@ def test_natural_discord_request_uses_local_launcher(tmp_path, monkeypatch, ambi
 @pytest.mark.parametrize('interrupted', [False, True])
 def test_corrected_spelling_then_open_it_reaches_launcher(tmp_path, monkeypatch, interrupted):
     launch = MagicMock()
-    monkeypatch.setattr('raphael.actions.open_app.subprocess',
+    monkeypatch.setattr('ciel.actions.open_app.subprocess',
                         SimpleNamespace(Popen=launch, DEVNULL=-3))
-    monkeypatch.setattr('raphael.actions.open_app.sys.platform', 'linux')
-    monkeypatch.setattr('raphael.actions.open_app.shutil.which',
+    monkeypatch.setattr('ciel.actions.open_app.sys.platform', 'linux')
+    monkeypatch.setattr('ciel.actions.open_app.shutil.which',
                         lambda name: '/usr/bin/discord' if name == 'discord' else None)
     router = MagicMock()
     router.send.return_value = LLMResponse('You mean Discord.', 'test', 'test')
@@ -1606,11 +1608,11 @@ def test_corrected_spelling_then_open_it_reaches_launcher(tmp_path, monkeypatch,
     canceled.set()
     correction = 'No, no, no, I meant D I S C O R D'
     utterances = [
-        (correction if interrupted else 'Raphael, ' + correction,
+        (correction if interrupted else 'Ciel, ' + correction,
          {'supersedes_cancel_event': canceled} if interrupted else {}),
-        ('Raphael, can you open it for me?', {}),
+        ('Ciel, can you open it for me?', {}),
     ]
-    observed = [('Raphael, can you open this quarter for me?', {
+    observed = [('Ciel, can you open this quarter for me?', {
         'superseded': True, 'cancel_event': canceled,
     })] if interrupted else None
     _router, tts, _loop, store, turns = run_callbacks(
@@ -1628,14 +1630,14 @@ def test_corrected_spelling_then_open_it_reaches_launcher(tmp_path, monkeypatch,
 
 def test_uncertain_app_name_cannot_supply_later_launch_context(tmp_path, monkeypatch):
     launch = MagicMock()
-    monkeypatch.setattr('raphael.actions.open_app.subprocess',
+    monkeypatch.setattr('ciel.actions.open_app.subprocess',
                         SimpleNamespace(Popen=launch, DEVNULL=-3))
     router = MagicMock()
     router.send.return_value = LLMResponse('Which app did you mean?', 'test', 'test')
     _router, tts, _loop, store, _turns = run_callbacks(
         tmp_path, monkeypatch,
-        [('Raphael, I meant Discord', {'stt_confidence': 0.45}),
-         ('Raphael, can you open it for me?', {})], router=router,
+        [('Ciel, I meant Discord', {'stt_confidence': 0.45}),
+         ('Ciel, can you open it for me?', {})], router=router,
     )
     try:
         launch.assert_not_called()

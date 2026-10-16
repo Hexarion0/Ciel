@@ -2,7 +2,7 @@
 
 import logging
 
-from raphael.logging import ConciseLogFilter, SecretMaskingFilter, get_logger, setup_logging
+from ciel.logging import ConciseLogFilter, SecretMaskingFilter, get_logger, setup_logging
 
 
 def test_secret_masking_filter():
@@ -41,10 +41,10 @@ def test_secret_masking_filter():
 def test_setup_logging():
     """Verify logger creation and namespacing."""
     logger = setup_logging("DEBUG")
-    assert logger.name == "raphael"
+    assert logger.name == "ciel"
 
     sub_logger = get_logger("providers.nim")
-    assert sub_logger.name == "raphael.providers.nim"
+    assert sub_logger.name == "ciel.providers.nim"
 
 
 def test_concise_log_filter_keeps_conversation_and_problems_only():
@@ -52,7 +52,7 @@ def test_concise_log_filter_keeps_conversation_and_problems_only():
 
     def record(level, message):
         return logging.LogRecord(
-            name="raphael.audio.listener", level=level, pathname="test.py", lineno=1,
+            name="ciel.audio.listener", level=level, pathname="test.py", lineno=1,
             msg=message, args=(), exc_info=None,
         )
 
@@ -60,7 +60,7 @@ def test_concise_log_filter_keeps_conversation_and_problems_only():
     assert concise.filter(record(logging.INFO, '⌨️ You: "hello"'))
     assert concise.filter(record(logging.INFO, "Keyboard ready — type a message"))
     assert concise.filter(record(logging.INFO, "[system]: Microphone muted."))
-    assert concise.filter(record(logging.INFO, '🤖 RAPHAEL: "hi"'))
+    assert concise.filter(record(logging.INFO, '🤖 CIEL: "hi"'))
     assert concise.filter(record(logging.INFO, "Microphone active — ambient listening"))
     assert concise.filter(record(logging.INFO, "Chatterbox Turbo ready (pid=1)"))
     assert not concise.filter(record(logging.INFO, "Chatterbox Turbo ready (pid=1)"))

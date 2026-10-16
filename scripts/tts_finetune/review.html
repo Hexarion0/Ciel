@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ciel · Speech dataset review</title>
+<style>
+:root{color-scheme:light;--ink:#202b34;--muted:#586671;--line:#d6dde1;--accent:#15605b}
+*{box-sizing:border-box}body{margin:0;background:#fafaf8;color:var(--ink);font:16px/1.55 system-ui,sans-serif}
+main{max-width:1080px;margin:auto;padding:30px 28px 70px}h1{font:normal 38px/1.2 Georgia,serif;margin:12px 0}
+h2{font-size:22px;margin:0 0 12px}h3{font-size:16px;margin:0 0 8px}.eyebrow,small,.muted{color:var(--muted);font-size:14px}
+p{margin:8px 0 16px}.intro{max-width:850px}.toolbar,.navigation{display:flex;gap:16px;align-items:end;flex-wrap:wrap;padding:18px 0}
+button,select,textarea,input{font:inherit;color:inherit}button,select,textarea{border:1px solid #a7b5bd;border-radius:3px;background:white;padding:8px 12px}
+button{cursor:pointer;min-height:44px}button:disabled{cursor:default;color:#727d84;background:#f1f3f3}.primary{background:var(--accent);color:white;border-color:var(--accent)}
+label{display:flex;flex-direction:column;gap:6px;font-size:14px}select{min-height:44px}textarea{width:100%;resize:vertical;min-height:90px}
+article{border-block:1px solid var(--line);padding:24px 0}.players{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin:20px 0}
+audio{width:100%;height:44px}.flags{color:#865323;font-size:14px}.error{color:#a32f26;font-size:14px}
+.comparison{display:grid;grid-template-columns:1fr 1fr;gap:24px}.comparison p{font-size:15px;white-space:pre-wrap}
+.checks{display:flex;flex-direction:column;gap:14px;margin:20px 0}.checks label{display:flex;flex-direction:row;align-items:start;gap:10px}
+input[type=checkbox]{width:20px;height:20px;flex-shrink:0;accent-color:var(--accent)}.decision{display:flex;align-items:center;gap:12px;margin:22px 0}
+#progress{padding:16px 0;border-top:1px solid var(--line);font-variant-numeric:tabular-nums}#position{min-width:110px;text-align:center}
+:focus-visible{outline:3px solid #e2963e;outline-offset:3px}[hidden]{display:none!important}
+@media(max-width:650px){main{padding:22px 16px 45px}h1{font-size:30px}.players,.comparison{grid-template-columns:1fr;gap:16px}.toolbar>*{width:100%}.decision{align-items:stretch;flex-direction:column}}
+</style></head><body><main>
+<header><div class="eyebrow">Ciel / Fine-tuning experiment / Dataset verification</div>
+<h1>Listen first. Keep the speaker.</h1>
+<p class="intro">__COUNT__ candidate clips · __MINUTES__ minutes before review. These are proposals,
+not an accepted training dataset. Compare the raw and prepared audio, correct every spoken word,
+and reject clips with overlap, music, distracting rain, clipped words, or a different speaker.</p>
+<p class="intro muted">Captions and independent ASR are suggestions. Their agreement cannot certify a
+transcript. No audio is uploaded here. Decisions stay in this browser until you download and import them.</p></header>
+<section aria-label="Existing speaker baseline"><h2>Existing Ciel identity</h2>
+<audio id="baseline" controls preload="none" src="baseline.wav" aria-label="Existing Ciel reference"></audio>
+<p class="error" id="baseline-error" hidden>Baseline unavailable; keep this page in its dataset folder.</p></section>
+<div class="toolbar"><label>Source<select id="source"><option value="">All four sources</option></select></label>
+<label>Review status<select id="filter"><option value="all">All clips</option><option value="pending">Pending</option><option value="approve">Approved</option><option value="reject">Rejected</option></select></label>
+<button id="download" class="primary">Download review decisions</button></div>
+<p id="progress" aria-live="polite"></p><p class="muted" id="save-status" role="status"></p>
+<div class="navigation"><button id="previous">Previous clip</button><span id="position"></span><button id="next">Next clip</button></div>
+<p id="empty" hidden>No clips match this filter. Change the source or review status to continue.</p>
+<article id="clip" aria-labelledby="clip-title">
+<h2 id="clip-title"></h2><p id="provenance" class="muted"></p><p id="flags" class="flags"></p>
+<div class="players"><div><h3>Raw source slice</h3><audio id="raw" controls preload="none" aria-label="Unprocessed source clip"></audio></div>
+<div><h3>Prepared training clip</h3><audio id="prepared" controls preload="none" aria-label="Prepared training clip"></audio></div></div>
+<p id="audio-error" class="error" hidden>Audio could not load. Keep raw/ and clips/ beside this page; do not approve an unavailable clip.</p>
+<div class="comparison"><div><h3>Original captions</h3><p id="caption"></p></div><div><h3>Independent ASR</h3><p id="asr"></p></div></div>
+<label>Correct transcript<textarea id="transcript" rows="3" spellcheck="true"></textarea></label>
+<div class="checks">
+<label><input id="transcript_verified" type="checkbox">I listened and verified every spoken word, including clip boundaries.</label>
+<label><input id="same_speaker_verified" type="checkbox">This is the same Ciel speaker as the baseline, with no overlapping speaker.</label>
+<label><input id="audio_quality_verified" type="checkbox">The voice is natural, clean enough for training, without distracting noise or processing artifacts.</label>
+</div>
+<div class="decision"><label>Decision<select id="decision"><option value="pending">Pending review</option><option value="approve">Approve for training</option><option value="reject">Reject</option></select></label>
+<span id="approval-hint" class="muted">Approval requires all three listening checks.</span></div>
+<label>Review notes<textarea id="notes" rows="2" placeholder="Rain, incomplete sentence, uncertain word, speaker mismatch…"></textarea></label>
+</article></main><script>
+const settings=__SETTINGS__;
+const byId=id=>document.getElementById(id),checks=['transcript_verified','same_speaker_verified','audio_quality_verified'];
+const storageKey=`ciel-dataset-review-${settings.manifest_sha256}`;
+let reviews={...settings.reviews},index=0,visible=[],current=null;
+try{reviews={...reviews,...JSON.parse(localStorage.getItem(storageKey)||'{}')}}catch{}
+const time=seconds=>`${Math.floor(seconds/60)}:${(seconds%60).toFixed(2).padStart(5,'0')}`;
+for(const source of settings.sources){const option=document.createElement('option');option.value=source.id;
+ option.textContent=`${source.id} · ${settings.counts[source.id]} clips`;byId('source').append(option)}
+function values(row){return reviews[row.id]||{decision:'pending',transcript:row.proposal,notes:'',
+ audio_sha256:row.audio_sha256,transcript_verified:false,same_speaker_verified:false,audio_quality_verified:false}}
+function progress(){const approved=settings.clips.filter(r=>values(r).decision==='approve');
+ const rejected=settings.clips.filter(r=>values(r).decision==='reject');
+ const seconds=approved.reduce((n,r)=>n+r.prepared_seconds,0);
+ byId('progress').textContent=`${approved.length} approved · ${(seconds/60).toFixed(2)} verified minutes · ${rejected.length} rejected · ${settings.clips.length-approved.length-rejected.length} pending`}
+function canApprove(){return checks.every(key=>byId(key).checked)&&byId('transcript').value.trim()&&!/[|\r\n]/.test(byId('transcript').value)}
+function persist(){if(!current)return;const data=values(current);
+ data.transcript=byId('transcript').value;data.notes=byId('notes').value;
+ for(const key of checks)data[key]=byId(key).checked;
+ data.decision=byId('decision').value;
+ if(data.decision==='approve'&&!canApprove()){data.decision='pending';byId('decision').value='pending'}
+ data.audio_sha256=current.audio_sha256;reviews[current.id]=data;
+ byId('decision').querySelector('[value=approve]').disabled=!canApprove();
+ try{localStorage.setItem(storageKey,JSON.stringify(reviews));byId('save-status').textContent='Review saved locally. Download decisions before moving to another browser.'}
+ catch{byId('save-status').textContent='Browser storage unavailable. Download decisions before closing.'}
+ progress()}
+function show(){for(const player of document.querySelectorAll('audio'))player.pause();
+ current=visible[index]||null;byId('clip').hidden=!current;byId('empty').hidden=!!current;
+ byId('previous').disabled=index<=0;byId('next').disabled=index>=visible.length-1;
+ byId('position').textContent=visible.length?`${index+1} of ${visible.length}`:'0 of 0';
+ if(!current)return;const data=values(current);
+ byId('clip-title').textContent=current.id;
+ byId('provenance').textContent=`${current.source_url} · ${time(current.start)}–${time(current.end)} · ${current.prepared_seconds.toFixed(2)} s prepared`;
+ byId('flags').textContent=current.flags.length?`Inspect: ${current.flags.join('; ')}`:'No automated flags. Listening is still required.';
+ byId('caption').textContent=current.caption;byId('asr').textContent=current.asr;
+ byId('raw').src=current.raw;byId('prepared').src=current.audio;byId('audio-error').hidden=true;
+ byId('transcript').value=data.transcript;byId('notes').value=data.notes;byId('decision').value=data.decision;
+ for(const key of checks)byId(key).checked=data[key]===true;
+ byId('decision').querySelector('[value=approve]').disabled=!canApprove()}
+function filter(){visible=settings.clips.filter(row=>(!byId('source').value||row.source_id===byId('source').value)&&
+ (byId('filter').value==='all'||values(row).decision===byId('filter').value));index=0;show()}
+for(const name of ['source','filter'])byId(name).addEventListener('change',filter);
+for(const name of [...checks,'decision'])byId(name).addEventListener('change',persist);
+byId('transcript').addEventListener('input',()=>{byId('transcript_verified').checked=false;persist()});
+byId('notes').addEventListener('input',persist);
+byId('previous').addEventListener('click',()=>{if(index>0){index--;show()}});
+byId('next').addEventListener('click',()=>{if(index<visible.length-1){index++;show()}});
+for(const player of document.querySelectorAll('audio')){
+ player.addEventListener('play',()=>{for(const other of document.querySelectorAll('audio'))if(other!==player)other.pause()});
+ player.addEventListener('error',()=>{byId(player.id==='baseline'?'baseline-error':'audio-error').hidden=false})}
+byId('download').addEventListener('click',()=>{
+ const result={schema_version:1,manifest_sha256:settings.manifest_sha256,recorded_at:new Date().toISOString(),rows:reviews};
+ const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)],{type:'application/json'}));
+ const link=document.createElement('a');link.href=url;link.download='ciel-dataset-reviews.json';link.click();
+ setTimeout(()=>URL.revokeObjectURL(url),1000);byId('save-status').textContent='Review decisions downloaded.'});
+filter();progress();
+</script></body></html>

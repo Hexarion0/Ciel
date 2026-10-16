@@ -4,10 +4,10 @@ from datetime import datetime
 
 import pytest
 
-from raphael.memory import ConversationManager, MemoryItem, MemoryStore, MemoryType
-from raphael.memory.context import recall_context_memories
-from raphael.memory.recall import rank_memories
-from raphael.memory.service import MemoryService
+from ciel.memory import ConversationManager, MemoryItem, MemoryStore, MemoryType
+from ciel.memory.context import recall_context_memories
+from ciel.memory.recall import rank_memories
+from ciel.memory.service import MemoryService
 
 
 @pytest.fixture
@@ -82,11 +82,11 @@ def test_start_date_correction_is_separate_from_first_commit(store):
     now = datetime(2026, 10, 3)
     handle_confirmed(service, "The project started September 28th.", now)
     handle_confirmed(service, "The first commit was September 29th.", now)
-    assert store.get_fact("raphael:project_start_date").metadata["value"] == "2026-09-28"
-    assert store.get_fact("raphael:first_commit_date").metadata["value"] == "2026-09-29"
+    assert store.get_fact("ciel:project_start_date").metadata["value"] == "2026-09-28"
+    assert store.get_fact("ciel:first_commit_date").metadata["value"] == "2026-09-29"
     handle_confirmed(service, "What development day is it?", now)
     handle_confirmed(service, "No, September 27th.", now)
-    assert store.get_fact("raphael:project_start_date").metadata["value"] == "2026-09-27"
+    assert store.get_fact("ciel:project_start_date").metadata["value"] == "2026-09-27"
 
 
 def test_alias_recall_ranks_relevant_fact_above_newer_generic_notes(store):
@@ -141,10 +141,10 @@ def test_existing_structured_anchor_is_updated_in_place(tmp_path):
     store = MemoryStore(path)
     memory_id = store.save_memory(
         MemoryItem(
-            content="RAPHAEL project began on 2026-09-28.",
+            content="CIEL project began on 2026-09-28.",
             memory_type=MemoryType.PROJECT,
             metadata={
-                "project": "raphael",
+                "project": "ciel",
                 "fact_key": "project_start_date",
                 "value": "2026-09-28",
             },
@@ -156,7 +156,7 @@ def test_existing_structured_anchor_is_updated_in_place(tmp_path):
         handle_confirmed(MemoryService(store),
             "Actually, the project started September 27.", datetime(2026, 10, 3)
         )
-        assert store.get_fact("raphael:project_start_date").id == memory_id
+        assert store.get_fact("ciel:project_start_date").id == memory_id
         assert store.count_memories() == 1
     finally:
         store.close()
@@ -268,7 +268,7 @@ def test_proposed_correction_does_not_overwrite_until_confirmed(store):
 @pytest.mark.parametrize("reason", ["timeout", "unrelated", "unauthorized", "restart", "cancel"])
 def test_stale_or_unauthorized_confirmation_never_saves(store, monkeypatch, reason):
     clock = [100.0]
-    monkeypatch.setattr("raphael.memory.service.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("ciel.memory.service.time.monotonic", lambda: clock[0])
     service = MemoryService(store)
     service.handle("My favorite game is CS2")
     if reason == "timeout":
@@ -292,3 +292,12 @@ def test_revised_proposal_saves_only_latest_candidate(store):
     service.handle("yes")
     assert store.get_fact("user:favorite_game").metadata["value"] == "Valorant"
     assert store.count_memories() == 1
+
+
+def test_spoken_correction_fillers_preserve_exact_favorite_value(store):
+    service = MemoryService(store)
+    reply = service.handle("No, like my my favorite game is Standoff 2.")
+    assert reply is not None and reply.startswith("Should I remember")
+    assert store.get_fact("user:favorite_game") is None
+    assert "saved" in service.handle("yes")
+    assert store.get_fact("user:favorite_game").metadata["value"] == "Standoff 2"

@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from raphael.internet import InternetResult, InternetSource
+from ciel.internet import InternetResult, InternetSource
 
 
 def _lookup(text="The anime season 4 ends at light novel volume 11."):
@@ -20,8 +20,24 @@ def _answer(text, quote, source=1):
     return json.dumps({"claims": [{"text": text, "source": source, "quote": quote}]})
 
 
+def test_requested_source_url_is_linked_without_being_spoken():
+    from ciel.internet import InternetResult, InternetSource
+    from ciel.web_answers import verified_web_answer
+
+    quote = "The Python Tutorial teaches you the basics of the language."
+    url = "https://docs.python.org/3/tutorial/index.html"
+    lookup = InternetResult(query="official Python tutorial URL", sources=[
+        InternetSource("The Python Tutorial", url, content=quote),
+    ])
+    answer = _answer(f"The official tutorial is at {url}.", quote)
+    result = verified_web_answer(answer, lookup)
+    assert "link shown in the sources" in result and "http" not in result
+    other = _answer("The official tutorial is at https://example.com/other.", quote)
+    assert "couldn't verify" in verified_web_answer(other, lookup)
+
+
 def test_supported_web_answer_uses_actual_excerpt():
-    from raphael.web_answers import verified_web_answer
+    from ciel.web_answers import verified_web_answer
 
     lookup = _lookup()
     assert verified_web_answer(_answer(
@@ -41,13 +57,13 @@ def test_supported_web_answer_uses_actual_excerpt():
             "The anime season 4 ends at light novel volume 11.", True),
 ])
 def test_bad_format_fabricated_quotes_and_unsupported_volumes_are_rejected(answer):
-    from raphael.web_answers import verified_web_answer
+    from ciel.web_answers import verified_web_answer
 
     assert "couldn't verify" in verified_web_answer(answer, _lookup())
 
 
 def test_season_schedule_cannot_support_a_volume_with_the_same_number():
-    from raphael.web_answers import verified_web_answer
+    from ciel.web_answers import verified_web_answer
 
     quote = "Season 4 begins on April 17, 2026."
     result = verified_web_answer(_answer("Start volume 17.", quote), _lookup(quote))
@@ -55,7 +71,7 @@ def test_season_schedule_cannot_support_a_volume_with_the_same_number():
 
 
 def test_a_schedule_claim_does_not_answer_a_reading_continuation_question():
-    from raphael.web_answers import verified_web_answer
+    from ciel.web_answers import verified_web_answer
 
     quote = "Season 4 begins on April 17, 2026."
     result = verified_web_answer(
@@ -65,7 +81,7 @@ def test_a_schedule_claim_does_not_answer_a_reading_continuation_question():
 
 
 def test_an_exact_reading_point_needs_a_page_excerpt_not_only_a_preview():
-    from raphael.web_answers import verified_web_answer
+    from ciel.web_answers import verified_web_answer
 
     lookup = _lookup()
     lookup.sources[0].snippet = lookup.sources[0].content
@@ -77,7 +93,7 @@ def test_an_exact_reading_point_needs_a_page_excerpt_not_only_a_preview():
 
 
 def test_a_whole_season_mapping_does_not_verify_the_end_of_part_two():
-    from raphael.web_answers import verified_web_answer
+    from ciel.web_answers import verified_web_answer
 
     quote = "Season 4 ends at light novel volume 16. Continue reading from volume 17."
     lookup = _lookup(quote)
@@ -87,7 +103,7 @@ def test_a_whole_season_mapping_does_not_verify_the_end_of_part_two():
 
 
 def test_a_part_specific_mapping_can_support_the_reading_point():
-    from raphael.web_answers import verified_web_answer
+    from ciel.web_answers import verified_web_answer
 
     quote = "Season 4 part 2 ends at light novel volume 11. Continue reading from volume 12."
     lookup = _lookup(quote)
@@ -98,7 +114,7 @@ def test_a_part_specific_mapping_can_support_the_reading_point():
 
 
 def test_quote_can_use_immediately_preceding_page_context_for_the_part():
-    from raphael.web_answers import verified_web_answer
+    from ciel.web_answers import verified_web_answer
 
     lookup = _lookup(
         "Season 4 part 2 ends at light novel volume 11. Continue reading from volume 12."
@@ -109,7 +125,7 @@ def test_quote_can_use_immediately_preceding_page_context_for_the_part():
 
 
 def test_distant_or_conflicting_part_mentions_do_not_establish_quote_scope():
-    from raphael.web_answers import verified_web_answer
+    from ciel.web_answers import verified_web_answer
 
     quote = "Continue reading from volume 17."
     for text in (
@@ -122,8 +138,8 @@ def test_distant_or_conflicting_part_mentions_do_not_establish_quote_scope():
 
 
 def test_web_request_excludes_stale_assistant_answers_and_keeps_user_corrections():
-    from raphael.providers.base import ChatMessage
-    from raphael.web_answers import web_answer_messages
+    from ciel.providers.base import ChatMessage
+    from ciel.web_answers import web_answer_messages
 
     messages = [
         ChatMessage("system", "Use plain language."),
@@ -140,8 +156,8 @@ def test_web_request_excludes_stale_assistant_answers_and_keeps_user_corrections
 
 @pytest.mark.parametrize("override", ["/fast", "/strong", "/deep", "/local"])
 def test_web_answer_request_preserves_router_overrides_and_privacy(override):
-    from raphael.providers.base import ChatMessage
-    from raphael.web_answers import web_answer_messages
+    from ciel.providers.base import ChatMessage
+    from ciel.web_answers import web_answer_messages
 
     request = override + " What should I read after the anime?"
     prepared = web_answer_messages([

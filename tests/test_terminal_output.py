@@ -2,19 +2,19 @@
 
 import io
 
-from raphael.terminal_output import TerminalOutput
+from ciel.terminal_output import TerminalOutput
 
 
 def test_speech_and_logs_preserve_owner_name_and_draft():
     buffer = io.StringIO()
     output = TerminalOutput(buffer, width=40)
     output.set_input("hexarion", "my draft")
-    output.write("RAPHAEL: Hel")
-    assert buffer.getvalue().endswith("RAPHAEL: Hel\n[hexarion]: my draft")
+    output.write("CIEL: Hel")
+    assert buffer.getvalue().endswith("CIEL: Hel\n[hexarion]: my draft")
     output.set_input("hexarion", "my draft!")
     output.write("lo.\nINFO: background work\n")
     assert buffer.getvalue().endswith(
-        "RAPHAEL: Hello.\nINFO: background work\n[hexarion]: my draft!"
+        "CIEL: Hello.\nINFO: background work\n[hexarion]: my draft!"
     )
 
 
@@ -22,7 +22,7 @@ def test_long_speech_wraps_without_truncation_and_long_draft_submits_intact():
     buffer = io.StringIO()
     output = TerminalOutput(buffer, width=18)
     draft = "This draft is longer than the terminal width."
-    speech = "RAPHAEL: This reply is longer than one row."
+    speech = "CIEL: This reply is longer than one row."
     output.set_input("hexarion", draft)
     output.write(speech)
     assert speech in buffer.getvalue()

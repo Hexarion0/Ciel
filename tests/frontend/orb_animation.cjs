@@ -3,7 +3,7 @@ const fs = require('fs');
 const vm = require('vm');
 const assert = require('assert/strict');
 
-const html = fs.readFileSync('src/raphael/web_assets/index.html', 'utf8');
+const html = fs.readFileSync('src/ciel/web_assets/index.html', 'utf8');
 const source = html.slice(html.indexOf('function createOrb() {'), html.indexOf('const orb = createOrb();'));
 
 function harness({reduced = false, canvasAvailable = true} = {}) {

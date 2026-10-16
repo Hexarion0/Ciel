@@ -62,16 +62,16 @@ def main() -> None:
         )
     page = """<!doctype html><html lang="en"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>RAPHAEL conversation latency A/B</title>
+<title>CIEL conversation latency A/B</title>
 <style>body{font:16px system-ui;max-width:1100px;margin:2rem auto;padding:0 1rem;color:#222}
 section,article{border:1px solid #ddd;border-radius:8px;padding:1rem;margin:1rem 0}
 table{border-collapse:collapse;width:100%}
 td,th{text-align:left;padding:.45rem;border-bottom:1px solid #ddd}
 pre{white-space:pre-wrap;background:#f6f6f6;padding:1rem;border-radius:5px}</style>
-<h1>RAPHAEL conversation latency A/B</h1>
+<h1>CIEL conversation latency A/B</h1>
 <p>Private local report from serial NIM streaming requests. Prompts were frozen and
 identical within each case. First content is measured at the SSE consumer, not when
-RAPHAEL starts playback. Responses are included for human quality review.</p>
+CIEL starts playback. Responses are included for human quality review.</p>
 <h2>Timing by run</h2>""" + "".join(tables) + "<h2>Generated responses</h2>" + "".join(answers)
     (args.directory / "index.html").write_text(page, encoding="utf-8")
     print(args.directory / "index.html")

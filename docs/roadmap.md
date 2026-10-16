@@ -1,6 +1,6 @@
-# RAPHAEL development roadmap
+# CIEL development roadmap
 
-Last reviewed: **2026-10-12**. Package version: **0.3.6 development**.
+Last reviewed: **2026-10-17**. Package version: **0.3.6 development**.
 
 The goal is a reliable personal desktop assistant with natural voice conversation,
 persistent memory, useful actions, and eventually remote messaging and presence.
@@ -12,13 +12,14 @@ before treating it as ready for everyday use.
 | Area | Implemented | Still pending |
 | --- | --- | --- |
 | Voice loop | Wake recognition, local STT, provider streaming, sentence playback, interruptions, captions | Live microphone/speaker acceptance of the current combined changes |
-| Voices | Default Piper/Amy; optional custom Turbo and local Piper fallback | Reproducible custom-voice installation and private asset import on a fresh machine |
+| Voices | Default CPU Pocket streaming; local Piper fallback; optional custom Turbo HQ; bundled worker and manifest | Reproducible custom-voice installation and private asset import |
 | Providers | NIM, Groq, OpenRouter, Ollama, routing, retries/fallback, latency tracing | Usage totals, budget controls, broader live fallback verification |
-| Memory | SQLite conversations, structured state, confirmed profiles/goals, contextual recall, corrections, forgetting, automated restart recall | Live voice-based restart acceptance and summary quality evaluation |
+| Controller | Local handlers for explicit commands without NIM; lightweight AI decisions for other turns; bounded retries and cancellation | Live microphone acceptance and broader decision-quality evaluation |
+| Memory | SQLite conversations, structured state, confirmed profiles/goals, contextual recall, optional local semantic recall, corrections, forgetting, automated restart recall | Live voice-based restart acceptance and summary quality evaluation |
 | Actions | Trusted module discovery, validation, local telemetry, allowlisted Linux app launching | Model-selected calls, reminders, live desktop launch acceptance |
 | Internet | Free automatic search, public HTML/text reading, bounded retrieval, relevant user context, source links | Live voice/text retrieval acceptance, broader site compatibility, PDF/media extraction |
 | Personality | Modular persona prompt, continuity rules, opinions/initiative, editable preferences, voice-requested style updates/reset | Continued evaluation during real conversations |
-| Setup | Amy/custom voice choice, device/key configuration, missing-asset reporting | Automatic Turbo setup, a desktop installer with a managed runtime, and clean-machine validation |
+| Setup | Consistent Pocket fresh defaults; preserved existing voice choices; device/key configuration; missing-asset reporting | Automatic Turbo setup, managed desktop runtime, clean-machine validation |
 | Desktop web interface | PC-local voice/text chat, live captions, status, and controls | Same-Wi-Fi phone access and desktop acceptance |
 | Messaging, tone, Windows, presence | Planned | Implementation |
 
@@ -30,20 +31,30 @@ and the [changelog](../CHANGELOG.md). The repository has a `v0.2` tag; no stable
 
 ## Next work, in order
 
-1. **Validate the current desktop build.** Run the live wake, conversation,
-   interruption, custom-voice, memory restart, and Discord launch checks.
-   Confirm the shorter 0.9-second endpoint does not cut off normal speech.
-2. **Finish installation reproducibility.** Keep Amy as the simple default;
-   install Turbo separately, import the user's private voice assets, and prove
-   that the selected voice works after a fresh setup and restart.
-3. **Add model-selected actions.** Let the provider select an existing action
-   with structured arguments, while keeping local validation, authorization,
-   cancellation, deadlines, and honest execution results.
-4. **Add persistent reminders.** Start with relative reminders, list/cancel,
-   restart recovery, and delivery; then add absolute times and recurrence.
-5. **Validate internet retrieval.** Exercise current questions, research requests,
-   public links, missing locations, source display, and unavailable search through
-   voice and text. Keep free-search and site compatibility limits visible.
+The next milestone is a reliable v0.3 desktop release.
+
+1. **Validate the combined build on the target desktop.** Run wake, Pocket
+   playback, barge-in, confirmed memory across restart, and Discord launch checks.
+   Include provider and network outages, PC noise, and a sustained conversation.
+   Repeat interrupted long turns and personal corrections: stale fragments must
+   not delay typed input, and memory replies must accurately report whether a
+   change was saved or still needs direct address and confirmation.
+   Confirm the 0.9-second endpoint preserves normal pauses. Exercise web retrieval
+   and source display through voice and text using [release checks](release-checks.md).
+2. **Prove clean installation with real voice assets.** Test a fresh install and
+   restart outside the checkout with Pocket and installed Piper fallback. Import
+   the private Turbo reference, install its separate environment and model, and
+   verify missing-model and missing-GPU recovery. Keep Turbo optional.
+3. **Add persistent reminders after release acceptance.** Use the shared desktop
+   runtime for confirmation, cancellation, and delivery. Start with relative times,
+   list/cancel, and restart recovery before recurrence or remote clients.
+
+The current code handles explicit local commands without NIM, aligns Pocket
+defaults across configuration and setup, bundles the Turbo worker and manifest,
+and shares terminal/web session handling in `ciel.runtime`. Automated regressions
+also cover canceled streams, nonblocking superseded speech, guarded memory
+corrections, and one shared controller decision deadline. Microphone and speaker
+acceptance remains open; these changes do not establish hosted-provider availability.
 
 The broader milestones below remain the plan. New priority choices should update
 this section rather than silently marking later milestones complete.
@@ -56,7 +67,8 @@ this section rather than silently marking later milestones complete.
 - [x] Local faster-whisper transcription, VAD, confidence checks, bounded retries.
 - [x] NIM, Groq, OpenRouter, and Ollama provider clients.
 - [x] Heuristic request routing and `/fast`, `/strong`, `/deep`, `/local` overrides.
-- [x] Time/date answers without an AI request.
+- [x] Explicit local time/date, memory, and desktop commands without an AI decision.
+- [x] Shared terminal/web session runtime outside CLI argument and startup handling.
 - [x] Provider fallback before visible output; no splicing after a partial answer.
 - [x] Piper speech, persistent Turbo worker, bounded sentence queues and interruption.
 - [x] Contextual vocal cues, inline placement, giggle/moan aliases, and adjustable cue
@@ -88,6 +100,11 @@ to be available just because the client is configured.
 - [x] Validated summary state retaining decisions, unfinished threads, and superseded plans.
 - [x] Suppress known forgotten wording from model context; retain archived chat separately.
 - [x] Automated restart, correction, and memory isolation tests.
+- [x] Indexed recall across the complete durable collection, Unicode aliases, and duplicate suppression.
+- [x] Configurable automatic/confirmed/explicit learning and confirmation before conflicting replacements.
+- [x] Persistent pause/resume for saved-fact recall while retaining conversation continuity.
+- [x] Project decision/constraint journals, current next steps, and owner inspection/backup commands.
+- [x] Shared character budgets and atomic summary commits across independent managers.
 - [x] Editable personality file and managed style updates/reset by voice.
 - [x] Modular personality and continuity prompt with bounded initiative and reasoned opinions.
 - [x] Optional ambient follow-ups with intended-listener classification.
@@ -99,23 +116,25 @@ to be available just because the client is configured.
       against speech addressed to other people.
 - [ ] Finish [release acceptance](release-checks.md) before tagging stable v0.3.
 
-Memory recall uses words and aliases, not embeddings. Forgetting is not full chat
-archive erasure. Ambient classification estimates the intended listener; it does
-not identify speakers. Those limitations remain explicit in the product docs.
+Memory recall uses words and aliases by default. Optional semantic recall uses a
+configured local Ollama embedding model and an explicit indexing step; it remains
+disabled by default. Forgetting retains the chat archive. Ambient classification
+estimates the intended listener without identifying speakers.
 
 ## Installation and custom voice
 
-- [x] Setup menu: RAPHAEL custom Turbo voice or default Amy/Piper.
+- [x] Setup menu: CPU Pocket, Amy/Piper, or custom Turbo HQ voice.
 - [x] Preserve existing settings and selected audio devices during setup.
-- [x] CPU/Amy example configuration and installer pre-downloads.
+- [x] CPU/Pocket example configuration and installer pre-downloads for Amy fallback.
 - [x] Report missing custom reference, model files, or inference environment.
 - [x] Download the exact Turbo model revision expected by the runtime.
 - [x] Keep private references, recordings, weights, environments, and databases out of Git.
 - [ ] Create the separate Python 3.12 Turbo environment automatically when selected.
 - [ ] Add private reference import/backup with validation and actionable recovery steps.
-- [ ] Validate a fresh machine with Amy, then the custom voice and fallback.
-- [ ] Package or resolve the worker and voice manifest for custom Turbo use outside
-      a source checkout; a wheel alone currently does not include those assets.
+- [x] Align Pocket fresh-install defaults across README, configuration, and setup.
+- [ ] Validate a fresh machine with Pocket, Piper fallback, then optional Turbo HQ.
+- [x] Bundle the Turbo worker and default manifest; resolve installed voice assets
+      under the user's data directory, with absolute path overrides.
 - [ ] Reduce optional inference dependencies after measuring what the worker actually needs.
 - [ ] Build a desktop installer that bundles or automatically manages Python and
       dependencies, so users do not create or activate a virtual environment.
@@ -130,6 +149,10 @@ not identify speakers. Those limitations remain explicit in the product docs.
 The existing custom voice needs its original reference audio/transcript. A Git clone
 contains the manifest, not those assets. The heavier Turbo installation should remain
 optional. See [custom voice requirements](chatterbox-turbo-integration.md).
+
+README, configuration, and fresh setup select Pocket; `setup.sh` installs its extra.
+Setup preserves existing voice choices. Verify the selected voice after restart
+with the target desktop's installed models and audio devices.
 
 The current source installation still uses `.venv` and the separate Turbo
 environment. The desktop installer should manage these runtime needs internally;
@@ -157,6 +180,10 @@ setup but does not remove the storage required for dependencies and models.
       larger research/compare/double-check budgets with session privacy through `/local`.
 - [x] Configure an optional home city; explicit request locations take priority.
 - [ ] Validate live search, page reading, location questions, and voice/text source display.
+- [x] Put an AI decision before normal voice/text handlers, with spoken search
+      acknowledgment, AI-written queries, bounded retries, and validated reports.
+- [x] Keep private-session routing, immediate stop/mute, action allowlists, and
+      explicit memory confirmation enforced outside the model.
 - [ ] Add PDF/media extraction and broader public-site compatibility.
 - [ ] Test end-to-end action chaining only after single actions are reliable.
 
@@ -168,7 +195,7 @@ not use model-selected action calls or grant website account access.
 
 ## Dashboard — v0.5
 
-- [x] Add a PC-local HTTP server and live status polling (`raphael web`).
+- [x] Add a PC-local HTTP server and live status polling (`ciel web`).
 - [x] Share the desktop microphone, speakers, conversation worker, memory, and controls.
 - [x] Display voice/text chat, current-session history, and live speech captions.
 - [ ] Show idle/listening/thinking/speaking state, selected provider/model, and errors.

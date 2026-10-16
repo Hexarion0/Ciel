@@ -4,7 +4,7 @@ from datetime import datetime
 
 import pytest
 
-from raphael.providers.intents import answer_clock_query
+from ciel.providers.intents import answer_clock_query
 
 
 @pytest.mark.parametrize(

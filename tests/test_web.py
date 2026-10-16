@@ -8,12 +8,12 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
-from raphael.web import DesktopWebUI, WebErrorHandler
+from ciel.web import DesktopWebUI, WebErrorHandler
 
 
 @pytest.fixture
 def web_server():
-    ui = DesktopWebUI("hexarion", "hey raphael")
+    ui = DesktopWebUI("hexarion", "hey ciel")
     submit = MagicMock(return_value=True)
     url = ui.start(submit, port=0)
     with httpx.Client(base_url=url, trust_env=False, timeout=2) as client:
@@ -22,7 +22,7 @@ def web_server():
 
 
 def test_web_chat_progress_keeps_sentences_in_one_reply_and_freezes_interruption():
-    ui = DesktopWebUI("owner", "hey raphael")
+    ui = DesktopWebUI("owner", "hey ciel")
     ui.user_message("Hello")
     ui.start_sentence()
     ui.progress("Hi there.")
@@ -37,7 +37,7 @@ def test_web_chat_progress_keeps_sentences_in_one_reply_and_freezes_interruption
 
 
 def test_empty_unplayed_sentence_does_not_create_a_fake_reply():
-    ui = DesktopWebUI("owner", "hey raphael")
+    ui = DesktopWebUI("owner", "hey ciel")
     ui.start_sentence()
     ui.finish_reply()
     assert ui.snapshot()["messages"] == []
@@ -46,7 +46,7 @@ def test_empty_unplayed_sentence_does_not_create_a_fake_reply():
 
 
 def test_web_state_is_bounded_and_secrets_are_masked():
-    ui = DesktopWebUI("owner", "hey raphael")
+    ui = DesktopWebUI("owner", "hey ciel")
     for number in range(205):
         ui.user_message(str(number))
     ui.user_message("key nvapi-0123456789secret")
@@ -67,7 +67,7 @@ def test_http_serves_page_and_submits_to_the_existing_worker(web_server):
     ui, submit, client = web_server
     response = client.get("/")
     assert response.status_code == 200
-    assert "Message Raphael" in response.text
+    assert "Message Ciel" in response.text
     assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
     assert client.get("/api/state").json()["owner"] == "hexarion"
     for text in ["hello", "/mute", "/stop", "/exit"]:
@@ -105,23 +105,23 @@ def test_http_reports_unavailable_worker_and_does_not_accept_form_posts(web_serv
 
 
 def test_runtime_warnings_are_masked_for_browser():
-    ui = DesktopWebUI("owner", "hey raphael")
+    ui = DesktopWebUI("owner", "hey ciel")
     handler = WebErrorHandler(ui)
     handler.handle(logging.LogRecord(
-        "raphael", logging.ERROR, "file.py", 1, "key=%s", ("sk-0123456789secret",), None,
+        "ciel", logging.ERROR, "file.py", 1, "key=%s", ("sk-0123456789secret",), None,
     ))
     assert ui.snapshot()["activity"][-1]["text"] == "key=[REDACTED_SECRET]"
 
 
 def test_history_uses_current_conversation():
-    ui = DesktopWebUI("owner", "hey raphael")
+    ui = DesktopWebUI("owner", "hey ciel")
     ui.load_history([SimpleNamespace(role="user", content="hello"),
                      SimpleNamespace(role="assistant", content="Hi!")])
     assert [entry["text"] for entry in ui.snapshot()["messages"]] == ["hello", "Hi!"]
 
 
 def test_history_preserves_dates_and_omits_internal_playback_notes():
-    ui = DesktopWebUI("owner", "hey raphael")
+    ui = DesktopWebUI("owner", "hey ciel")
     timestamp = datetime(2026, 10, 8, tzinfo=timezone.utc)
     ui.load_history([SimpleNamespace(
         role="assistant", content="Hi!\n[Playback was interrupted.]", timestamp=timestamp,
@@ -132,7 +132,7 @@ def test_history_preserves_dates_and_omits_internal_playback_notes():
 
 
 def test_history_restores_safe_sources_for_assistant_replies():
-    ui = DesktopWebUI("owner", "hey raphael")
+    ui = DesktopWebUI("owner", "hey ciel")
     ui.load_history([SimpleNamespace(
         role="assistant", content="Verified answer", sources=[
             {"title": "Public page", "url": "https://example.com/article"},
@@ -146,7 +146,7 @@ def test_history_restores_safe_sources_for_assistant_replies():
 
 @pytest.mark.parametrize("live", [True, False])
 def test_reply_sources_attach_to_live_or_completed_reply_and_snapshot_is_independent(live):
-    ui = DesktopWebUI("owner", "hey raphael")
+    ui = DesktopWebUI("owner", "hey ciel")
     ui.text_reply("An earlier answer")
     ui.user_message("A current question")
     if live:
@@ -165,7 +165,7 @@ def test_reply_sources_attach_to_live_or_completed_reply_and_snapshot_is_indepen
 
 
 def test_reply_sources_do_not_attach_to_an_older_reply_after_a_new_user_message():
-    ui = DesktopWebUI("owner", "hey raphael")
+    ui = DesktopWebUI("owner", "hey ciel")
     sources = [{"title": "Reference", "url": "https://example.com/"}]
     ui.set_reply_sources(sources)
     assert ui.snapshot()["messages"] == []
@@ -178,7 +178,7 @@ def test_reply_sources_do_not_attach_to_an_older_reply_after_a_new_user_message(
 @pytest.mark.parametrize("live", [True, False])
 def test_reply_source_identity_rejects_an_older_request_after_a_new_reply(live):
     """An older worker cannot cite the newer user's assistant reply."""
-    ui = DesktopWebUI("owner", "hey raphael")
+    ui = DesktopWebUI("owner", "hey ciel")
     first_id = ui.user_message("First question")
     assert isinstance(first_id, int)
     ui.text_reply("First answer")
@@ -201,7 +201,7 @@ def test_reply_source_identity_rejects_an_older_request_after_a_new_reply(live):
 
 def test_interrupted_reply_retains_sources_attached_for_its_user_message():
     """Citations attached at speech start remain visible after interruption."""
-    ui = DesktopWebUI("owner", "hey raphael")
+    ui = DesktopWebUI("owner", "hey ciel")
     user_id = ui.user_message("Current question")
     ui.start_sentence()
     ui.progress("First part")
@@ -217,7 +217,7 @@ def test_interrupted_reply_retains_sources_attached_for_its_user_message():
 def test_http_get_rejects_untrusted_host_and_port_conflicts_are_reported(web_server):
     _ui, _submit, client = web_server
     assert client.get("/api/state", headers={"Host": "evil.example"}).status_code == 403
-    second_ui = DesktopWebUI("owner", "hey raphael")
+    second_ui = DesktopWebUI("owner", "hey ciel")
     with pytest.raises(OSError):
         second_ui.start(lambda _text: True, port=client.base_url.port)
     second_ui.close()

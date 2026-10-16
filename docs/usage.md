@@ -1,4 +1,4 @@
-# RAPHAEL usage and tuning
+# CIEL usage and tuning
 
 For installation and voice selection, start with the [README](../README.md).
 Run commands from the checkout root. This guide describes the current runtime;
@@ -16,7 +16,7 @@ Empty or reasoning-only responses also try that backup once; reasoning is never
 used as the spoken answer. Fallback never splices a new answer into partial speech.
 Standalone time and date questions are answered from the local clock without an
 AI request. Bounded clock questions ending in the assistant's name also work,
-including “What time is Raphael?” when speech recognition drops “it”. That recovery
+including “What time is Ciel?” when speech recognition drops “it”. That recovery
 retains the raw transcript and does not authorize memory commands. Background summaries use the economical route (Groq when configured,
 otherwise the default NIM model), with separate `summary` routing logs. Technical
 words or long messages alone do not select the complex model; implementation,
@@ -44,19 +44,19 @@ follow openings in what you say. During an existing conversation, she may revisi
 relevant thread from supplied history or offer a fresh thought, leaving room for the
 conversation to end. Human-like delivery does not require invented personal experiences
 or repeated AI disclaimers in ordinary small talk.
-Set `RAPHAEL_PREFERRED_NAME` to the name you want her to use. English is the
+Set `CIEL_PREFERRED_NAME` to the name you want her to use. English is the
 default language. Edit `persona.txt` in the project folder to customize her tone,
 humor, affection, language, and reply length. It is reloaded before every AI reply;
 restart once after installing this feature, then edits take effect while running.
 Copy `persona.example.txt` to `persona.txt` for a fresh template. Your personal
-file is excluded from Git. `RAPHAEL_PERSONA_FILE` selects another path (relative
+file is excluded from Git. `CIEL_PERSONA_FILE` selects another path (relative
 to the working directory), or an empty value disables custom preferences.
 You can also say “be more playful” or “change your tone to be calmer” to persist
 a style adjustment. “Can you update your persona?” starts a short follow-up where
-RAPHAEL asks what to change, then saves your next clear style instruction. Say
-“reset your persona” to remove RAPHAEL's managed adjustment while keeping the rest
+CIEL asks what to change, then saves your next clear style instruction. Say
+“reset your persona” to remove CIEL's managed adjustment while keeping the rest
 of `persona.txt` intact. The initial request must be reliably transcribed and
-explicitly address RAPHAEL; the follow-up must also be reliable.
+explicitly address CIEL; the follow-up must also be reliable.
 The pending edit expires after 60 seconds. Cancellation, farewell, a listening
 mode change, or an unrelated question clears it; `/stop` also clears pending edits.
 Missing, unreadable, invalid UTF-8, or oversized files fall back to the built-in
@@ -73,9 +73,9 @@ commands. Confirmed facts update one keyed record with a bounded revision
 history. Other facts can be saved with `remember ...`. Saved name and favorite
 queries can be answered locally. Recall ranks related words and a small set of
 aliases; it does not use embeddings or an additional model.
-For example: `Raphael, my favorite game is CS2`, then `Raphael, yes` to confirm.
+For example: `Ciel, my favorite game is CS2`, then `Ciel, yes` to confirm.
 A correction such as `Actually, my favorite game is Valorant` also needs
-confirmation. `Raphael, forget my favorite game` removes the saved fact. Forgetting removes the durable fact
+confirmation. `Ciel, forget my favorite game` removes the saved fact. Forgetting removes the durable fact
 and masks its known wording and previous values in history sent to the model,
 including after a restart. Archived conversation text remains in SQLite;
 paraphrases outside the known wording can still require explicit cleanup.
@@ -98,7 +98,7 @@ virtual environment with `.venv/bin/python -m pip install -e ".[gpu]"` (Linux).
 This keeps speech recognition independent of the voice-training environment.
 Then set `STT_DEVICE=cuda` and
 `STT_COMPUTE_TYPE=int8_float16`, then start with
-`./scripts/launch_raphael_gpu.sh --listen`. The launcher adds existing NVIDIA
+`./scripts/launch_ciel_gpu.sh --listen`. The launcher adds existing NVIDIA
 library directories from the application or Piper training environment before
 starting Python. It does not install libraries or start training. CUDA 12 cuBLAS
 and cuDNN 9 are required by
@@ -114,13 +114,13 @@ over. These deadlines do not interrupt native Whisper or Piper inference.
 Keep the smaller command model when Turbo or other work shares limited GPU memory.
 Both launch commands run the same application. The script selects `.venv/bin/python`,
 switches to the project folder, and prepares `LD_LIBRARY_PATH`. Running
-`python -m raphael --listen` uses the current Python and working directory without
+`python -m ciel --listen` uses the current Python and working directory without
 that preparation; activate `.venv` first. The script does not force GPU settings:
 `STT_DEVICE` and `STT_COMPUTE_TYPE` still control transcription.
 
 ## Listening, captions, and interruptions
 
-For the desktop web interface, run `raphael web`. It starts the same voice
+For the desktop web interface, run `ciel web`. It starts the same voice
 listener and opens `http://127.0.0.1:8765`. The browser displays a voice orb,
 the current reply in a speech bubble, status, and command feedback.
 The bubble stays readable until the next request or until you dismiss it; saved
@@ -131,12 +131,12 @@ PC's devices; the page does not request the browser's microphone. You can draft
 text while disconnected; runtime actions become available when the page reconnects.
 
 Use `--no-open-browser` for manual opening or `--web-port 8766` for a different
-port. Run one Raphael process at a time. The server binds to `127.0.0.1`, so
+port. Run one Ciel process at a time. The server binds to `127.0.0.1`, so
 this version does not accept connections from a phone or another computer.
 
 Keyboard input is enabled automatically when listening in an interactive terminal.
 Type at the owner-name prompt (for example, `[hexarion]: `) and press Enter;
-no wake phrase is needed. The label uses `RAPHAEL_PREFERRED_NAME` when set,
+no wake phrase is needed. The label uses `CIEL_PREFERRED_NAME` when set,
 otherwise the desktop account name. Logs and speech appear above the input
 row, preserving your draft while you type. Backspace removes a character,
 Ctrl-U clears the draft, and Ctrl-W removes the last word.
@@ -153,7 +153,7 @@ A new typed message cancels the previous request. Replies can still be spoken.
 | `/help` | Show keyboard controls. |
 
 Provider overrides such as `/fast explain this` also work in typed messages.
-Use `raphael start --no-text-input` to disable the keyboard reader, or
+Use `ciel start --no-text-input` to disable the keyboard reader, or
 `--text-input` to enable it explicitly (including redirected stdin). EOF closes
 keyboard input while leaving voice listening active. Microphone mute is temporary
 and does not change `.env`; it discards pending voice capture, not conversation memory.
@@ -161,7 +161,7 @@ and does not change `.env`; it discards pending voice capture, not conversation 
 Listening keeps microphone ingestion separate from wake inference, transcription,
 and callbacks. It records immediately after wake detection without a spoken
 wake greeting. Recent audio is retained to catch the beginning of your command.
-A wake phrase alone, including `Hey Raphael.`, receives a local acknowledgement
+A wake phrase alone, including `Hey Ciel.`, receives a local acknowledgement
 without calling an AI provider.
 Whisper wake detection retains three seconds of audio by default and submits a
 complete snapshot after a short trailing pause, including for slower greetings.
@@ -170,14 +170,14 @@ raise it if noise causes excessive checks. `WAKE_WINDOW_SECONDS=3.0` controls
 retained greeting audio. Whisper's VAD and transcript confidence checks still
 filter wake candidates. `WAKE_THRESHOLD` applies to openWakeWord models, not the
 Whisper keyword spotter. Wait for the `Wake keyword spotter ready` log on startup.
-After `raphael train-wake`, set `WAKE_MODELS` to the JSON list printed by training
-(for example, `WAKE_MODELS=["models/custom/hey_raphael.onnx"]`) and restart.
+After `ciel train-wake`, set `WAKE_MODELS` to the JSON list printed by training
+(for example, `WAKE_MODELS=["models/custom/hey_ciel.onnx"]`) and restart.
 An empty list keeps the Whisper keyword spotter. Audio capture currently supports
 only 16 kHz mono; unsupported rates or channel counts fail during configuration.
-`STT ready` reports that command transcription has loaded. Development mode (`raphael start dev`) shows audio
+`STT ready` reports that command transcription has loaded. Development mode (`ciel start dev`) shows audio
 being transcribed, STT word count/confidence, quality retries, superseded speech,
 and each ambient reply/silence reason. DEBUG logs include raw candidates, including
-background speech. For a single diagnostic run, use `raphael start dev --show-transcripts` to show
+background speech. For a single diagnostic run, use `ciel start dev --show-transcripts` to show
 the recognized words at INFO level, including rejected ambient speech. Set
 `SHOW_TRANSCRIPTS=true` in `.env` to make this the default, or override it for a run
 with `--no-show-transcripts`. Recognizable but low-confidence
@@ -185,7 +185,7 @@ direct speech can prompt a repeat without executing or saving the uncertain text
 Set `SHOW_AI_TRANSCRIPTS=true` for captions that reveal letters as the voice
 plays, including local greetings and clock answers. For a single run, use
 `--show-ai-transcripts` or `--no-show-ai-transcripts` to override this setting.
-The terminal appends letters to one `RAPHAEL: ` line for the whole reply,
+The terminal appends letters to one `CIEL: ` line for the whole reply,
 wrapping naturally when the terminal row fills. Ordinary logs use separate lines,
 and interruptions leave only the reached prefix.
 [Piper's native phoneme/audio alignments](https://github.com/OHF-Voice/piper1-gpl/blob/main/docs/ALIGNMENTS.md)
@@ -236,9 +236,9 @@ questions that merely contain farewell words do not.
 
 ## Ambient conversation
 
-Start optional ambient listening with `./scripts/launch_raphael_gpu.sh --ambient`,
+Start optional ambient listening with `./scripts/launch_ciel_gpu.sh --ambient`,
 or set `AMBIENT_LISTENING=true` in `.env`. With no arguments the GPU launcher starts
-listening using `.env` settings, so `./scripts/launch_raphael_gpu.sh` is sufficient.
+listening using `.env` settings, so `./scripts/launch_ciel_gpu.sh` is sufficient.
 `--no-ambient` selects wake-word mode for one run. Local Silero VAD captures
 speech without a wake phrase at 16 kHz. Direct addresses are handled locally;
 possible follow-ups within `AMBIENT_FOLLOWUP_SECONDS` (300 seconds by default)
@@ -266,7 +266,7 @@ personal facts or memory commands.
 Ambient onset keeps 800 ms of preceding audio to preserve the greeting while VAD
 decides speech has begun. The independent keyword spotter also checks ambient audio;
 its confirmed address permits a reply even if command STT misses the name. Greetings
-such as `What's up Raphael?`, `So what's good Raphael?`, and `So Raphael, what's on
+such as `What's up Ciel?`, `So what's good Ciel?`, and `So Ciel, what's on
 your mind?` are recognized locally, including known name spellings and short leading
 fillers such as "so" or "well". A name
 at the end of a question does not trim away the preceding question. Keyword evidence
@@ -276,12 +276,12 @@ direct address from that result can still enter temporary context. Its canceled
 reply is not executed or spoken; the original user fragment enters history only
 when a subsequent addressed utterance is handled.
 
-Say `Raphael, stop listening` to return to wake-word mode, or `Hey Raphael, listen
+Say `Ciel, stop listening` to return to wake-word mode, or `Hey Ciel, listen
 continuously` to turn ambient capture back on. This switches modes rather than
 closing the microphone. With headphones, set `BARGE_IN_MODE=speech`: local VAD
 stops playback after `BARGE_IN_SPEECH_SECONDS=0.24` of sustained speech and records
 the interruption with onset pre-roll. Saying her name still works. With speakers,
-select `BARGE_IN_MODE=wake` to avoid treating RAPHAEL's loudspeaker output as your
+select `BARGE_IN_MODE=wake` to avoid treating CIEL's loudspeaker output as your
 voice. Speech mode does not provide acoustic echo cancellation or identify speakers.
 
 The follow-up window starts after playback finishes. Interruptions during a long
@@ -296,7 +296,7 @@ expire after 90 seconds. Raw background turns are not written to chat or saved
 as personal facts. Relevant excerpts and candidate follow-ups may be sent to the
 configured AI provider for interpretation. Ambient capture uses more STT work,
 and judging follow-ups can add cloud latency. Inferred follow-ups do not modify
-durable memories: address RAPHAEL directly for memory changes.
+durable memories: address CIEL directly for memory changes.
 
 The AI uses recent dialogue to interpret small recognition mistakes while retaining
 the original transcript. Names, dates, numbers, negation, and commands stay uncertain
@@ -312,26 +312,26 @@ live microphone checks required before tagging a release.
 
 ## Memory confirmation and local actions
 
-Say “Raphael, my favorite game is CS2” and she proposes the fact. Say “Raphael, yes”
-to save it or “Raphael, no” to reject it. Corrections also require confirmation;
-“Raphael, remember my favorite game is CS2” saves immediately. Proposals expire
+Say “Ciel, my favorite game is CS2” and she proposes the fact. Say “Ciel, yes”
+to save it or “Ciel, no” to reject it. Corrections also require confirmation;
+“Ciel, remember my favorite game is CS2” saves immediately. Proposals expire
 after 60 seconds, a topic change, cancellation, or restart. In ambient mode, the
-confirmation must address Raphael directly. Rejecting a fact does not erase the
+confirmation must address Ciel directly. Rejecting a fact does not erase the
 conversation transcript or summaries; it prevents a structured long-term fact write.
 
 These commands run locally without an AI request:
 
-- “Raphael, how much RAM am I using?”
-- “Raphael, what's my GPU temperature?”
-- “Raphael, how many CPU cores do I have?”
-- “Raphael, open Discord.”
-- “Raphael, can you open Discord for me?”
+- “Ciel, how much RAM am I using?”
+- “Ciel, what's my GPU temperature?”
+- “Ciel, how many CPU cores do I have?”
+- “Ciel, open Discord.”
+- “Ciel, can you open Discord for me?”
 
 Application launching supports Discord (with Vesktop fallback), Vesktop, Firefox,
 Chromium, Steam, and VS Code/VSCodium on Linux when their executable is on PATH.
 Natural requests can include “can you,” “please,” and “for me.” Exact spelling
-such as “D I S C O R D” is also recognized. After “Raphael, I meant D I S C O R D,”
-you can say “Raphael, can you open it for me?” within 60 seconds. An unrelated
+such as “D I S C O R D” is also recognized. After “Ciel, I meant D I S C O R D,”
+you can say “Ciel, can you open it for me?” within 60 seconds. An unrelated
 request, cancellation, or uncertain transcription clears that reference. Unknown
 or ambiguous names prompt a clarification rather than a guessed launch.
 It accepts no shell commands, paths, URLs, or flags. In ambient mode, launching
@@ -340,7 +340,7 @@ it does not confirm that a window appeared. See [action development](actions.md)
 
 ## Expressive voice
 
-With the custom Turbo voice selected, RAPHAEL can chuckle at a joke, sigh with relief,
+With the custom Turbo voice selected, CIEL can chuckle at a joke, sigh with relief,
 gasp at a surprise, or groan at a playful frustration. The voice prompt also encourages
 natural pauses and emotional wording that fits the conversation. Effects are optional;
 they do not appear in captions or newly saved dialogue.
@@ -364,7 +364,7 @@ Generation continues during playback, so the first sentence can play before the
 whole response finishes. Set `TTS_STREAMING=false` to restore batch replies.
 Playback uses 1,024-frame blocks and requests a 120 ms output buffer so brief
 Python scheduling delays are less likely to interrupt audio. If speech stutters,
-set `TTS_PLAYBACK_LATENCY=0.20` in `.env` and restart RAPHAEL. Larger buffers add
+set `TTS_PLAYBACK_LATENCY=0.20` in `.env` and restart CIEL. Larger buffers add
 some delay before sound starts. Playback warnings report output-buffer underruns;
 this setting affects playback buffering, not model synthesis time or speaking speed.
 Reasoning tags are filtered across token boundaries. Code remains in conversation
@@ -384,7 +384,7 @@ generation time, and total reply time; these are measurements, not latency guara
 
 While Turbo or other work shares the GPU, `small.en` with `int8_float16` is the
 measured GPU configuration for command STT. The fresh-install example uses CPU `base.en`. Before allocating a separate CUDA quality-retry
-model, RAPHAEL checks free VRAM on its default GPU. `STT_RETRY_MIN_FREE_MB=2048`
+model, CIEL checks free VRAM on its default GPU. `STT_RETRY_MIN_FREE_MB=2048`
 sets the minimum; if memory is lower or cannot be checked, the already loaded
 primary model receives a stronger decode instead. Temporary CUDA retry models
 release their allocation after use. CPU retry models remain cached. Set the
@@ -426,7 +426,7 @@ probabilities that a sentence is correct.
 
 `WAKE_STT_MODEL=base.en` controls the separate CPU/int8 keyword spotter. It now
 uses base instead of tiny and requires a greeting at the beginning of its
-transcript, rather than triggering on every mention of Raphael. Change this
+transcript, rather than triggering on every mention of Ciel. Change this
 setting independently of `STT_MODEL` if wake recognition needs tuning.
 
 When a keyword snapshot contains only the greeting, the entire recognized

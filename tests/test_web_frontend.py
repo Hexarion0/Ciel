@@ -28,8 +28,8 @@ def test_reply_sources_render_as_safe_links_and_preserve_keyboard_focus():
     root = Path(__file__).resolve().parents[1]
     script = r"""
 const fs = require('fs'), vm = require('vm'), assert = require('assert/strict');
-const html = fs.readFileSync('src/raphael/web_assets/index.html', 'utf8');
-assert(html.includes('aria-label="Sources for Raphael\'s reply"'));
+const html = fs.readFileSync('src/ciel/web_assets/index.html', 'utf8');
+assert(html.includes('aria-label="Sources for Ciel\'s reply"'));
 class Element {
   constructor() {
     this.children = []; this.dataset = {}; this.textContent = '';

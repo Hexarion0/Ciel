@@ -4,9 +4,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from raphael.providers.base import ChatMessage, LLMResponse
-from raphael.providers.manager import ProviderManager
-from raphael.providers.router import ComplexityLevel, ModelRouter
+from ciel.providers.base import ChatMessage, LLMResponse
+from ciel.providers.manager import ProviderManager
+from ciel.providers.router import ComplexityLevel, ModelRouter
 
 
 @pytest.fixture
@@ -34,7 +34,7 @@ def mock_manager():
 
 def test_classify_simple_greetings(mock_manager):
     router = ModelRouter(manager=mock_manager)
-    level, reason, override = router.classify_complexity("Hello Raphael, what time is it?")
+    level, reason, override = router.classify_complexity("Hello Ciel, what time is it?")
     assert level == ComplexityLevel.SIMPLE
     assert override is None
 
@@ -81,7 +81,7 @@ def test_routing_decisions(mock_manager):
 def test_router_send(mock_manager):
     router = ModelRouter(manager=mock_manager)
     messages = [
-        ChatMessage(role="system", content="You are RAPHAEL."),
+        ChatMessage(role="system", content="You are CIEL."),
         ChatMessage(role="user", content="/fast What is the capital of France?"),
     ]
 
@@ -139,7 +139,7 @@ def test_continue_preserves_complex_request_route(mock_manager):
 def test_greeting_does_not_hide_complex_request(mock_manager):
     router = ModelRouter(mock_manager)
     assert (
-        router.classify_complexity("Hello Raphael, design a distributed architecture")[0]
+        router.classify_complexity("Hello Ciel, design a distributed architecture")[0]
         == ComplexityLevel.COMPLEX
     )
 
@@ -165,3 +165,29 @@ def test_repeated_continuations_and_stream_keep_original_route(mock_manager):
     assert mock_manager.send_with_fallback.call_args.kwargs["preferred_provider"] == "nim"
     list(router.stream(messages))
     assert mock_manager.stream_with_fallback.call_args.kwargs["preferred_provider"] == "nim"
+
+
+@pytest.mark.parametrize("private", [False, True])
+def test_controller_uses_only_dedicated_nim_or_private_local_model(
+    mock_manager, monkeypatch, private,
+):
+    from threading import Event
+
+    from ciel.config import Settings
+
+    settings = Settings(_env_file=None, controller_model="configured-light-model")
+    monkeypatch.setattr("ciel.providers.router.get_settings", lambda: settings)
+    router = ModelRouter(mock_manager)
+    router.send([
+        ChatMessage("system", "Short controller prompt", local_only=private),
+        ChatMessage("user", "/strong Refactor complicated code"),
+    ], purpose="controller", cancel_event=Event())
+    options = mock_manager.stream_with_fallback.call_args.kwargs
+    if private:
+        assert options["preferred_provider"] == "ollama"
+        assert options["allowed_providers"] == ("ollama",)
+    else:
+        assert options["preferred_provider"] == "nim"
+        assert options["model"] == "configured-light-model"
+        assert options["allowed_providers"] == ("nim",)
+        assert options["allow_model_fallback"] is False

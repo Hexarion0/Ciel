@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from raphael.audio.stt import SpeechToText
+from ciel.audio.stt import SpeechToText
 
 
 @pytest.fixture(autouse=True)
@@ -14,8 +14,8 @@ def model_without_downloads(monkeypatch):
     model = MagicMock()
     model.transcribe.return_value = ([], SimpleNamespace(language="en", duration=1.0))
     monkeypatch.setattr(SpeechToText, "_load_model", lambda *_args: model)
-    monkeypatch.setattr("raphael.audio.stt._preload_cuda_libraries", lambda: None)
-    monkeypatch.setattr("raphael.audio.stt.free_cuda_memory_mb", lambda: 8192)
+    monkeypatch.setattr("ciel.audio.stt._preload_cuda_libraries", lambda: None)
+    monkeypatch.setattr("ciel.audio.stt.free_cuda_memory_mb", lambda: 8192)
     return model
 
 
@@ -30,9 +30,9 @@ def test_stt_initialization():
 def test_training_load_retries_primary_without_allocating_another_cuda_model(
     model_without_downloads, monkeypatch, free_mb,
 ):
-    monkeypatch.setattr("raphael.audio.stt.free_cuda_memory_mb", lambda: free_mb)
+    monkeypatch.setattr("ciel.audio.stt.free_cuda_memory_mb", lambda: free_mb)
     factory = MagicMock(side_effect=AssertionError("Must not allocate under GPU pressure"))
-    monkeypatch.setattr("raphael.audio.stt.WhisperModel", factory)
+    monkeypatch.setattr("ciel.audio.stt.WhisperModel", factory)
     model_without_downloads.transcribe.side_effect = [
         decoding("And good.", -0.62), decoding("And include examples.", -0.1),
     ]
@@ -47,12 +47,12 @@ def test_larger_retry_becomes_available_after_training_releases_vram(
     model_without_downloads, monkeypatch,
 ):
     free_mb = [128]
-    monkeypatch.setattr("raphael.audio.stt.free_cuda_memory_mb", lambda: free_mb[0])
+    monkeypatch.setattr("ciel.audio.stt.free_cuda_memory_mb", lambda: free_mb[0])
     model_without_downloads.transcribe.return_value = decoding("And good.", -0.62)
     larger = MagicMock()
     larger.transcribe.return_value = decoding("And include examples.", -0.1)
     factory = MagicMock(return_value=larger)
-    monkeypatch.setattr("raphael.audio.stt.WhisperModel", factory)
+    monkeypatch.setattr("ciel.audio.stt.WhisperModel", factory)
     stt = SpeechToText(device="cuda", retry_model="medium.en")
     audio = np.ones(16000, dtype=np.float32) * 0.1
     assert stt.transcribe(audio) == "And good."
@@ -65,7 +65,7 @@ def test_larger_retry_becomes_available_after_training_releases_vram(
 
 def test_identical_retry_reuses_primary_model(model_without_downloads, monkeypatch):
     factory = MagicMock(side_effect=AssertionError("Duplicate model"))
-    monkeypatch.setattr("raphael.audio.stt.WhisperModel", factory)
+    monkeypatch.setattr("ciel.audio.stt.WhisperModel", factory)
     model_without_downloads.transcribe.side_effect = [
         decoding("And good.", -0.62), decoding("And include examples.", -0.1),
     ]
@@ -147,18 +147,18 @@ def decoding(text, logprob, word_probability=1.0):
 
 def test_ambiguous_short_speech_uses_one_stronger_decode(model_without_downloads):
     model_without_downloads.transcribe.side_effect = [
-        decoding("I hate Raphael.", -0.95),
-        decoding("Hey Raphael.", -0.15),
+        decoding("I hate Ciel.", -0.95),
+        decoding("Hey Ciel.", -0.15),
     ]
     result = SpeechToText().transcribe_detailed(np.ones(16000, dtype=np.float32) * 0.1)
-    assert result["text"] == "Hey Raphael."
+    assert result["text"] == "Hey Ciel."
     assert result["retried"] and not result["needs_repeat"]
     assert model_without_downloads.transcribe.call_count == 2
     assert model_without_downloads.transcribe.call_args.kwargs["beam_size"] == 8
 
 
 def test_uncertain_transcription_is_not_returned_as_command(model_without_downloads):
-    model_without_downloads.transcribe.return_value = decoding("I hate Raphael.", -1.2)
+    model_without_downloads.transcribe.return_value = decoding("I hate Ciel.", -1.2)
     result = SpeechToText().transcribe_detailed(np.ones(16000, dtype=np.float32) * 0.1)
     assert result["text"] == ""
     assert result["needs_repeat"] and result["retried"]
@@ -166,21 +166,21 @@ def test_uncertain_transcription_is_not_returned_as_command(model_without_downlo
 
 
 def test_rejected_speech_keeps_raw_text_for_a_repeat_not_a_command(model_without_downloads):
-    model_without_downloads.transcribe.return_value = decoding("Hey Raphael.", -1.5)
+    model_without_downloads.transcribe.return_value = decoding("Hey Ciel.", -1.5)
     result = SpeechToText().transcribe_detailed(np.ones(16000, dtype=np.float32) * 0.1)
     assert result["text"] == ""
-    assert result["raw_text"] == "Hey Raphael."
+    assert result["raw_text"] == "Hey Ciel."
     assert result["needs_repeat"]
 
 
 def test_clear_bare_wake_does_not_load_a_large_retry_model(model_without_downloads, monkeypatch):
-    model_without_downloads.transcribe.return_value = decoding("Hey Raphael.", -0.63)
+    model_without_downloads.transcribe.return_value = decoding("Hey Ciel.", -0.63)
     factory = MagicMock(side_effect=AssertionError("Unnecessary medium model load"))
-    monkeypatch.setattr("raphael.audio.stt.WhisperModel", factory)
+    monkeypatch.setattr("ciel.audio.stt.WhisperModel", factory)
     result = SpeechToText(retry_model="medium.en").transcribe_detailed(
         np.ones(16000, dtype=np.float32) * 0.1
     )
-    assert result["text"] == "Hey Raphael."
+    assert result["text"] == "Hey Ciel."
     assert not result["retried"] and not result["needs_repeat"]
     model_without_downloads.transcribe.assert_called_once()
     factory.assert_not_called()
@@ -204,8 +204,8 @@ def test_long_uncertain_speech_does_not_repeat_expensive_inference(model_without
 
 
 def test_confident_negative_statement_is_preserved(model_without_downloads):
-    model_without_downloads.transcribe.return_value = decoding("I hate Raphael.", -0.1)
-    assert SpeechToText().transcribe(np.ones(16000, dtype=np.float32) * 0.1) == "I hate Raphael."
+    model_without_downloads.transcribe.return_value = decoding("I hate Ciel.", -0.1)
+    assert SpeechToText().transcribe(np.ones(16000, dtype=np.float32) * 0.1) == "I hate Ciel."
     model_without_downloads.transcribe.assert_called_once()
 
 
@@ -215,7 +215,7 @@ def test_larger_retry_model_is_loaded_only_for_ambiguous_speech(
     larger = MagicMock()
     larger.transcribe.return_value = decoding("Correct command", -0.1)
     factory = MagicMock(return_value=larger)
-    monkeypatch.setattr("raphael.audio.stt.WhisperModel", factory)
+    monkeypatch.setattr("ciel.audio.stt.WhisperModel", factory)
     stt = SpeechToText(retry_model="medium.en")
     model_without_downloads.transcribe.return_value = decoding("Clear command", -0.1)
     audio = np.ones(16000, dtype=np.float32) * 0.1
@@ -231,7 +231,7 @@ def test_larger_retry_model_is_loaded_only_for_ambiguous_speech(
 def test_failed_larger_retry_still_requests_repeat(model_without_downloads, monkeypatch):
     model_without_downloads.transcribe.return_value = decoding("Unclear command", -1.2)
     monkeypatch.setattr(
-        "raphael.audio.stt.WhisperModel", MagicMock(side_effect=RuntimeError("offline"))
+        "ciel.audio.stt.WhisperModel", MagicMock(side_effect=RuntimeError("offline"))
     )
     result = SpeechToText(retry_model="medium.en").transcribe_detailed(
         np.ones(16000, dtype=np.float32) * 0.1
@@ -250,7 +250,7 @@ def test_retry_oom_is_not_repeated_and_releases_cached_model(
     factory = MagicMock(
         side_effect=RuntimeError('CUDA failed with error out of memory')
     ) if fails_during_load else MagicMock(return_value=larger)
-    monkeypatch.setattr('raphael.audio.stt.WhisperModel', factory)
+    monkeypatch.setattr('ciel.audio.stt.WhisperModel', factory)
     stt = SpeechToText(device='cuda', compute_type='int8_float16', retry_model='medium.en')
     audio = np.ones(16000, dtype=np.float32) * 0.1
     first = stt.transcribe_detailed(audio)
@@ -270,7 +270,7 @@ def test_cpu_fallback_does_not_reuse_a_cached_cuda_retry(model_without_downloads
     cpu_primary.transcribe.return_value = decoding('And good.', -0.62)
     cpu_retry.transcribe.return_value = decoding('And good.', -0.1)
     factory = MagicMock(side_effect=[cpu_primary, cpu_retry])
-    monkeypatch.setattr('raphael.audio.stt.WhisperModel', factory)
+    monkeypatch.setattr('ciel.audio.stt.WhisperModel', factory)
     stt = SpeechToText(model_size='small.en', device='cuda', retry_model='medium.en')
     stt._retry_model = cached_cuda
     result = stt.transcribe_detailed(np.ones(16000, dtype=np.float32) * 0.1)

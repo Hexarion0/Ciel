@@ -7,10 +7,10 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from raphael.audio.listener import ListenerState, WakeListenerLoop
-from raphael.audio.recorder import VoiceRecorder
-from raphael.audio.wake import WakeWordDetector
-from raphael.platform.base import AudioBackend, AudioDeviceInfo
+from ciel.audio.listener import ListenerState, WakeListenerLoop
+from ciel.audio.recorder import VoiceRecorder
+from ciel.audio.wake import WakeWordDetector
+from ciel.platform.base import AudioBackend, AudioDeviceInfo
 
 
 class MockAudioBackend(AudioBackend):
@@ -158,7 +158,7 @@ def test_wake_listener_barge_in_interruption():
     """Verify a detected wake during playback triggers immediate barge-in stop."""
     backend = MockAudioBackend()
     detector = SimpleNamespace(
-        process_frame=lambda frame: {"wake_phrase": "hey raphael"},
+        process_frame=lambda frame: {"wake_phrase": "hey ciel"},
         reset=lambda **kwargs: None,
     )
 
@@ -227,10 +227,10 @@ def test_keyboard_works_with_muted_microphone_and_bypasses_stt():
         assert loop.toggle_microphone_mute()
         loop._audio_callback(np.ones(1280, dtype=np.float32), 1280, None, None)
         assert loop._frame_queue.empty()
-        assert loop.submit_text("What is Raphael?")
+        assert loop.submit_text("What is Ciel?")
         assert completed.wait(timeout=1)
         wait_for(lambda: loop.state == ListenerState.LISTENING_WAKE)
-        assert received[0][0] == "What is Raphael?"
+        assert received[0][0] == "What is Ciel?"
         assert received[0][1]["input_source"] == "keyboard"
         assert received[0][2] == 0
         stt.transcribe.assert_not_called()
@@ -343,7 +343,7 @@ def test_keyword_inference_does_not_block_frames_and_reset_discards_results(monk
         def transcribe(self, _audio, **_kwargs):
             entered.set()
             assert release.wait(2)
-            return [SimpleNamespace(text="Hey Raphael")], None
+            return [SimpleNamespace(text="Hey Ciel")], None
 
     monkeypatch.setattr(WakeWordDetector, "_load_spotter_model", lambda _self: SlowSpotter())
     detector = WakeWordDetector()
@@ -366,7 +366,7 @@ def test_keyword_inference_does_not_block_frames_and_reset_discards_results(monk
 def test_keyword_result_triggers_wake_on_next_frame(monkeypatch):
     class Spotter:
         def transcribe(self, _audio, **_kwargs):
-            return [SimpleNamespace(text="Hey Raphael")], None
+            return [SimpleNamespace(text="Hey Ciel")], None
 
     monkeypatch.setattr(WakeWordDetector, "_load_spotter_model", lambda _self: Spotter())
     detector = WakeWordDetector()
@@ -508,7 +508,7 @@ def test_keyword_spotter_filters_noise_and_low_confidence_wake(monkeypatch):
             calls.append(kwargs)
             return [
                 SimpleNamespace(
-                    text="Hey Raphael",
+                    text="Hey Ciel",
                     no_speech_prob=0.9,
                     avg_logprob=-1.5,
                 )
@@ -525,7 +525,7 @@ def test_keyword_spotter_filters_noise_and_low_confidence_wake(monkeypatch):
         assert detector.process_frame(frame) is None
         assert calls[0]["vad_filter"] is True
         assert calls[0]["condition_on_previous_text"] is False
-        assert calls[0]["initial_prompt"] != "hey raphael"
+        assert calls[0]["initial_prompt"] != "hey ciel"
     finally:
         detector.stop()
 
@@ -534,12 +534,12 @@ def test_wake_timestamp_accounts_for_inference_delay(monkeypatch):
     detector = WakeWordDetector(enable_whisper_spotter=False)
     words = [
         SimpleNamespace(word="Hey", end=0.1),
-        SimpleNamespace(word=" Raphael", end=0.3),
+        SimpleNamespace(word=" Ciel", end=0.3),
         SimpleNamespace(word=" what", end=0.5),
     ]
     assert detector._wake_word_end([SimpleNamespace(words=words)]) == 0.3
     detector._samples_seen = 8000
-    detector._spotter_result = (detector._generation, "Hey Raphael what", 4800)
+    detector._spotter_result = (detector._generation, "Hey Ciel what", 4800)
     result = detector.process_frame(np.zeros(1280, dtype=np.float32))
     assert result["wake_tail_samples"] == 4480
 
@@ -547,10 +547,10 @@ def test_wake_timestamp_accounts_for_inference_delay(monkeypatch):
 def test_wake_audio_trim_keeps_command_and_does_not_rewrite_followup():
     from unittest.mock import MagicMock
 
-    from raphael.conversation import strip_wake_phrase
+    from ciel.conversation import strip_wake_phrase
 
     detector = MagicMock()
-    stt = SimpleNamespace(transcribe=lambda *_args, **_kwargs: "I hate Raphael.")
+    stt = SimpleNamespace(transcribe=lambda *_args, **_kwargs: "I hate Ciel.")
     outputs = []
     loop = WakeListenerLoop(
         MockAudioBackend(),
@@ -558,7 +558,7 @@ def test_wake_audio_trim_keeps_command_and_does_not_rewrite_followup():
         stt=stt,
         on_transcription=lambda text, *_args: outputs.append(text) or False,
     )
-    trigger = {"wake_tail_samples": 1280, "wake_phrase": "hey raphael"}
+    trigger = {"wake_tail_samples": 1280, "wake_phrase": "hey ciel"}
     greeting = np.full(1280, 0.2, dtype=np.float32)
     command = np.full(1280, 0.4, dtype=np.float32)
     loop._recent_audio.extend([greeting, command])
@@ -578,11 +578,11 @@ def test_wake_audio_trim_keeps_command_and_does_not_rewrite_followup():
 
     loop.on_transcription = finish
     loop._process_worker()
-    assert strip_wake_phrase(outputs[-1]) == "I hate Raphael."
+    assert strip_wake_phrase(outputs[-1]) == "I hate Ciel."
     loop._stop_event.clear()
     loop._processing_queue.put((command, loop._last_wake_info.copy(), loop._recording_generation))
     loop._process_worker()
-    assert outputs[-1] == "I hate Raphael."
+    assert outputs[-1] == "I hate Ciel."
 
 
 def test_trimmed_bare_wake_uses_known_greeting_when_stt_finds_no_command():
@@ -599,21 +599,21 @@ def test_trimmed_bare_wake_uses_known_greeting_when_stt_finds_no_command():
     loop.on_transcription = finish
     loop._running = True
     loop._processing_queue.put(
-        (np.zeros(1280), {"wake_prefix_trimmed": True, "wake_phrase": "hey raphael"}, 0)
+        (np.zeros(1280), {"wake_prefix_trimmed": True, "wake_phrase": "hey ciel"}, 0)
     )
     loop._process_worker()
-    assert outputs == ["hey raphael"]
+    assert outputs == ["hey ciel"]
 
 
-def test_mention_of_raphael_is_not_a_greeting():
+def test_mention_of_ciel_is_not_a_greeting():
     detector = WakeWordDetector(enable_whisper_spotter=False)
-    detector._spotter_result = (detector._generation, "I hate Raphael.", None)
+    detector._spotter_result = (detector._generation, "I hate Ciel.", None)
     assert detector.process_frame(np.zeros(1280, dtype=np.float32)) is None
 
 
-@pytest.mark.parametrize("greeting", ["Hey, Raphael.", "Hey, Rafael!", "Hi, Raphael?"])
+@pytest.mark.parametrize("greeting", ["Hey, Ciel.", "Hey, Siel!", "Hi, Ciel?"])
 def test_whisper_punctuation_does_not_prevent_wake(greeting):
-    from raphael.conversation import strip_wake_phrase
+    from ciel.conversation import strip_wake_phrase
 
     detector = WakeWordDetector(enable_whisper_spotter=False)
     detector._spotter_result = (detector._generation, greeting, None)
@@ -641,7 +641,7 @@ def test_uncertain_trimmed_command_is_not_replaced_by_wake_acknowledgement():
     loop.on_transcription = finish
     loop._running = True
     loop._processing_queue.put(
-        (np.ones(1280), {"wake_prefix_trimmed": True, "wake_phrase": "hey raphael"}, 0)
+        (np.ones(1280), {"wake_prefix_trimmed": True, "wake_phrase": "hey ciel"}, 0)
     )
     loop._process_worker()
     assert outputs[0][0] == ""
@@ -671,13 +671,13 @@ def test_bare_wake_does_not_decode_transient_greeting_tail():
             {
                 "wake_prefix_trimmed": True,
                 "post_wake_speech": False,
-                "wake_phrase": "hey raphael",
+                "wake_phrase": "hey ciel",
             },
             0,
         )
     )
     loop._process_worker()
-    assert outputs == ["hey raphael"]
+    assert outputs == ["hey ciel"]
 
 
 def test_wake_spotter_model_can_be_selected(monkeypatch):
@@ -692,7 +692,7 @@ def test_wake_spotter_model_can_be_selected(monkeypatch):
 
 def test_quiet_greeting_is_submitted_without_raising_its_own_noise_floor(monkeypatch):
     clock = [100.0]
-    monkeypatch.setattr("raphael.audio.wake.time.time", lambda: clock[0])
+    monkeypatch.setattr("ciel.audio.wake.time.time", lambda: clock[0])
     detector = WakeWordDetector(enable_whisper_spotter=False)
     detector.enable_whisper_spotter = True
     detector._spotter_model = object()  # Inspect queued inference without model downloads.
@@ -710,7 +710,7 @@ def test_quiet_greeting_is_submitted_without_raising_its_own_noise_floor(monkeyp
 
 def test_finished_slow_greeting_gets_complete_snapshot_during_check_interval(monkeypatch):
     clock = [100.0]
-    monkeypatch.setattr("raphael.audio.wake.time.time", lambda: clock[0])
+    monkeypatch.setattr("ciel.audio.wake.time.time", lambda: clock[0])
     detector = WakeWordDetector(enable_whisper_spotter=False)
     detector.enable_whisper_spotter = True
     detector._spotter_model = object()
@@ -842,7 +842,7 @@ def test_stt_finishing_after_new_speech_keeps_context_but_never_replies():
     def transcribe(*_args, **_kwargs):
         loop._start_recording()  # A newer utterance arrived while Whisper was decoding.
         loop._stop_event.set()
-        return {"text": "Hey Raphael.", "confidence": 0.8}
+        return {"text": "Hey Ciel.", "confidence": 0.8}
 
     loop.stt = SimpleNamespace(transcribe_detailed=transcribe)
     loop._running = True
@@ -850,7 +850,7 @@ def test_stt_finishing_after_new_speech_keeps_context_but_never_replies():
     loop._processing_queue.put((np.ones(16000), {}, loop._recording_generation))
     loop._process_worker()
     assert not replies
-    assert observations[0][0] == "Hey Raphael."
+    assert observations[0][0] == "Hey Ciel."
     assert observations[0][1]["superseded"]
 
 
@@ -889,7 +889,7 @@ def test_ambient_ignores_speaker_playback_and_preserves_explicit_barge_in():
     activity.assert_not_called()
     tts.stop.assert_not_called()
     detector.process_frame.return_value = {
-        "model": "whisper_keyword", "wake_phrase": "hey raphael", "wake_tail_samples": 1280,
+        "model": "whisper_keyword", "wake_phrase": "hey ciel", "wake_tail_samples": 1280,
     }
     loop._handle_frame(speech)
     tts.stop.assert_called_once()
@@ -898,11 +898,11 @@ def test_ambient_ignores_speaker_playback_and_preserves_explicit_barge_in():
     assert loop.recorder.get_audio().size == 1280
 
 
-@pytest.mark.parametrize("text", ["What's up Raphael?", "So what's good Raphael?"])
+@pytest.mark.parametrize("text", ["What's up Ciel?", "So what's good Ciel?"])
 def test_trailing_address_wakes_without_trimming_the_question(monkeypatch, text):
     words = [
         SimpleNamespace(word=" What's", end=0.2), SimpleNamespace(word=" up", end=0.4),
-        SimpleNamespace(word=" Raphael?", end=0.9),
+        SimpleNamespace(word=" Ciel?", end=0.9),
     ]
     spotter = SimpleNamespace(
         transcribe=lambda *_args, **_kwargs: (
@@ -924,8 +924,8 @@ def test_trailing_address_wakes_without_trimming_the_question(monkeypatch, text)
 
 def test_leading_filler_before_name_is_recognized_by_keyword_detector():
     detector = WakeWordDetector(enable_whisper_spotter=False)
-    detector._spotter_result = (detector._generation, "So Raphael, what's on your mind?", None)
-    assert detector.poll()["text"] == "So Raphael, what's on your mind?"
+    detector._spotter_result = (detector._generation, "So Ciel, what's on your mind?", None)
+    assert detector.poll()["text"] == "So Ciel, what's on your mind?"
 
 
 def test_ambient_keyword_confirmation_does_not_restart_or_cut_off_recording():
@@ -948,7 +948,7 @@ def test_ambient_keyword_confirmation_does_not_restart_or_cut_off_recording():
     assert detector.process_frame.call_count == 2
     cancel_event = loop._response_cancel
     generation = loop._recording_generation
-    detector.process_frame.return_value = {"text": "What's up Raphael?"}
+    detector.process_frame.return_value = {"text": "What's up Ciel?"}
     loop._handle_frame(speech)
     assert loop._last_wake_info["wake_verified"]
     assert loop._recording_generation == generation
@@ -980,7 +980,7 @@ def test_late_ambient_wake_evidence_stays_with_queued_utterance():
         loop._handle_frame(frame)
     _audio, old_info, _gen = loop._processing_queue.get_nowait()
     assert not old_info.get("wake_verified")
-    detector.process_frame.return_value = {"wake_phrase": "hey raphael"}
+    detector.process_frame.return_value = {"wake_phrase": "hey ciel"}
     loop._handle_frame(silence)
     assert old_info["wake_verified"]
     detector.process_frame.return_value = None
@@ -993,7 +993,7 @@ def test_late_ambient_wake_evidence_stays_with_queued_utterance():
 
 def test_ambient_wake_starts_capture_even_if_vad_misses_onset():
     detector = SimpleNamespace(
-        process_frame=lambda _frame: {"text": "What's up Raphael?"},
+        process_frame=lambda _frame: {"text": "What's up Ciel?"},
     )
     loop = WakeListenerLoop(
         MockAudioBackend(), detector=detector, ambient=True, speech_detector=lambda _: False,
@@ -1019,7 +1019,7 @@ def test_keyword_completed_during_stt_authorizes_only_that_reply():
     info = loop._last_wake_info
 
     def transcribe(*_args, **_kwargs):
-        detector._spotter_result = (detector._generation, "What's up Raphael?", None)
+        detector._spotter_result = (detector._generation, "What's up Ciel?", None)
         return {"text": "What's up?", "confidence": 0.7}
 
     def respond(text, wake_info, _audio):
@@ -1049,7 +1049,7 @@ def test_raw_ambient_transcript_logging_requires_opt_in(caplog, show_transcripts
     loop._running = True
     loop.on_transcription = lambda *_args: loop._stop_event.set()
     loop._processing_queue.put((np.ones(16000), {}, 0))
-    with caplog.at_level("INFO", logger="raphael.audio.listener"):
+    with caplog.at_level("INFO", logger="ciel.audio.listener"):
         loop._process_worker()
     exposed = "STT candidate (diagnostic): 'background conversation'" in caplog.text
     assert exposed is show_transcripts
@@ -1144,11 +1144,11 @@ def test_superseded_queued_speech_is_observed_without_being_executed():
 
     def transcribe(*_args, **_kwargs):
         loop._stop_event.set()
-        return {'text': 'Raphael, explain ambient mode.', 'confidence': 0.8}
+        return {'text': 'Ciel, explain ambient mode.', 'confidence': 0.8}
 
     loop.stt = SimpleNamespace(transcribe_detailed=transcribe)
     loop._processing_queue.put((np.ones(16000), {}, 0))
     loop._process_worker()
-    assert observations[0][0] == 'Raphael, explain ambient mode.'
+    assert observations[0][0] == 'Ciel, explain ambient mode.'
     assert observations[0][1]['superseded']
     assert not replies

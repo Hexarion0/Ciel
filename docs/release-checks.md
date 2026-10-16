@@ -5,10 +5,14 @@ Run from the repository root with the development environment active.
 ## Automated validation
 
 ```bash
-pytest
-ruff check src tests
-pytest -m integration tests/test_tts.py -k piper_initialization_and_synthesis
-pip wheel . --no-deps -w dist
+python -m pytest
+python -m ruff check src tests scripts
+for script in setup.sh scripts/*.sh; do
+  bash -n "$script" || exit
+done
+python -m pip check
+python -m pytest -m integration tests/test_tts.py -k piper_initialization_and_synthesis
+python -m pip wheel . --no-deps -w dist
 ```
 
 Unit tests use mocked devices/providers. The Piper integration test requires its
@@ -17,21 +21,86 @@ wake-training integrations have their own hardware/model requirements and can be
 run with `pytest -m integration` on an appropriately configured machine.
 
 Install the wheel in a fresh virtual environment outside the checkout. From a
-separate directory, run both `python -m raphael --help` and `raphael --help`, then
+separate directory, run both `python -m ciel --help` and `ciel --help`, then
 `pip check`. Verify normal startup does not require optional training packages.
 Select an existing local Piper model to check synthesis without playback.
 
+## Recorded validation — 2026-10-17 (repository review)
+
+- 1,595 non-integration tests passed; five hardware/model integrations were
+  excluded. The separate local Amy/Piper synthesis test passed. Ruff covered
+  source, tests, and scripts; dependency, shell syntax, and whitespace checks passed.
+- New regressions cover superseded-turn handling without provider waits, typed
+  fragment reset, guarded memory corrections, the shared controller deadline,
+  independent streaming cancellation, setup key privacy, and installed wake paths.
+  Archive/download regressions cover canonical duplicate paths and partial-file
+  symlinks; Kaggle CLI checks make no submissions or credential reads.
+- The final wheel built and installed outside the checkout. CLI help/version,
+  standalone Turbo worker help without app dependencies, bundled web/voice assets,
+  writable user paths, and absence of private/generated artifacts passed.
+  Installation reused existing dependencies; a fresh dependency installation and
+  target-desktop microphone, speaker, GPU, and provider acceptance remain open.
+
+## Recorded validation — 2026-10-16 (local commands and installed voice resources)
+
+- 1,559 non-integration tests passed; five integration tests were excluded. Ruff
+  covered `src`, `tests`, and `scripts`; dependency, shell syntax, and whitespace
+  checks passed. The separate Piper synthesis integration passed with local Amy.
+- Local-command regressions cover missing NIM, outages, private-session restart,
+  cancellation, action allowlists, confirmations, local topic changes, and long
+  sessions without provider summaries. Desktop effects and providers were mocked.
+- The wheel built and installed to a temporary target outside the checkout. CLI
+  help/version, the standalone worker's help command, bundled manifest/web assets,
+  and per-user voice path resolution passed. Installed Piper synthesized locally
+  without recording or playback. This check reused existing dependencies rather
+  than installing a fresh environment's dependency set.
+- The execution environment exposed no `/dev/snd` directory. Live wake detection,
+  microphone/speaker playback, CUDA/Turbo synthesis, sustained conversation, and
+  actual desktop-window opening still require target-desktop acceptance.
+
 ## Live internet acceptance
 
-Use both `raphael web` and a normal voice session. These checks require a working
+With `CONTROLLER_ENABLED=true`, use the configured lightweight NIM model. Confirm
+logs show `AI chose ...` before public retrieval. Explicit local commands use the
+local-command log instead and need no NIM request. Search acknowledgment must finish
+before the first lookup; the factual report waits for source validation. Test
+`Okay, try again` after a failed lookup and `Why can't you search it on the internet?`:
+the first should retain the topic, while the second should explain the limitation.
+Nearby speech such as `Mom, what's for dinner?` should produce silence and no saved
+conversation turn. Also test a background interruption during an active reply.
+Unplug the network: addressed decisions should fail briefly; background decisions
+should remain silent. Stop/mute must still work without a model response.
+While offline, check explicit clock requests, memory confirmation/readback, and
+allowlisted app launching. Change to another local task before saying `yes` or
+`open it`; expired proposals and unrelated app references must not execute.
+
+Hosted-NIM checks on 2026-10-14 passed 20 synthetic decision cases and one report
+validated against a synthetic page. Cases cover greetings after unfinished requests,
+ambiguous acceptance, reading-point follow-ups, contextual retries, capability
+explanations, background speech, clock lookup, research corrections, city precedence,
+and disabled automatic search. Observed decisions took about 1.0–3.0 seconds.
+The revised controller also passed 1,114 non-integration tests and Ruff. An
+end-to-end public test found and cited the official Python tutorial through the
+real search backend. These checks use invented or public text; microphone and
+broader live search-site acceptance remain open.
+An active-conversation regression check confirms a mistaken silent decision gets
+a second lightweight NIM check. Clear speech to another person remains silent;
+unresolved listener intent prompts a short clarification.
+Run `.venv/bin/python scripts/check_controller.py` for the expanded reproducible
+check of decisions, city precedence, retries on different topics, and a validated
+report from a synthetic page. This uses the configured NIM API key and makes no
+microphone, saved-conversation, desktop-action, or live-search requests.
+
+Use both `ciel web` and a normal voice session. These checks require a working
 network and a configured AI provider; mocked tests do not establish search
 availability or spoken answer quality.
 
 1. Ask for today's news and a current product price without saying “search.”
    Check the linked sources support the answer and that lookup finishes within
-   `INTERNET_TIMEOUT_SECONDS`. Ask a greeting and the local clock question;
+   the applicable per-lookup timeout; retries have separate bounded budgets.
+   Ask a greeting and the local clock question;
    neither should perform a web lookup.
-2. Ask RAPHAEL to read a public article URL. Expect an answer based on the page
+2. Ask CIEL to read a public article URL. Expect an answer based on the page
    text, with a source link. A blocked or unsupported page must receive an
    honest explanation rather than an invented summary.
 3. Ask for weather without a location and with `INTERNET_HOME_CITY` empty.
@@ -70,11 +139,11 @@ installed speech models. Record device names/indices, STT model/device/compute
 type, TTS voice/engine, silence duration, and beam size with the results. Keep keys
 and private audio out of reports.
 
-1. Run `python -m raphael setup`. Keep custom settings, select your devices and
+1. Run `python -m ciel setup`. Keep custom settings, select your devices and
    local voice, and confirm the voice test actually plays. Restart normally with
-   `python -m raphael --listen` and verify the same devices and voice are used.
-2. Say “Hey Raphael.” Expect an acknowledgement, then ask a short question.
-   Repeat with “Hey Raphael, what time is it?” in one utterance. Verify the start
+   `python -m ciel --listen` and verify the same devices and voice are used.
+2. Say “Hey Ciel.” Expect an acknowledgement, then ask a short question.
+   Repeat with “Hey Ciel, what time is it?” in one utterance. Verify the start
    of the command is retained and one reply plays.
    Wait for `Wake keyword spotter ready` before starting. Test ten wake attempts
    at normal volume, ten quieter attempts, and several slower greetings. Record
@@ -86,6 +155,10 @@ and private audio out of reports.
    off; adjust `UTTERANCE_SILENCE_SECONDS` if needed.
 4. Interrupt a longer spoken reply with a new command. Expect playback to stop,
    the new command to be recorded, and the new reply to complete.
+   Add several fragments while routing is pending, then type a new request.
+   Superseded speech must not wait for another controller call, and the typed
+   request must not inherit the abandoned fragments. Test `/stop` during a
+   stalled provider stream as well as during audible playback.
 5. Remain silent after wake/follow-up. Expect recording to time out and return
    to standby without invented questions, repeated replies, or a stuck listener.
 6. In a cloud-provider session, temporarily disconnect the network. Ask a
@@ -96,14 +169,14 @@ and private audio out of reports.
    Say “Goodbye” and verify follow-up ends. Say the wake phrase again, then press
    Ctrl+C. Confirm the process exits and the microphone can be opened again on a
    fresh launch.
-8. Launch with `./scripts/launch_raphael_gpu.sh --ambient`. Address RAPHAEL directly,
+8. Launch with `./scripts/launch_ciel_gpu.sh --ambient`. Address CIEL directly,
    then ask a related follow-up without her name. Talk to someone else and verify
    she stays quiet and no background turn or personal fact appears in SQLite.
-   Check that `Raphael, stop listening` returns to wake-word mode and `Hey Raphael,
+   Check that `Ciel, stop listening` returns to wake-word mode and `Hey Ciel,
    listen continuously` enables ambient mode again. Interrupt playback by name.
    With headphones, also set `BARGE_IN_MODE=speech` and interrupt with ordinary
    speech. Confirm audio stops, the first word is retained, and steady PC hum does
-   not interrupt. Pause a long reply, then say `Raphael, continue`; verify the AI
+   not interrupt. Pause a long reply, then say `Ciel, continue`; verify the AI
    receives interruption context and resumes instead of starting over. Estimated
    progress may repeat or skip a few words; it is not exact word alignment.
    Add words while STT or routing is pending and confirm one combined response.
@@ -124,12 +197,12 @@ and private audio out of reports.
     assistant turn. Compare logged first-text and first-audio times with batch mode
     (`TTS_STREAMING=false`) using the same model, voice, and question. Interrupt
     during the first sentence, synthesis, and a gap between sentences: later queued
-    audio must not play. Say `Raphael, continue` and check completed sentences are
+    audio must not play. Say `Ciel, continue` and check completed sentences are
     represented in interruption context. Ask for code and verify it remains in
     history while spoken output omits the code block. Disconnect after a sentence
     starts: expect a connection-cutoff notice, without a fallback answer being
     appended to the partially spoken reply.
-    With `SHOW_AI_TRANSCRIPTS=true`, verify `RAPHAEL: ` reveals letters at the
+    With `SHOW_AI_TRANSCRIPTS=true`, verify `CIEL: ` reveals letters at the
     spoken pace in the terminal. A canceled sentence that never plays must not
     appear. During barge-in, expect only the reached prefix plus `[interrupted]`.
     Check the local clock answer and greeting, both CLI overrides, batch TTS,
@@ -152,21 +225,21 @@ and private audio out of reports.
 
 ## Memory proposals and first local actions
 
-Run these checks on the target desktop after starting `raphael start`:
+Run these checks on the target desktop after starting `ciel start`:
 
-1. Say “Raphael, my favorite game is CS2.” Expect a proposal, then say
-   “Raphael, no.” Verify no structured favorite-game fact was added or changed.
-2. Repeat the statement and say “Raphael, yes.” Close RAPHAEL, restart, then ask
-   “Raphael, what's my favorite game?” Expect CS2. Propose a different game and
+1. Say “Ciel, my favorite game is CS2.” Expect a proposal, then say
+   “Ciel, no.” Verify no structured favorite-game fact was added or changed.
+2. Repeat the statement and say “Ciel, yes.” Close CIEL, restart, then ask
+   “Ciel, what's my favorite game?” Expect CS2. Propose a different game and
    reject it; the confirmed value must stay CS2. Use a disposable test fact if
    you do not want to change your real preference.
-3. Propose another change, ask for the time, then say “Raphael, yes.” The old
+3. Propose another change, ask for the time, then say “Ciel, yes.” The old
    proposal must not be saved. Repeat after waiting more than 60 seconds and
-   after “Raphael, cancel.” An inferred ambient yes must not authorize a write.
+   after “Ciel, cancel.” An inferred ambient yes must not authorize a write.
 4. Ask RAM usage, GPU temperature, and logical CPU core count using the exact
    examples in README. Expect local answers, or an unavailable-metric response,
    with no provider request. Compare against a system monitor.
-5. Say “Raphael, open Discord.” Verify a Discord or Vesktop window appears.
+5. Say “Ciel, open Discord.” Verify a Discord or Vesktop window appears.
    Check a supported but uninstalled app receives an honest missing-app response.
    During ambient follow-up, say “Open Discord” without her name: it must not
    launch. Paths, shell syntax, and command-line flags must never execute.
@@ -174,8 +247,9 @@ Run these checks on the target desktop after starting `raphael start`:
    A completed launch is not undone by a later interruption.
 
 **Status:** live microphone, speaker, restart, and desktop-window acceptance is
-pending; the user deferred these checks until later. Automated callback tests use mocked audio and mocked launches. This
-status must only change after the real desktop checks have been observed.
+pending. The current execution environment exposes no audio device directory.
+Automated callback tests use mocked audio and mocked launches. Update this status
+after observing the checks on the target desktop.
 
 ## Recorded validation — 2026-10-08 (setup, documentation, and spoken status notes)
 
@@ -198,7 +272,7 @@ status must only change after the real desktop checks have been observed.
   the existing environment's dependencies. This is not a clean dependency install.
 - README and roadmap now reflect current defaults and distinguish implemented
   features, custom assets absent from Git, historical measurements, and pending
-  live acceptance. Restart RAPHAEL and retest interruption/continuation on the
+  live acceptance. Restart CIEL and retest interruption/continuation on the
   actual microphone and speaker; no live playback acceptance was performed here.
 
 ## Recorded validation — 2026-10-08 (Discord request routing)
@@ -215,8 +289,8 @@ status must only change after the real desktop checks have been observed.
   Direct-address authorization and the executable allowlist remain required.
 - Regression tests replay natural requests, corrections after interrupted speech,
   and the follow-up launch through real CLI callbacks with mocked processes.
-- Retest after restart with “Raphael, can you open Discord for me?” If STT still
-  mishears the name, say “Raphael, I meant D I S C O R D,” then “Raphael, open it.”
+- Retest after restart with “Ciel, can you open Discord for me?” If STT still
+  mishears the name, say “Ciel, I meant D I S C O R D,” then “Ciel, open it.”
   Actual microphone recognition and window appearance still require a live retest.
 
 ## Recorded validation — 2026-10-07 (memory proposals and local actions)
@@ -329,7 +403,7 @@ status must only change after the real desktop checks have been observed.
 
 - 428 unit tests passed; three integrations excluded. Ruff, whitespace checks,
   and the runtime version command passed.
-- Replayed the reported “What time is Raphael?” followed by “You sound like a
+- Replayed the reported “What time is Ciel?” followed by “You sound like a
   robot, do you know?” through the real CLI callbacks with mocked audio and an
   isolated database. Both receive replies: local clock first, then one model
   answer for the feedback, without cloud speech-gate calls.
@@ -367,7 +441,7 @@ status must only change after the real desktop checks have been observed.
 ## Recorded validation — 2026-10-03 (v0.3.1 patch)
 
 - 375 unit tests passed; three hardware/model integrations excluded. Ruff,
-  `git diff --check`, and `python -m raphael --version` passed.
+  `git diff --check`, and `python -m ciel --version` passed.
 - Authenticated NIM requests confirmed the old default model returned HTTP 410
   with retirement time 2026-10-03 09:00 UTC (16:00 Asia/Hovd).
 - Updated the local `NIM_MODEL` and package defaults to
@@ -393,7 +467,7 @@ status must only change after the real desktop checks have been observed.
   network reads, synthesis and playback, merged additions, partial failures,
   cumulative interruption context, and STT retries under simulated VRAM pressure.
 - Ruff and `git diff --check` passed.
-- Built `raphael-0.3.0-py3-none-any.whl` and installed it into an isolated target
+- Built `ciel-0.3.0-py3-none-any.whl` and installed it into an isolated target
   directory using the existing environment's dependencies. Verified installed
   package imports, version metadata, module CLI and entry-point CLI with `--help`
   and `--version` from outside the checkout.

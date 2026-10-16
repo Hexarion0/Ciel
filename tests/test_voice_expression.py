@@ -7,17 +7,17 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
-from raphael.audio.speech_events import (
+from ciel.audio.speech_events import (
     SpeechEventLimiter,
     speech_event_instruction,
     split_speech_event,
     strip_speech_events,
     voice_delivery_instruction,
 )
-from raphael.audio.streaming import stream_reply
-from raphael.audio.tts import TextToSpeech
-from raphael.config import AudioConfig, Settings
-from raphael.providers.base import LLMResponse, LLMStreamChunk
+from ciel.audio.streaming import stream_reply
+from ciel.audio.tts import TextToSpeech
+from ciel.config import AudioConfig, Settings
+from ciel.providers.base import LLMResponse, LLMStreamChunk
 
 
 @pytest.mark.parametrize("mode", ["expressive", "natural", "off"])
@@ -63,7 +63,10 @@ def test_stage_directions_never_reach_either_synthesizer(monkeypatch, engine):
     target = "_synthesize_chatterbox" if engine == "chatterbox_turbo" else "_synthesize_piper"
     monkeypatch.setattr(tts, target, synthesizer)
     tts.synthesize("[soft inhale — steady, focused] Alright.")
-    synthesizer.assert_called_once_with("Alright.")
+    if engine == "chatterbox_turbo":
+        synthesizer.assert_called_once_with("Alright.", "neutral")
+    else:
+        synthesizer.assert_called_once_with("Alright.")
     synthesizer.reset_mock()
     tts.synthesize("[brief pause — quiet, not dismissive, just present]")
     synthesizer.assert_not_called()
@@ -93,7 +96,7 @@ def test_direct_synthesis_budget_collapses_stacks_and_preserves_words(mode, coun
 
 def test_tts_uses_configured_expression_and_accepts_an_override(monkeypatch):
     monkeypatch.setenv("TTS_EXPRESSIVENESS", "natural")
-    monkeypatch.setattr("raphael.audio.tts.get_settings", lambda: Settings(_env_file=None))
+    monkeypatch.setattr("ciel.audio.tts.get_settings", lambda: Settings(_env_file=None))
     assert TextToSpeech(enabled=False).expressiveness == "natural"
     assert TextToSpeech(enabled=False, expressiveness="off").expressiveness == "off"
     with pytest.raises(ValueError):
@@ -125,7 +128,8 @@ def test_off_removes_all_events_and_standalone_event_is_supported(monkeypatch):
 def test_piper_fallback_never_speaks_inline_aliases(monkeypatch):
     tts = TextToSpeech(engine="chatterbox_turbo", enabled=True)
     tts._chatterbox_failed = True
-    fallback = MagicMock()
+    tts._pocket_failed = True
+    fallback = MagicMock(return_value=None)
     monkeypatch.setattr(tts, "_synthesize_piper_fallback", fallback)
     tts.synthesize("Oh! [moan] Again? [chuckle]")
     assert "[" not in fallback.call_args.args[0]

@@ -16,7 +16,7 @@ come from the current source, focused tests, and local reproductions.
   or `requirements.txt`. `onnx` is absent from the inspected environment, and
   `audio/__init__.py` imports the trainer even for ordinary runtime commands.
   Declare required dependencies and load training dependencies only for training
-  commands. Verify a clean installation can run `python -m raphael --help` and
+  commands. Verify a clean installation can run `python -m ciel --help` and
   use Piper without installing the training toolchain.
 
 - [x] **Restore and clear summaries by session identity.**
@@ -81,7 +81,7 @@ come from the current source, focused tests, and local reproductions.
 - [x] Resolve the original 62 Ruff findings: 54 long lines, six unused imports, one
   unnecessary f-string, and one import-order issue.
 - [x] Update README installation instructions to include the editable package
-  installation and describe the actual `src/raphael/` layout and supported engines.
+  installation and describe the actual `src/ciel/` layout and supported engines.
 - [ ] Run the unit suite, Ruff, a clean-install CLI check, and a manual microphone
   session covering wake, follow-up, interruption, silence, provider failure, and
   exit. Treat live audio checks separately from unit-test results.
@@ -191,13 +191,13 @@ synthetic 60 Hz hum through speech filtering. Live retesting is still required.
 
 ## Wake Handoff and STT Quality — 2026-10-03
 
-A new live report showed "Hey Raphael" being transcribed as "I hate Raphael."
+A new live report showed "Hey Ciel" being transcribed as "I hate Ciel."
 The listener had been re-transcribing wake audio after the keyword detector
 already recognized it. Keyword recognition now returns word timing in original
 sample coordinates; the listener removes the greeting audio, retaining commands
 spoken immediately afterward. Sample coordinates account for asynchronous
 inference delay. A known greeting is used only for that initial utterance;
-follow-up speech is not relabeled. Mentioning Raphael inside a sentence no longer
+follow-up speech is not relabeled. Mentioning Ciel inside a sentence no longer
 counts as a greeting. Recent audio retention was increased to three seconds.
 
 STT now reports word/segment quality, retries ambiguous short utterances once
@@ -232,7 +232,7 @@ Final validation for this pass: 153 unit tests passed, with three integration
 tests excluded; Ruff and whitespace checks passed. With generated Alan voice
 speech plus synthetic hum, the final handoff returned no command for a bare
 wake, retained the question in a combined wake-and-command utterance, and retained
-a genuine "I hate Raphael" statement following a greeting. Normal small-model
+a genuine "I hate Ciel" statement following a greeting. Normal small-model
 command decoding took about 2.2–2.3 seconds in that final sample. These checks are
 not a substitute for live recognition on the user's microphone.
 
@@ -241,7 +241,7 @@ not a substitute for live recognition on the user's microphone.
 The user selected a warm, mature, confident feminine companion, with casual
 flirting, light wit, focused task assistance, patience during frustration, and
 direct explanations of inconsistencies. English is the default language and
-the local preferred name is hexarion. `RAPHAEL_PREFERRED_NAME` keeps that preference
+the local preferred name is hexarion. `CIEL_PREFERRED_NAME` keeps that preference
 separate from the desktop login; the persona remains in Python for now.
 
 The prompt uses configured speech engines and database paths. It treats unknown
@@ -255,14 +255,14 @@ The sandbox hid the host GPU. A host check identified a GTX 1660 SUPER with 6 GB
 VRAM and CUDA support in the installed CTranslate2 library. Initial GPU decoding
 failed because cuBLAS was not on the library search path. Required CUDA 12/cuDNN 9
 libraries already exist in the Piper training environment. The new
-`scripts/launch_raphael_gpu.sh` exposes existing local libraries before Python
+`scripts/launch_ciel_gpu.sh` exposes existing local libraries before Python
 starts, without installing libraries or starting training. Local STT is configured
 for small.en with CUDA/int8_float16; the wake spotter and Piper playback remain on
 CPU, and the existing larger retry setting is retained.
 
 Using those libraries, a GPU check loaded the cached small.en model in 1.38 seconds
 and decoded 3.13 seconds of generated Amy speech in 1.21 seconds. The transcript
-was "Hey Rafael, what did we build together?" for a phrase spoken as "Hey Raphael.
+was "Hey Siel, what did we build together?" for a phrase spoken as "Hey Ciel.
 What did we build together?" This confirms functioning GPU decoding, rather than
 live microphone accuracy. Active training can change available VRAM.
 
@@ -367,7 +367,7 @@ in its noise estimate, and retained only 1.5 seconds. The minimum is now configu
 with a default of 0.006, and candidate speech no longer raises its own noise floor.
 The default buffer retains three seconds. After 160 ms below the speech gate, a
 pending greeting gets one complete snapshot even within the normal check interval.
-Reset clears that pending check. Punctuation such as `Hey, Raphael` is accepted
+Reset clears that pending check. Punctuation such as `Hey, Ciel` is accepted
 without broadening detection to unrelated mentions. Startup logs explicitly report
 when the CPU keyword model is ready. VAD and transcript-confidence filtering remain.
 
@@ -384,8 +384,8 @@ live microphone acceptance remains pending.
 enables it with a normal listening launch. The installed local Silero VAD accepts
 arbitrary audio frame sizes through a 512-sample accumulator, detects onset, and
 drives recording without relying solely on volume. Startup and voice toggles
-require 16 kHz for this path. "Raphael, stop listening" returns to wake-word mode;
-"Hey Raphael, listen continuously" enables ambient capture again.
+require 16 kHz for this path. "Ciel, stop listening" returns to wake-word mode;
+"Hey Ciel, listen continuously" enables ambient capture again.
 
 Direct addresses are accepted locally. Recent possible follow-ups are judged on
 the economical `speech_gate` route using the last interaction, including local
@@ -450,7 +450,7 @@ remain silent and produce a diagnostic warning.
 Validation: 266 unit tests passed, three integrations excluded; Ruff and whitespace
 checks passed. Four existing local wake recordings were replayed through actual
 Silero capture and configured `small.en` CUDA/int8_float16 STT with beam size five.
-All four yielded "Hey Raphael" and a direct-address decision, without quality
+All four yielded "Hey Ciel" and a direct-address decision, without quality
 retry; decode times were 0.94, 0.83, 0.77, and 0.89 seconds. These are transcription
 times, excluding recording pauses and model startup. No audio was uploaded or new
 audio recorded. Live microphone/device verification remains pending.

@@ -9,7 +9,7 @@ import pytest
 
 
 def test_cues_are_rendered_separately_and_speech_is_not_amplified():
-    from raphael.audio.vocal_cues import VocalCueRenderer
+    from ciel.audio.vocal_cues import VocalCueRenderer
 
     calls = []
     words = np.full(1000, 0.1, dtype=np.float32)
@@ -31,7 +31,7 @@ def test_cues_are_rendered_separately_and_speech_is_not_amplified():
 
 
 def test_inline_positions_and_cached_events_are_preserved():
-    from raphael.audio.vocal_cues import VocalCueRenderer
+    from ciel.audio.vocal_cues import VocalCueRenderer
 
     speech, events = [], []
 
@@ -52,7 +52,7 @@ def test_inline_positions_and_cached_events_are_preserved():
 
 @pytest.mark.parametrize("text", ["Hello.", "[chuckle] Good one."])
 def test_other_speech_keeps_the_original_single_generate_path(text):
-    from raphael.audio.vocal_cues import VocalCueRenderer
+    from ciel.audio.vocal_cues import VocalCueRenderer
 
     expected = np.zeros(100, dtype=np.float32)
     calls = []
@@ -68,7 +68,7 @@ def test_other_speech_keeps_the_original_single_generate_path(text):
 @pytest.mark.parametrize("wave", [np.zeros(100), np.full(100, np.nan),
                                   np.ones(100) * 0.0004, np.array([])])
 def test_bad_or_faint_cues_do_not_become_amplified_noise(wave):
-    from raphael.audio.vocal_cues import VocalCueRenderer
+    from ciel.audio.vocal_cues import VocalCueRenderer
 
     words = np.ones(100, dtype=np.float32) * 0.1
     calls = []
@@ -84,7 +84,7 @@ def test_bad_or_faint_cues_do_not_become_amplified_noise(wave):
 
 
 def test_cue_gain_is_bounded_and_cannot_clip():
-    from raphael.audio.vocal_cues import balance_vocal_cue
+    from ciel.audio.vocal_cues import balance_vocal_cue
 
     wave = np.ones(10000, dtype=np.float32) * 0.003
     wave[50] = 0.4
@@ -94,7 +94,7 @@ def test_cue_gain_is_bounded_and_cannot_clip():
 
 
 def test_effect_generation_failure_preserves_normal_speech():
-    from raphael.audio.vocal_cues import VocalCueRenderer
+    from ciel.audio.vocal_cues import VocalCueRenderer
 
     words = np.ones(100, dtype=np.float32) * 0.1
 
@@ -120,16 +120,16 @@ class FakeConditionals:
 
 @pytest.mark.parametrize("raises", [False, True])
 def test_effect_conditioning_keeps_identity_and_is_restored_even_on_failure(raises):
-    from raphael.audio.vocal_cues import generate_styled_cue
+    from ciel.audio.vocal_cues import generate_styled_cue
 
-    original = FakeConditionals(FakeT3("raphael", "original", "embedded"), "raphael_decoder")
+    original = FakeConditionals(FakeT3("ciel", "original", "embedded"), "ciel_decoder")
     style = FakeConditionals(FakeT3("demo", "lively"), "demo_decoder")
 
     def generate(_text):
-        assert model.conds.t3.speaker_emb == "raphael"
+        assert model.conds.t3.speaker_emb == "ciel"
         assert model.conds.t3.cond_prompt_speech_tokens == "lively"
         assert model.conds.t3.cond_prompt_speech_emb is None
-        assert model.conds.gen == "raphael_decoder"
+        assert model.conds.gen == "ciel_decoder"
         if raises:
             raise RuntimeError("synthesis failed")
         return "audio"
@@ -144,23 +144,23 @@ def test_effect_conditioning_keeps_identity_and_is_restored_even_on_failure(rais
 
 
 def test_manifest_effect_reference_reaches_worker_client(tmp_path):
-    from raphael.audio.speech_events import SpeechEvent
-    from raphael.audio.tts import TextToSpeech
+    from ciel.audio.speech_events import SpeechEvent
+    from ciel.audio.tts import TextToSpeech
 
-    profile = tmp_path / "raphael"
+    profile = tmp_path / "ciel"
     profile.mkdir()
     reference = tmp_path / "reference.wav"
     transcript = tmp_path / "reference.txt"
     effect = tmp_path / "effects.wav"
     transcript.write_text("A test reference.", encoding="utf-8")
     (profile / "voice.json").write_text(json.dumps({
-        "name": "raphael", "engine": "chatterbox_turbo",
+        "name": "ciel", "engine": "chatterbox_turbo",
         "reference_audio": str(reference), "reference_transcript": str(transcript),
         "event_reference_audio": str(effect),
         "event_audio": {"sigh": str(tmp_path / "sigh.wav")},
         "supported_events": [event.value for event in SpeechEvent],
     }), encoding="utf-8")
-    tts = TextToSpeech(voice_name="raphael", engine="chatterbox_turbo", enabled=False,
+    tts = TextToSpeech(voice_name="ciel", engine="chatterbox_turbo", enabled=False,
                        voice_profiles_dir=tmp_path)
     worker = tts._load_chatterbox_worker()
     assert worker.event_reference == effect.resolve()
@@ -172,7 +172,7 @@ def test_manifest_effect_reference_reaches_worker_client(tmp_path):
 def test_local_cue_loading_validates_rate_and_handles_stereo(tmp_path):
     import soundfile as sf
 
-    from raphael.audio.vocal_cues import load_cue_audio
+    from ciel.audio.vocal_cues import load_cue_audio
 
     path = tmp_path / "cue.wav"
     sf.write(path, np.full((100, 2), 0.1, dtype=np.float32), 24000, subtype="FLOAT")
@@ -185,7 +185,7 @@ def test_local_cue_loading_validates_rate_and_handles_stereo(tmp_path):
 def test_selected_local_clip_is_used_without_re_generation_or_style_reference(tmp_path):
     import soundfile as sf
 
-    from raphael.audio.vocal_cues import create_turbo_renderer
+    from ciel.audio.vocal_cues import create_turbo_renderer
 
     cue_path = tmp_path / "sigh.wav"
     cue = np.full(100, 0.025, dtype=np.float32)

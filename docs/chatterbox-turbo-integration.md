@@ -1,27 +1,36 @@
-# Chatterbox Turbo RAPHAEL voice
+# Chatterbox Turbo CIEL voice
 
 ## Setup requirements
 
-The default installer uses Amy/Piper on CPU. Choose **1: RAPHAEL custom voice** in
-`raphael setup` to configure Turbo. The choice checks existing assets and saves
+The default installer uses Pocket on CPU, with installed Piper voices for fallback.
+Choose **1: CIEL custom voice** in
+`ciel setup` to configure Turbo. The choice checks existing assets and saves
 configuration; it does not download the model or create the inference environment.
-This integration currently requires a source checkout and an NVIDIA CUDA GPU.
+Turbo requires an NVIDIA CUDA GPU and a separate inference environment. Wheels
+include the worker and safe default manifest; private references and model weights
+must be supplied locally.
 
 Required local assets:
 
 | Asset | Default path | Included in Git? |
 | --- | --- | --- |
-| Voice manifest | `voice_profiles/raphael/voice.json` | Yes |
-| Turbo worker | `scripts/chatterbox_turbo_worker.py` | Yes |
+| Voice manifest | `voice_profiles/ciel/voice.json` (bundled copy in `ciel/voice_profiles/`) | Yes |
+| Turbo worker | `ciel/audio/turbo_worker.py` (checkout wrapper in `scripts/`) | Yes |
 | Inference environment | `data/voice/envs/clone/` | No |
 | Pinned model | `data/voice/models/chatterbox-turbo/` | No |
-| Reference audio | `data/voice/references/raphael/reference-1.wav` | No |
-| Reference transcript | `data/voice/references/raphael/reference-1.txt` | No |
-| Optional effect style | `data/voice/references/raphael/event-style.wav` | No |
-| Selected cue clips | `data/voice/references/raphael/sigh.wav` and `groan.wav` | No |
-| Optional custom Piper fallback | `models/tts/en_US-raphael-medium.onnx` and `.onnx.json` | No |
+| Reference audio | `data/voice/references/ciel/reference-1.wav` | No |
+| Reference transcript | `data/voice/references/ciel/reference-1.txt` | No |
+| Optional effect style | `data/voice/references/ciel/event-style.wav` | No |
+| Selected cue clips | `data/voice/references/ciel/sigh.wav` and `groan.wav` | No |
+| Optional custom Piper fallback | `models/tts/en_US-ciel-medium.onnx` and `.onnx.json` | No |
 
-For a manual setup, from the checkout root with Python 3.12 installed:
+Relative asset paths use the checkout root during source development. An installed
+wheel uses `$XDG_DATA_HOME/ciel`, or `~/.local/share/ciel` when unset, for writable
+voice assets. Absolute path overrides retain their configured locations. A local
+`voice_profiles/ciel/voice.json` overrides the bundled manifest.
+
+The manual preparation commands below use the checkout's helper scripts, with
+Python 3.12 installed:
 
 ```bash
 python3.12 -m venv data/voice/envs/clone
@@ -37,20 +46,21 @@ Download sizes and installation footprints can differ across machines.
 
 Restore your private reference WAV and matching transcript to the paths above
 from a separate backup. The downloader supplies model weights, not the original
-RAPHAEL voice reference. Copy the custom Piper model/config separately if you want
+CIEL voice reference. Copy the custom Piper model/config separately if you want
 that fallback too; `bash setup.sh` pre-downloads Amy as the standard fallback.
-Then run `.venv/bin/raphael setup`, choose **1**, and check actual playback.
+Then run `.venv/bin/ciel setup`, choose **1**, and check actual playback.
 Environment/model locations can be overridden with `TTS_CHATTERBOX_PYTHON`,
 `TTS_CHATTERBOX_MODEL`, and `TTS_VOICE_PROFILES`.
 
 The requirements file records the tested environment. A fully automated,
 clean-machine custom install remains a roadmap item; file presence checks do not
-prove CUDA compatibility or synthesis quality. A wheel-only installation currently
-omits the standalone worker and manifest, so use the source checkout for Turbo.
+prove CUDA compatibility or synthesis quality. Installed Turbo startup resolves its
+bundled worker without a checkout, but still requires the inference environment,
+model, and private reference assets listed above.
 
 ## Runtime
 
-RAPHAEL can use the pinned local Chatterbox Turbo checkpoint with the selected primary
+CIEL can use the pinned local Chatterbox Turbo checkpoint with the selected primary
 reference. The production request path is:
 
 ```text
@@ -59,14 +69,14 @@ LLM stream -> visible text filter -> sentence buffer -> bounded synthesis queue
 ```
 
 The model runs in a persistent Python 3.12 child process so it does not conflict with
-RAPHAEL's Python 3.14 dependencies. It loads once in the background after STT is ready,
+CIEL's Python 3.14 dependencies. It loads once in the background after STT is ready,
 keeps the primary reference conditioning warm, and runs offline. A free-VRAM guard skips
 Turbo startup below `TTS_MIN_FREE_VRAM_MB`. A synthesis or initialization failure is logged
-and latched to the local Piper RAPHAEL voice; Amy is tried if that fallback model is absent.
+and latched to the local Piper CIEL voice; Amy is tried if that fallback model is absent.
 The existing Piper backend remains selectable with `TTS_ENGINE=piper` and its selected
 voice remains `TTS_VOICE`.
 
-The voice manifest is [voice_profiles/raphael/voice.json](../voice_profiles/raphael/voice.json).
+The voice manifest is [voice_profiles/ciel/voice.json](../voice_profiles/ciel/voice.json).
 It names the exact reference WAV/transcript and records the pinned model revision
 `749d1c1a46eb10492095d68fbcf55691ccf137cd`. Model files, audio, generated samples, and
 benchmarks are kept under ignored `data/` paths. The inference environment is pinned in
@@ -74,7 +84,7 @@ benchmarks are kept under ignored `data/` paths. The inference environment is pi
 
 Turbo's nine verified event markers are `[clear throat]`, `[sigh]`, `[shush]`, `[cough]`,
 `[groan]`, `[sniff]`, `[gasp]`, `[chuckle]`, and `[laugh]`. They can appear at the start of
-a sentence or inline at a reaction point. RAPHAEL also accepts `[giggle]` as `[chuckle]`
+a sentence or inline at a reaction point. CIEL also accepts `[giggle]` as `[chuckle]`
 and `[moan]` as `[groan]`. These are application aliases: Turbo has no verified native
 moan token, so the latter is an approximation, not a distinct moaning voice.
 The native set and inline placement follow the
@@ -97,7 +107,7 @@ directly with Turbo, but model replies should still contain dialogue.
 
 These settings control event frequency and spoken phrasing, not sustained acoustic moods.
 The pinned Turbo engine ignores the original Chatterbox `exaggeration` and CFG controls,
-so RAPHAEL does not expose a misleading emotion-strength slider. The speaking voice
+so CIEL does not expose a misleading emotion-strength slider. The speaking voice
 reference and sampling defaults are retained. Restart after changing `.env` or the manifest.
 
 ### Faint sighs and groans
@@ -105,7 +115,7 @@ reference and sampling defaults are retained. Restart after changing `.env` or t
 The selected reference can make native effects faint even when the tokenizer and audio
 pipeline accept their tags. CPU checks on 2026-10-10 found the original standalone sigh
 at RMS 0.00042 and groan at 0.00111; greatly amplifying these produced poor listening results.
-Using a separate speaking-style prompt while keeping RAPHAEL's speaker embedding and
+Using a separate speaking-style prompt while keeping CIEL's speaker embedding and
 waveform-decoder reference produced RMS 0.02364 and 0.00805 at seed 42.
 These measurements establish signal level, not human sound quality.
 
@@ -128,7 +138,7 @@ The local effect-style file comes from the public reference used by the
 To reproduce this optional asset from the checkout root:
 
 ```bash
-curl --fail --location --output data/voice/references/raphael/event-style.wav \
+curl --fail --location --output data/voice/references/ciel/event-style.wav \
   https://storage.googleapis.com/chatterbox-demo-samples/prompts/female_random_podcast.wav
 ```
 
@@ -140,13 +150,13 @@ later replies reuse its cached cue. `[moan]` still maps to a groan.
 
 ## Sentence queue and interruption
 
-Turbo produces sentence waveforms rather than a live audio stream. RAPHAEL starts synthesis
+Turbo produces sentence waveforms rather than a live audio stream. CIEL starts synthesis
 as soon as a complete sentence is available, while a separate player emits earlier audio in
 order. One sentence may wait in the text queue, and the audio queue defaults to two waveforms.
 Backpressure limits memory use on long replies. A barge-in invalidates the active generation,
 stops playback, and discards queued audio; it cannot be replayed by a later turn.
 
-The benchmark uses a local fixed text stream through RAPHAEL's `stream_reply` implementation,
+The benchmark uses a local fixed text stream through CIEL's `stream_reply` implementation,
 so it measures actual text filtering, sentence preparation, worker IPC, and local playback
 without making an LLM/API request. Live LLM time before the first sentence is available will
 add to the reported first-audio times. Device output must be available for playback timing.
@@ -172,19 +182,19 @@ chosen sigh and groan files to the manifest paths. The groan preview is named
 Run the full on-device TTS/STT and playback test with:
 
 ```bash
-.venv/bin/python scripts/benchmark_raphael_turbo_runtime.py
+.venv/bin/python scripts/benchmark_ciel_turbo_runtime.py
 ```
 
 It plays and saves the short response, a multi-sentence response, a longer reply, `[chuckle]`,
 `[sigh]`, inline cues and aliases, a cue-budget example, two rapid requests, an interrupted
 reply, the Piper fallback, a CUDA STT overlap,
 and a post-restart sample. It writes a private `index.html` listening page, WAVs, and
-`report.json` below `data/voice/benchmarks/raphael-turbo-runtime/`. Use `--no-playback` to
+`report.json` below `data/voice/benchmarks/ciel-turbo-runtime/`. Use `--no-playback` to
 save samples without sending them to the audio device.
 
 ## GTX 1660 SUPER validation (2026-10-05)
 
-Run on the RAPHAEL machine with its configured CUDA `small.en` STT model, `int8_float16`,
+Run on the CIEL machine with its configured CUDA `small.en` STT model, `int8_float16`,
 the pinned Turbo worker, the primary reference, and the default audio output. The benchmark
 used a local provider fixture (no paid or remote LLM request):
 

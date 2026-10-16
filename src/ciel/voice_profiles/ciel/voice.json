@@ -1,0 +1,24 @@
+{
+  "name": "ciel",
+  "engine": "chatterbox_turbo",
+  "model_revision": "749d1c1a46eb10492095d68fbcf55691ccf137cd",
+  "reference_audio": "data/voice/references/ciel/reference-1.wav",
+  "reference_transcript": "data/voice/references/ciel/reference-1.txt",
+  "event_reference_audio": "data/voice/references/ciel/event-style.wav",
+  "event_audio": {
+    "sigh": "data/voice/references/ciel/sigh.wav",
+    "groan": "data/voice/references/ciel/groan.wav"
+  },
+  "fallback_voice": "en_US-ciel-medium",
+  "supported_events": [
+    "[clear throat]",
+    "[sigh]",
+    "[shush]",
+    "[cough]",
+    "[groan]",
+    "[sniff]",
+    "[gasp]",
+    "[chuckle]",
+    "[laugh]"
+  ]
+}

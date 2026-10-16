@@ -1,11 +1,13 @@
 """Unit tests for Text-to-Speech (TTS) engine."""
 
-from unittest.mock import patch
+import os
+import sys
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 
-from raphael.audio.tts import TextToSpeech
+from ciel.audio.tts import TextToSpeech
 
 
 def test_internal_status_is_not_spoken_by_direct_tts():
@@ -39,7 +41,7 @@ def test_clean_text_for_speech():
 
 
 def test_turbo_events_are_explicit_and_limited_to_the_pinned_native_set():
-    from raphael.audio.speech_events import (
+    from ciel.audio.speech_events import (
         SpeechEvent,
         add_speech_event,
         split_speech_event,
@@ -58,18 +60,58 @@ def test_turbo_events_are_explicit_and_limited_to_the_pinned_native_set():
     )
 
 
-def test_tts_engine_defaults_to_piper():
+def test_explicit_auto_engine_preserves_piper():
     tts = TextToSpeech(voice_name="en_US-amy-medium", enabled=False, engine="auto")
     assert tts.engine == "piper"
 
 
+def test_fresh_tts_defaults_use_pocket_without_loading_models(monkeypatch):
+    from ciel.config import Settings
+
+    with patch.dict(os.environ, {}, clear=True):
+        settings = Settings(_env_file=None)
+    monkeypatch.setattr("ciel.audio.tts.get_settings", lambda: settings)
+    tts = TextToSpeech(enabled=False)
+    assert (tts.engine, tts.voice_name) == ("pocket", "ciel")
+    assert tts._pocket is None
+    tts.close()
+
+
+def test_default_pocket_missing_dependency_uses_local_amy(tmp_path, monkeypatch):
+    from ciel.config import Settings
+
+    with patch.dict(os.environ, {}, clear=True):
+        settings = Settings(_env_file=None)
+    monkeypatch.setattr("ciel.audio.tts.get_settings", lambda: settings)
+    monkeypatch.setitem(sys.modules, "pocket_tts", None)
+    for name in ("en_US-amy-medium.onnx", "en_US-amy-medium.onnx.json"):
+        (tmp_path / name).write_text("local test asset")
+    load = MagicMock()
+    monkeypatch.setattr("ciel.audio.tts.PiperVoice.load", load)
+    download = MagicMock(side_effect=AssertionError("Fallback must stay offline"))
+    monkeypatch.setattr("ciel.audio.tts.download_voice", download)
+    tts = TextToSpeech(models_dir=tmp_path)
+    expected = (np.ones(100, dtype=np.float32), 22050)
+    monkeypatch.setattr(tts, "_synthesize_piper", lambda *_args, **_kwargs: expected)
+    try:
+        audio, rate = tts.synthesize("Hello.")
+        assert np.array_equal(audio, expected[0]) and rate == expected[1]
+        assert tts.last_engine == "piper"
+        assert tts._pocket_failed and tts._pocket_retry_at == 0
+        load.assert_called_once()
+        assert "en_US-amy-medium.onnx" in str(load.call_args)
+        download.assert_not_called()
+    finally:
+        tts.close()
+
+
 @pytest.mark.integration
 def test_piper_initialization_and_synthesis():
-    tts = TextToSpeech(voice_name="en_GB-alan-medium", engine="piper", enabled=True)
+    tts = TextToSpeech(voice_name="en_US-amy-medium", engine="piper", enabled=True)
     assert tts.enabled is True
-    assert tts.voice_name == "en_GB-alan-medium"
+    assert tts.voice_name == "en_US-amy-medium"
 
-    result = tts.synthesize("Hello sir, RAPHAEL system is online.")
+    result = tts.synthesize("Hello sir, CIEL system is online.")
     assert result is not None
     audio, sample_rate = result
     assert isinstance(audio, np.ndarray)
@@ -100,7 +142,7 @@ def test_stop_during_synthesis_prevents_late_playback(monkeypatch):
 
     monkeypatch.setattr(tts, "synthesize", synthesize)
     monkeypatch.setattr(
-        "raphael.audio.tts.sd", SimpleNamespace(play=lambda *_a, **_k: played.append(1))
+        "ciel.audio.tts.sd", SimpleNamespace(play=lambda *_a, **_k: played.append(1))
     )
     results = []
     worker = threading.Thread(target=lambda: results.append(tts.speak("hello")))
@@ -122,8 +164,8 @@ def test_interrupted_playback_reports_estimated_unheard_text(monkeypatch):
     from types import SimpleNamespace
 
     clock = [100.0]
-    monkeypatch.setattr('raphael.audio.tts.time.monotonic', lambda: clock[0])
-    monkeypatch.setattr('raphael.audio.tts.sd', SimpleNamespace(
+    monkeypatch.setattr('ciel.audio.tts.time.monotonic', lambda: clock[0])
+    monkeypatch.setattr('ciel.audio.tts.sd', SimpleNamespace(
         play=lambda *_args, **_kwargs: None,
         get_stream=lambda: SimpleNamespace(active=True), stop=lambda: None,
     ))
@@ -144,7 +186,7 @@ def test_interrupted_playback_reports_estimated_unheard_text(monkeypatch):
 def test_completed_playback_does_not_report_an_interruption(monkeypatch):
     from types import SimpleNamespace
 
-    monkeypatch.setattr('raphael.audio.tts.sd', SimpleNamespace(
+    monkeypatch.setattr('ciel.audio.tts.sd', SimpleNamespace(
         play=lambda *_args, **_kwargs: None, get_stream=lambda: SimpleNamespace(active=False),
         stop=lambda: None,
     ))
@@ -156,10 +198,10 @@ def test_completed_playback_does_not_report_an_interruption(monkeypatch):
 
 
 def test_omitted_engine_uses_selected_piper_voice(monkeypatch):
-    from raphael.config import Settings
+    from ciel.config import Settings
 
     settings = Settings(_env_file=None, tts_voice="en_US-amy-medium", tts_engine="auto")
-    monkeypatch.setattr("raphael.audio.tts.get_settings", lambda: settings)
+    monkeypatch.setattr("ciel.audio.tts.get_settings", lambda: settings)
     tts = TextToSpeech(
         voice_name=settings.audio.tts_voice, engine=settings.audio.tts_engine, enabled=False
     )
@@ -177,29 +219,30 @@ def test_omitted_engine_uses_selected_piper_voice(monkeypatch):
     [
         ("en_US-amy-medium", "auto", "piper"),
         ("en_GB-alan-medium", "auto", "piper"),
-        ("raphael", "chatterbox_turbo", "chatterbox_turbo"),
-        ("raphael", "chatterbox", "chatterbox_turbo"),
-        ("raphael", "piper", "piper"),
+        ("ciel", "chatterbox_turbo", "chatterbox_turbo"),
+        ("ciel", "chatterbox", "chatterbox_turbo"),
+        ("ciel", "piper", "piper"),
     ],
 )
 def test_engine_resolution_respects_explicit_selection(voice, engine, expected):
-    from raphael.audio.tts import resolve_tts_engine
+    from ciel.audio.tts import resolve_tts_engine
 
     assert resolve_tts_engine(voice, engine) == expected
 
 
 def test_removed_engines_are_rejected():
-    from raphael.audio.tts import resolve_tts_engine
+    from ciel.audio.tts import resolve_tts_engine
 
     with pytest.raises(ValueError, match="Unknown TTS engine"):
-        resolve_tts_engine("raphael", "fish_speech")
+        resolve_tts_engine("ciel", "fish_speech")
 
 
 def test_chatterbox_backend_starts_lazily_and_falls_back_offline(monkeypatch):
-    from raphael.audio.tts import ChatterboxWorkerError, resolve_tts_engine
+    from ciel.audio.tts import ChatterboxWorkerError, resolve_tts_engine
 
-    tts = TextToSpeech(voice_name="raphael", engine="chatterbox_turbo", enabled=True)
-    assert resolve_tts_engine("raphael", "chatterbox") == "chatterbox_turbo"
+    tts = TextToSpeech(voice_name="ciel", engine="chatterbox_turbo", enabled=True)
+    tts._pocket_failed = True  # This test exercises the final offline fallback.
+    assert resolve_tts_engine("ciel", "chatterbox") == "chatterbox_turbo"
     assert tts._chatterbox is None
     monkeypatch.setattr(
         tts, "_load_chatterbox_worker",
@@ -207,16 +250,20 @@ def test_chatterbox_backend_starts_lazily_and_falls_back_offline(monkeypatch):
     )
     expected = (np.ones(120, dtype=np.float32), 24000)
     monkeypatch.setattr(tts, "_synthesize_piper_fallback", lambda _text: expected)
-    assert tts.synthesize("Of course.") == expected
+    result = tts.synthesize("Of course.")
+    np.testing.assert_array_equal(result[0], expected[0])
+    assert result[1] == expected[1]
     assert tts._chatterbox_failed
-    assert tts.synthesize("[sigh] You're still awake.") == expected
+    result = tts.synthesize("[sigh] You're still awake.")
+    np.testing.assert_array_equal(result[0], expected[0])
+    assert result[1] == expected[1]
     assert tts.enabled
 
 
 def test_chatterbox_worker_preserves_virtualenv_python_symlink(tmp_path):
     import sys
 
-    from raphael.audio.chatterbox_worker import ChatterboxTurboWorker
+    from ciel.audio.chatterbox_worker import ChatterboxTurboWorker
 
     launcher = tmp_path / "venv" / "bin" / "python"
     launcher.parent.mkdir(parents=True)
@@ -229,7 +276,7 @@ def test_chatterbox_worker_preserves_virtualenv_python_symlink(tmp_path):
 
 
 def test_speech_event_prompt_is_optional_and_limited_to_native_events():
-    from raphael.audio.speech_events import SpeechEvent, speech_event_instruction
+    from ciel.audio.speech_events import SpeechEvent, speech_event_instruction
 
     assert speech_event_instruction(enabled=False) == ""
     instruction = speech_event_instruction(enabled=True)
@@ -238,14 +285,14 @@ def test_speech_event_prompt_is_optional_and_limited_to_native_events():
     assert "[angry]" not in instruction
 
 
-def test_chatterbox_fallback_uses_amy_when_raphael_piper_is_missing(tmp_path, monkeypatch):
-    from raphael.audio.tts import PiperVoice
+def test_chatterbox_fallback_uses_amy_when_ciel_piper_is_missing(tmp_path, monkeypatch):
+    from ciel.audio.tts import PiperVoice
 
     amy = tmp_path / "en_US-amy-medium.onnx"
     amy.write_bytes(b"")
     amy.with_suffix(".onnx.json").write_text("{}")
     tts = TextToSpeech(
-        voice_name="raphael", engine="chatterbox_turbo", enabled=False,
+        voice_name="ciel", engine="chatterbox_turbo", enabled=False,
         models_dir=tmp_path, tts_fallback_voice="en_US-not-installed",
     )
     piper = object()
@@ -269,18 +316,18 @@ def test_explicit_output_device_numeric_string_and_name():
 def test_playback_buffers_audio_without_changing_waveform(monkeypatch, latency):
     from types import SimpleNamespace
 
-    from raphael.config import Settings
+    from ciel.config import Settings
 
     monkeypatch.setattr(
-        "raphael.audio.tts.get_settings",
-        lambda: Settings(_env_file=None, tts_playback_latency=0.12),
+        "ciel.audio.tts.get_settings",
+        lambda: Settings(_env_file=None, tts_engine="piper", tts_playback_latency=0.12),
     )
     options = {} if latency is None else {"playback_latency": latency}
     tts = TextToSpeech(enabled=False, output_device="USB Speaker", **options)
     tts.enabled = True
     audio = np.ones(2400, dtype=np.float32)
     monkeypatch.setattr(tts, "synthesize", lambda _text: (audio, 24000))
-    play = patch("raphael.audio.tts.sd", SimpleNamespace(
+    play = patch("ciel.audio.tts.sd", SimpleNamespace(
         play=lambda data, **kwargs: calls.append((data, kwargs)),
         get_stream=lambda: SimpleNamespace(active=False, latency=0.128),
     ))
@@ -301,7 +348,7 @@ def test_playback_reports_underruns_without_failing_speech(monkeypatch, caplog, 
     tts = TextToSpeech(enabled=False)
     tts.enabled = True
     monkeypatch.setattr(tts, "synthesize", lambda _text: (np.ones(100), 24000))
-    monkeypatch.setattr("raphael.audio.tts.sd", SimpleNamespace(
+    monkeypatch.setattr("ciel.audio.tts.sd", SimpleNamespace(
         play=lambda *_args, **_kwargs: None,
         get_stream=lambda: SimpleNamespace(active=False),
         get_status=lambda: SimpleNamespace(output_underflow=underflow),
