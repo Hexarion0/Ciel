@@ -2,6 +2,10 @@
 
 ## Unreleased — 0.3.6 development
 
+- Launch ambient conversation and live AI captions by default. Align command STT
+  across configuration, setup, and installation with small.en on CUDA/int8_float16,
+  beam 5, and a guarded medium.en retry. Preserve explicit overrides, CPU recovery,
+  the separate CPU wake recognizer, and one-run listening/caption opt-outs.
 - Use the measured working Nemotron 3 Super controller route instead of the
   stalled Lightning endpoint. Keep the eight-second decision deadline and
   explicit model overrides; require valid model responses in live diagnostics

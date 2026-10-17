@@ -38,3 +38,38 @@ def test_startup_consumes_cuda_warmup_before_reporting_ready(monkeypatch, cuda_f
         assert stt.model is gpu_model and stt.device == 'cuda'
         factory.assert_called_once()
     cpu_model.transcribe.assert_not_called()
+
+
+def test_standalone_stt_defaults_match_command_config_without_changing_wake_defaults(monkeypatch):
+    from ciel.config import AudioConfig
+
+    defaults = AudioConfig()
+    model = MagicMock()
+    load = MagicMock(return_value=model)
+    monkeypatch.setattr(SpeechToText, "_load_model", load)
+    monkeypatch.setattr("ciel.audio.stt._preload_cuda_libraries", lambda: None)
+
+    stt = SpeechToText()
+
+    assert stt.wait_ready(timeout=1)
+    assert (stt.model_size, stt.device, stt.compute_type) == (
+        defaults.stt_model, defaults.stt_device, defaults.stt_compute_type,
+    )
+    assert stt.retry_model_size == defaults.stt_retry_model
+    assert stt.retry_min_free_mb == defaults.stt_retry_min_free_mb
+    assert defaults.wake_stt_model == "base.en"
+    load.assert_called_once_with(defaults.stt_model, defaults.stt_device, defaults.stt_compute_type)
+
+
+def test_standalone_stt_keeps_explicit_cpu_and_disabled_larger_retry(monkeypatch):
+    load = MagicMock(return_value=MagicMock())
+    monkeypatch.setattr(SpeechToText, "_load_model", load)
+    monkeypatch.setattr("ciel.audio.stt._preload_cuda_libraries", lambda: None)
+
+    stt = SpeechToText(
+        model_size="tiny.en", device="cpu", compute_type="int8", retry_model=None,
+    )
+
+    assert stt.wait_ready(timeout=1)
+    assert stt.retry_model_size is None
+    load.assert_called_once_with("tiny.en", "cpu", "int8")

@@ -30,6 +30,6 @@ fi
 
 cd "${ROOT}"
 if [[ $# -eq 0 ]]; then
-  set -- --listen
+  set -- start
 fi
 exec "${PYTHON}" -m ciel "$@"

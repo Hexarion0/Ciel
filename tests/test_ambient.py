@@ -248,6 +248,7 @@ def run_callbacks(
 
     settings = config.Settings(
         _env_file=None, memory_db_path=str(tmp_path / "memory.db"), tts_streaming=streaming,
+        ambient_listening=ambient,
         show_ai_transcripts=ai_transcripts,
         tts_enabled=tts_enabled,
         controller_enabled=controller,

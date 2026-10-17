@@ -29,6 +29,14 @@ def test_selected_voice_persists_matching_engine(tmp_path, monkeypatch):
     assert (tmp_path / ".env").stat().st_mode & 0o777 == 0o600
     assert saved["TTS_VOICE"] == "en_US-amy-medium"
     assert saved["TTS_ENGINE"] == "piper"
+    assert saved["STT_MODEL"] == "small.en"
+    assert saved["STT_DEVICE"] == "cuda"
+    assert saved["STT_COMPUTE_TYPE"] == "int8_float16"
+    assert saved["STT_BEAM_SIZE"] == "5"
+    assert saved["STT_RETRY_MODEL"] == "medium.en"
+    assert saved["AMBIENT_LISTENING"] == "true"
+    assert saved["SHOW_AI_TRANSCRIPTS"] == "true"
+    assert saved["BARGE_IN_MODE"] == "speech"
     settings.cache_clear.assert_called_once()
     tts.assert_called_once_with(voice_name="en_US-amy-medium", engine="piper", enabled=True)
     tts.return_value.close.assert_called_once()
@@ -42,7 +50,9 @@ def test_setup_preserves_custom_settings_and_reports_playback_failure(
     monkeypatch.chdir(tmp_path)
     original = (
         "# Keep my settings\n"
-        "stt_model=small.en\nSTT_BEAM_SIZE=5\nMEMORY_MAX_SHORT_TERM_TURNS=20\n"
+        "stt_model=base.en\nSTT_DEVICE=cpu\nSTT_COMPUTE_TYPE=int8\nSTT_BEAM_SIZE=1\n"
+        "STT_RETRY_MODEL=\nAMBIENT_LISTENING=false\nSHOW_AI_TRANSCRIPTS=false\n"
+        "BARGE_IN_MODE=wake\nMEMORY_MAX_SHORT_TERM_TURNS=20\n"
         "TTS_VOICE=en_US-amy-medium\nTTS_ENGINE=piper\n"
         'AUDIO_INPUT_DEVICE=3\nAUDIO_OUTPUT_DEVICE="USB Speaker"\n'
         'CUSTOM_VALUE="literal ${NOT_AN_ENV_VAR}"\n'
@@ -66,7 +76,13 @@ def test_setup_preserves_custom_settings_and_reports_playback_failure(
     settings = Settings(_env_file=tmp_path / ".env")
     assert settings.audio.tts_voice == "en_US-amy-medium"
     assert settings.audio.tts_engine == "piper"
-    assert settings.stt_beam_size == 5
+    assert settings.stt_model == "base.en"
+    assert settings.stt_device == "cpu"
+    assert settings.stt_compute_type == "int8"
+    assert settings.stt_beam_size == 1
+    assert not settings.stt_retry_model
+    assert not settings.ambient_listening and not settings.show_ai_transcripts
+    assert settings.barge_in_mode == "wake"
     assert settings.memory.max_short_term_turns == 20
     assert settings.audio.input_device == 3
     assert settings.audio.output_device == "USB Speaker"

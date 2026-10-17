@@ -148,9 +148,9 @@ class AudioConfig(BaseModel):
     wake_stt_model: str = Field(default="base.en")
     wake_min_rms: float = Field(default=0.006, gt=0.0, le=0.05)
     wake_window_seconds: float = Field(default=3.0, ge=1.5, le=5.0)
-    ambient_listening: bool = Field(default=False)
+    ambient_listening: bool = Field(default=True)
     show_transcripts: bool = Field(default=False)
-    barge_in_mode: Literal["speech", "wake"] = Field(default="wake")
+    barge_in_mode: Literal["speech", "wake"] = Field(default="speech")
     barge_in_speech_seconds: float = Field(default=0.24, ge=0.16, le=1.0)
     ambient_followup_seconds: float = Field(default=300.0, ge=2, le=600)
     ambient_followup_policy: Literal["conversation", "strict"] = Field(default="conversation")
@@ -159,26 +159,26 @@ class AudioConfig(BaseModel):
         description="openWakeWord model names/paths (empty = Whisper-only keyword spotter)",
     )
     stt_model: str = Field(
-        default="base.en",
+        default="small.en",
         description="faster-whisper model size (e.g. tiny.en, base.en, small.en)",
     )
     stt_device: str = Field(
-        default="auto",
+        default="cuda",
         description="Inference device for whisper (auto, cuda, cpu)",
     )
     stt_compute_type: str = Field(
-        default="default",
-        description="Compute precision (default, int8, float16, float32)",
+        default="int8_float16",
+        description="Compute precision (default, int8, int8_float16, float16, float32)",
     )
     stt_language: str = Field(
         default="en",
         description="Primary language code for STT transcription",
     )
     stt_startup_timeout_seconds: float = Field(default=120.0, ge=0.1, le=300)
-    stt_beam_size: int = Field(default=3, ge=1, le=10)
+    stt_beam_size: int = Field(default=5, ge=1, le=10)
     stt_min_confidence: float = Field(default=0.4, ge=0.0, le=1.0)
     stt_retry_confidence: float = Field(default=0.55, ge=0.0, le=1.0)
-    stt_retry_model: str | None = Field(default=None)
+    stt_retry_model: str | None = Field(default="medium.en")
     stt_retry_min_free_mb: int = Field(default=2048, ge=0, le=65536)
     utterance_silence_seconds: float = Field(default=0.7, ge=0.3, le=5.0)
     utterance_pause_grace_seconds: float = Field(default=0.2, ge=0, le=3)
@@ -226,7 +226,7 @@ class AudioConfig(BaseModel):
         description="Enable speech synthesis voice output",
     )
     tts_streaming: bool = Field(default=True)
-    show_ai_transcripts: bool = Field(default=False)
+    show_ai_transcripts: bool = Field(default=True)
     sample_rate: int = Field(default=16000, ge=16000, le=16000, description="16 kHz audio")
     channels: int = Field(default=1, ge=1, le=1, description="Mono audio")
     input_device: int | str | None = Field(
@@ -319,21 +319,21 @@ class Settings(BaseSettings):
     wake_stt_model: str = Field(default="base.en")
     wake_min_rms: float = Field(default=0.006, gt=0.0, le=0.05)
     wake_window_seconds: float = Field(default=3.0, ge=1.5, le=5.0)
-    ambient_listening: bool = Field(default=False)
+    ambient_listening: bool = Field(default=True)
     show_transcripts: bool = Field(default=False)
-    barge_in_mode: Literal["speech", "wake"] = Field(default="wake")
+    barge_in_mode: Literal["speech", "wake"] = Field(default="speech")
     barge_in_speech_seconds: float = Field(default=0.24, ge=0.16, le=1.0)
     ambient_followup_seconds: float = Field(default=300.0, ge=2, le=600)
     ambient_followup_policy: Literal["conversation", "strict"] = Field(default="conversation")
-    stt_model: str = Field(default="base.en")
-    stt_device: str = Field(default="cpu")
-    stt_compute_type: str = Field(default="int8")
+    stt_model: str = Field(default="small.en")
+    stt_device: str = Field(default="cuda")
+    stt_compute_type: str = Field(default="int8_float16")
     stt_language: str = Field(default="en")
     stt_startup_timeout_seconds: float = Field(default=120.0, ge=0.1, le=300)
-    stt_beam_size: int = Field(default=3, ge=1, le=10)
+    stt_beam_size: int = Field(default=5, ge=1, le=10)
     stt_min_confidence: float = Field(default=0.4, ge=0.0, le=1.0)
     stt_retry_confidence: float = Field(default=0.55, ge=0.0, le=1.0)
-    stt_retry_model: str | None = Field(default=None)
+    stt_retry_model: str | None = Field(default="medium.en")
     stt_retry_min_free_mb: int = Field(default=2048, ge=0, le=65536)
     utterance_silence_seconds: float = Field(default=0.7, ge=0.3, le=5.0)
     utterance_pause_grace_seconds: float = Field(default=0.2, ge=0, le=3)
@@ -360,7 +360,7 @@ class Settings(BaseSettings):
     tts_speed: float = Field(default=1.0, gt=0.0, le=3.0)
     tts_enabled: bool = Field(default=True)
     tts_streaming: bool = Field(default=True)
-    show_ai_transcripts: bool = Field(default=False)
+    show_ai_transcripts: bool = Field(default=True)
     audio_sample_rate: int = Field(default=16000, ge=16000, le=16000)
     audio_channels: int = Field(default=1, ge=1, le=1)
     audio_input_device: int | str | None = Field(default=None)

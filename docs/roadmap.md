@@ -1,6 +1,6 @@
 # CIEL development roadmap
 
-Last reviewed: **2026-10-17**. Package version: **0.3.6 development**.
+Last reviewed: **2026-10-18**. Package version: **0.3.6 development**.
 
 The goal is a reliable personal desktop assistant with natural voice conversation,
 persistent memory, useful actions, and eventually remote messaging and presence.
@@ -69,6 +69,8 @@ this section rather than silently marking later milestones complete.
 - [x] Heuristic request routing and `/fast`, `/strong`, `/deep`, `/local` overrides.
 - [x] Explicit local time/date, memory, and desktop commands without an AI decision.
 - [x] Shared terminal/web session runtime outside CLI argument and startup handling.
+- [x] Ambient listening, live AI captions, and the main CUDA speech profile by default
+      across direct launches, installed commands, setup, and example configuration.
 - [x] Provider fallback before visible output; no splicing after a partial answer.
 - [x] Piper speech, persistent Turbo worker, bounded sentence queues and interruption.
 - [x] Contextual vocal cues, inline placement, giggle/moan aliases, and adjustable cue

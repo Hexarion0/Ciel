@@ -10,6 +10,69 @@ import pytest
 SOURCE = str(Path(__file__).resolve().parents[1] / "src")
 
 
+@pytest.mark.parametrize("launch_args", [[], ["run"], ["start"], ["listen"], ["--listen"]])
+@pytest.mark.parametrize("enabled", [True, False])
+def test_fresh_launch_uses_voice_defaults_and_explicit_opt_outs(
+    tmp_path, monkeypatch, launch_args, enabled,
+):
+    from ciel import __main__, audio, config, platform, providers
+    from ciel.audio import captions
+
+    for field in (
+        "ambient_listening", "show_transcripts", "show_ai_transcripts", "barge_in_mode",
+        "stt_model", "stt_device", "stt_compute_type", "stt_beam_size", "stt_retry_model",
+    ):
+        monkeypatch.delenv(field.upper(), raising=False)
+    settings = config.Settings(_env_file=None, memory_db_path=str(tmp_path / "memory.db"))
+    monkeypatch.setattr(config, "get_settings", lambda: settings)
+    monkeypatch.setattr(platform, "get_audio_backend", MagicMock())
+    monkeypatch.setattr(providers, "get_model_router", MagicMock())
+    for component in ("WakeWordDetector", "SpeechToText", "VoiceRecorder", "TextToSpeech"):
+        monkeypatch.setattr(audio, component, MagicMock())
+    caption_constructor = MagicMock()
+    monkeypatch.setattr(captions, "TerminalCaptions", caption_constructor)
+    listener = MagicMock(return_value=SimpleNamespace(
+        is_running=True, start=lambda: None, stop=lambda: None,
+    ))
+    monkeypatch.setattr(audio, "WakeListenerLoop", listener)
+
+    def interrupt(_seconds):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(__main__, "time", SimpleNamespace(
+        sleep=interrupt, monotonic=__main__.time.monotonic,
+    ))
+    overrides = [] if enabled else ["--no-ambient", "--no-show-ai-transcripts"]
+    monkeypatch.setattr(sys, "argv", ["ciel", *launch_args, *overrides, "--no-text-input"])
+
+    assert __main__.main() == 0
+    assert listener.call_args.kwargs["ambient"] is enabled
+    assert listener.call_args.kwargs["show_transcripts"] is False
+    assert listener.call_args.kwargs["barge_in_mode"] == "speech"
+    assert listener.call_args.kwargs["stt_beam_size"] == 5
+    assert audio.SpeechToText.call_args.kwargs["model_size"] == "small.en"
+    assert audio.SpeechToText.call_args.kwargs["device"] == "cuda"
+    assert audio.SpeechToText.call_args.kwargs["compute_type"] == "int8_float16"
+    assert audio.SpeechToText.call_args.kwargs["retry_model"] == "medium.en"
+    assert caption_constructor.call_count == int(enabled)
+    assert audio.TextToSpeech.call_args.kwargs.get("include_alignments", False) is enabled
+
+
+def test_plain_ciel_launches_even_when_ambient_is_disabled_in_settings(monkeypatch):
+    from ciel import __main__, config, platform, runtime
+
+    settings = config.Settings(_env_file=None, ambient_listening=False)
+    monkeypatch.setattr(config, "get_settings", lambda: settings)
+    monkeypatch.setattr(platform, "get_audio_backend", MagicMock())
+    launch = MagicMock(return_value=0)
+    monkeypatch.setattr(runtime, "run_desktop", launch)
+    monkeypatch.setattr(sys, "argv", ["ciel"])
+
+    assert __main__.main() == 0
+    launch.assert_called_once()
+    assert launch.call_args.args[1].audio.ambient_listening is False
+
+
 @pytest.mark.parametrize('arguments, enabled', [([], True), (
     ['--no-ambient', '--no-show-transcripts'], False,
 )])
@@ -71,6 +134,7 @@ def test_legacy_listen_wake_or_uncertain_speech_does_not_call_provider(
 
     settings = config.Settings(
         _env_file=None, memory_db_path=str(tmp_path / "memory.db"), controller_enabled=False,
+        ambient_listening=False, show_ai_transcripts=False,
     )
     monkeypatch.setattr(config, "get_settings", lambda: settings)
     monkeypatch.setattr(platform, "get_audio_backend", MagicMock())
@@ -236,6 +300,7 @@ def test_listen_archives_legacy_style_but_keeps_saved_facts(tmp_path, monkeypatc
 
     settings = config.Settings(
         _env_file=None, memory_db_path=str(tmp_path / "memory.db"), tts_streaming=False,
+        ambient_listening=False,
     )
     store = MemoryStore(settings.memory.db_path)
     legacy = ConversationManager(store=store, session_id="desktop_session")

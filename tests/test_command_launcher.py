@@ -33,14 +33,16 @@ def test_installed_command_uses_venv_and_preserves_arguments(tmp_path):
             ["bash", str(installer), "--bin-dir", str(bin_dir)], check=True,
             capture_output=True, text=True,
         )
-    for arguments in [[], ["start", "dev", "--wake-word", "hey ciel"]]:
+    for arguments in [
+        [], ["start", "dev"], ["start", "--no-ambient", "--no-show-ai-transcripts"],
+    ]:
         result = subprocess.run(
             [str(bin_dir / "ciel"), *arguments], cwd=tmp_path, check=True,
             capture_output=True, text=True,
         )
         assert result.stdout.splitlines() == [
             str(checkout), str(checkout / ".venv/bin/python"), "-m", "ciel",
-            *(arguments or ["--listen"]),
+            *(arguments or ["start"]),
         ]
 
 

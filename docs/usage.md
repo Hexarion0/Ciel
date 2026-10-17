@@ -93,12 +93,11 @@ development-day counts calculated from a confirmed start date.
 
 ## GPU speech recognition
 
-For CUDA speech recognition, install the runtime libraries in the application
-virtual environment with `.venv/bin/python -m pip install -e ".[gpu]"` (Linux).
+The default command recognizer is `small.en` on CUDA with `int8_float16` and beam
+size 5. The installer includes the runtime libraries; existing installations can
+add them with `.venv/bin/python -m pip install -e ".[gpu]"` (Linux).
 This keeps speech recognition independent of the voice-training environment.
-Then set `STT_DEVICE=cuda` and
-`STT_COMPUTE_TYPE=int8_float16`, then start with
-`./scripts/launch_ciel_gpu.sh --listen`. The launcher adds existing NVIDIA
+Start with `ciel`, or `./scripts/launch_ciel_gpu.sh`. The launcher adds existing NVIDIA
 library directories from the application or Piper training environment before
 starting Python. It does not install libraries or start training. CUDA 12 cuBLAS
 and cuDNN 9 are required by
@@ -182,7 +181,7 @@ the recognized words at INFO level, including rejected ambient speech. Set
 `SHOW_TRANSCRIPTS=true` in `.env` to make this the default, or override it for a run
 with `--no-show-transcripts`. Recognizable but low-confidence
 direct speech can prompt a repeat without executing or saving the uncertain text.
-Set `SHOW_AI_TRANSCRIPTS=true` for captions that reveal letters as the voice
+Live AI captions are enabled by default and reveal letters as the voice
 plays, including local greetings and clock answers. For a single run, use
 `--show-ai-transcripts` or `--no-show-ai-transcripts` to override this setting.
 The terminal appends letters to one `CIEL: ` line for the whole reply,
@@ -208,8 +207,8 @@ Bare wake phrases meeting the acceptance threshold skip the larger quality retry
 If a quality retry runs out of memory, its cached model is released and further
 quality retries on that device are disabled for this process. Primary transcription
 continues. A CPU fallback discards any cached GPU retry model.
-`STT_BEAM_SIZE=3` reduces decoding work; raise it if recognition accuracy needs
-more search. `UTTERANCE_SILENCE_SECONDS=0.7` plus
+The default `STT_BEAM_SIZE=5` favors recognition accuracy; a smaller beam reduces
+decoding work. `UTTERANCE_SILENCE_SECONDS=0.7` plus
 `UTTERANCE_PAUSE_GRACE_SECONDS=0.2` gives 0.9 seconds before an utterance finishes;
 increase the grace if you pause longer mid-sentence. Recording uses local VAD
 instead of relying only on volume, so quiet speech and louder steady noise can
@@ -236,9 +235,9 @@ questions that merely contain farewell words do not.
 
 ## Ambient conversation
 
-Start optional ambient listening with `./scripts/launch_ciel_gpu.sh --ambient`,
-or set `AMBIENT_LISTENING=true` in `.env`. With no arguments the GPU launcher starts
-listening using `.env` settings, so `./scripts/launch_ciel_gpu.sh` is sufficient.
+Ambient listening is the default for `ciel`, `ciel start`, and the GPU launcher.
+Existing explicit `.env` choices still apply; set `AMBIENT_LISTENING=true` to
+enable it in an older configuration. No additional launch flags are needed.
 `--no-ambient` selects wake-word mode for one run. Local Silero VAD captures
 speech without a wake phrase at 16 kHz. Direct addresses are handled locally;
 possible follow-ups within `AMBIENT_FOLLOWUP_SECONDS` (300 seconds by default)
@@ -383,7 +382,8 @@ filtered from output and speech. Logs separate first text, first audio, provider
 generation time, and total reply time; these are measurements, not latency guarantees.
 
 While Turbo or other work shares the GPU, `small.en` with `int8_float16` is the
-measured GPU configuration for command STT. The fresh-install example uses CPU `base.en`. Before allocating a separate CUDA quality-retry
+default command STT profile. Fresh configuration also selects `medium.en` as the
+quality retry. Before allocating a separate CUDA quality-retry
 model, CIEL checks free VRAM on its default GPU. `STT_RETRY_MIN_FREE_MB=2048`
 sets the minimum; if memory is lower or cannot be checked, the already loaded
 primary model receives a stronger decode instead. Temporary CUDA retry models
@@ -394,9 +394,9 @@ process can still change free memory between the check and inference.
 
 ## Speech recognition accuracy
 
-If short phrases are misheard, try `STT_MODEL=small.en` and `STT_BEAM_SIZE=5`.
-The larger model needs more CPU time; compare recognition on your microphone
-before choosing the faster `base.en` setting. Use an explicit microphone index
+Command STT defaults to `STT_MODEL=small.en` and `STT_BEAM_SIZE=5`.
+Larger models and wider beams need more inference time; compare recognition on
+your microphone before changing them. Use an explicit microphone index
 or name if the system default is ambiguous.
 
 The wake keyword spotter applies speech filtering and ignores low-confidence

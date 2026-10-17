@@ -14,6 +14,7 @@ def model_without_downloads(monkeypatch):
     model = MagicMock()
     model.transcribe.return_value = ([], SimpleNamespace(language="en", duration=1.0))
     monkeypatch.setattr(SpeechToText, "_load_model", lambda *_args: model)
+    monkeypatch.setattr("ciel.audio.stt.WhisperModel", MagicMock(return_value=model))
     monkeypatch.setattr("ciel.audio.stt._preload_cuda_libraries", lambda: None)
     monkeypatch.setattr("ciel.audio.stt.free_cuda_memory_mb", lambda: 8192)
     return model
@@ -216,7 +217,7 @@ def test_larger_retry_model_is_loaded_only_for_ambiguous_speech(
     larger.transcribe.return_value = decoding("Correct command", -0.1)
     factory = MagicMock(return_value=larger)
     monkeypatch.setattr("ciel.audio.stt.WhisperModel", factory)
-    stt = SpeechToText(retry_model="medium.en")
+    stt = SpeechToText(retry_model="medium.en", device="cpu", compute_type="int8")
     model_without_downloads.transcribe.return_value = decoding("Clear command", -0.1)
     audio = np.ones(16000, dtype=np.float32) * 0.1
     assert stt.transcribe(audio) == "Clear command"
@@ -224,7 +225,7 @@ def test_larger_retry_model_is_loaded_only_for_ambiguous_speech(
     model_without_downloads.transcribe.return_value = decoding("Wrong command", -1.2)
     assert stt.transcribe(audio) == "Correct command"
     assert stt.transcribe(audio) == "Correct command"
-    factory.assert_called_once_with("medium.en", device="auto", compute_type="default")
+    factory.assert_called_once_with("medium.en", device="cpu", compute_type="int8")
     assert larger.transcribe.call_count == 2
 
 

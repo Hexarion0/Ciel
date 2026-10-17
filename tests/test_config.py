@@ -35,6 +35,41 @@ def test_fresh_voice_defaults_use_cpu_pocket(configuration):
 
 
 @pytest.mark.parametrize("configuration", [Settings, AudioConfig])
+def test_fresh_speech_defaults_match_the_desktop_conversation_profile(configuration):
+    """Keep direct configuration and environment settings on the same voice profile."""
+    with patch.dict(os.environ, {}, clear=True):
+        selected = configuration(_env_file=None) if configuration is Settings else configuration()
+    audio = selected.audio if configuration is Settings else selected
+    assert (audio.stt_model, audio.stt_device, audio.stt_compute_type) == (
+        "small.en", "cuda", "int8_float16",
+    )
+    assert audio.stt_beam_size == 5
+    assert audio.stt_retry_model == "medium.en"
+    assert audio.stt_retry_min_free_mb == 2048
+    assert audio.wake_stt_model == "base.en"
+    assert audio.ambient_listening and audio.show_ai_transcripts
+    assert not audio.show_transcripts
+    assert audio.barge_in_mode == "speech"
+
+
+def test_explicit_cpu_and_wake_only_configuration_overrides_new_desktop_defaults(tmp_path):
+    """Users can retain a lighter recognizer and their chosen listening behavior."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "STT_MODEL=base.en\nSTT_DEVICE=cpu\nSTT_COMPUTE_TYPE=int8\n"
+        "STT_BEAM_SIZE=1\nSTT_RETRY_MODEL=\nAMBIENT_LISTENING=false\n"
+        "SHOW_AI_TRANSCRIPTS=false\nBARGE_IN_MODE=wake\n"
+    )
+    with patch.dict(os.environ, {}, clear=True):
+        audio = Settings(_env_file=env_file).audio
+    assert (audio.stt_model, audio.stt_device, audio.stt_compute_type) == ("base.en", "cpu", "int8")
+    assert audio.stt_beam_size == 1
+    assert not audio.stt_retry_model
+    assert not audio.ambient_listening and not audio.show_ai_transcripts
+    assert audio.barge_in_mode == "wake"
+
+
+@pytest.mark.parametrize("configuration", [Settings, AudioConfig])
 @pytest.mark.parametrize(
     ("values", "engine", "voice"),
     [
@@ -68,10 +103,14 @@ def test_example_configuration_starts_with_cpu_pocket():
     audio = settings.audio
     assert (audio.tts_engine, audio.tts_voice) == ("pocket", "ciel")
     assert audio.tts_pocket_device == "cpu" and audio.tts_pocket_quantization == "none"
-    assert (audio.stt_model, audio.stt_device, audio.stt_compute_type) == ("base.en", "cpu", "int8")
-    assert not audio.ambient_listening and not audio.show_transcripts
-    assert audio.barge_in_mode == "wake"
-    assert not audio.stt_retry_model
+    assert (audio.stt_model, audio.stt_device, audio.stt_compute_type) == (
+        "small.en", "cuda", "int8_float16",
+    )
+    assert audio.ambient_listening and audio.show_ai_transcripts
+    assert not audio.show_transcripts
+    assert audio.barge_in_mode == "speech"
+    assert audio.stt_beam_size == 5
+    assert audio.stt_retry_model == "medium.en"
 
 
 def test_fresh_controller_uses_the_validated_nim_model_consistently():

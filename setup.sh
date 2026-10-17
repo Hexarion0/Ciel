@@ -56,18 +56,23 @@ echo -e "   Active Python: ${GREEN}$(which python)${NC}"
 # 3. Install Dependencies
 echo -e "\n${BOLD}[3/5] Installing dependencies and packages...${NC}"
 python -m pip install --upgrade pip --quiet
-# Preinstall the CPU torch wheel on fresh environments to avoid pulling CUDA libraries.
+# Preinstall CPU torch for Pocket, avoiding Torch's additional CUDA stack.
 # Existing torch installations are preserved; Pocket never initializes CUDA.
 if ! python -c 'import importlib.util; assert importlib.util.find_spec("torch")'; then
     python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
 fi
-python -m pip install -e ".[pocket-tts]"
+python -m pip install -e ".[pocket-tts,gpu]"
 echo -e "   ${GREEN}✅ Dependencies successfully installed.${NC}"
 
-# 4. Pre-download Default Models (Whisper STT & Piper TTS)
+# 4. Pre-download Configured Speech Models (Whisper STT & Piper TTS)
 echo -e "\n${BOLD}[4/5] Pre-downloading voice and AI models...${NC}"
-python -c "
+python - <<'PY'
 from pathlib import Path
+
+from faster_whisper import download_model
+
+from ciel.config import get_settings
+
 print('   Checking Piper TTS voice model...')
 from piper.download_voices import download_voice
 tts_dir = Path('models/tts')
@@ -79,11 +84,18 @@ if not all((tts_dir / name).is_file() for name in (
     download_voice('en_US-amy-medium', tts_dir)
 print('   Piper voice ready.')
 
-print('   Checking faster-whisper base.en model...')
-from faster_whisper import WhisperModel
-model = WhisperModel('base.en', device='cpu', compute_type='int8')
-print('   Whisper model ready.')
-"
+audio = get_settings().audio
+for model_name in dict.fromkeys((audio.stt_model, audio.wake_stt_model)):
+    model_path = Path(model_name).expanduser()
+    if model_path.is_dir():
+        print(f'   Using local speech model: {model_path}')
+        continue
+    if model_path.is_absolute() or model_name.startswith(('./', '../', '~')):
+        raise FileNotFoundError(f'Configured speech model directory is missing: {model_path}')
+    print(f'   Checking faster-whisper model: {model_name}')
+    download_model(model_name)
+print('   Command and wake speech models ready (no inference initialized).')
+PY
 echo -e "   ${GREEN}✅ Neural voice and speech models ready.${NC}"
 
 # 5. Configuration & Setup Wizard

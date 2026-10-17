@@ -166,17 +166,9 @@ def main() -> int:
         settings.providers.ollama_host,
     )
 
-    if args.listen or args.text_input is True or args.command in {"start", "listen", "web"} or (
-        args.command == "run" and (settings.audio.ambient_listening or args.ambient is not None)
-    ):
-        from ciel.runtime import run_desktop
+    from ciel.runtime import run_desktop
 
-        return run_desktop(args, settings, logger, audio_backend, clock=time)
-
-    logger.info("Ready. Use 'ciel start' for live voice listening.")
-    logger.info("Use 'python -m ciel record-samples' to record voice samples.")
-    logger.info("Use 'python -m ciel train-wake' to train a personalized wake model.")
-    return 0
+    return run_desktop(args, settings, logger, audio_backend, clock=time)
 
 
 if __name__ == "__main__":

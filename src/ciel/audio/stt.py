@@ -12,10 +12,12 @@ from typing import Any
 import numpy as np
 from faster_whisper import WhisperModel
 
+from ciel.config import AudioConfig
 from ciel.conversation import strip_wake_phrase
 from ciel.logging import get_logger
 
 logger = get_logger("audio.stt")
+_DEFAULT_AUDIO = AudioConfig()
 
 
 def free_cuda_memory_mb() -> int | None:
@@ -78,17 +80,17 @@ class SpeechToText:
 
     def __init__(
         self,
-        model_size: str = "base.en",
-        device: str = "auto",
-        compute_type: str = "default",
-        language: str = "en",
+        model_size: str = _DEFAULT_AUDIO.stt_model,
+        device: str = _DEFAULT_AUDIO.stt_device,
+        compute_type: str = _DEFAULT_AUDIO.stt_compute_type,
+        language: str = _DEFAULT_AUDIO.stt_language,
         initial_prompt: str = "Ciel is the name of the assistant.",
-        min_confidence: float = 0.4,
-        retry_confidence: float = 0.55,
-        retry_model: str | None = None,
-        wake_phrase: str = "hey ciel",
-        retry_min_free_mb: int = 2048,
-        load_timeout: float = 120.0,
+        min_confidence: float = _DEFAULT_AUDIO.stt_min_confidence,
+        retry_confidence: float = _DEFAULT_AUDIO.stt_retry_confidence,
+        retry_model: str | None = _DEFAULT_AUDIO.stt_retry_model,
+        wake_phrase: str = _DEFAULT_AUDIO.wake_word,
+        retry_min_free_mb: int = _DEFAULT_AUDIO.stt_retry_min_free_mb,
+        load_timeout: float = _DEFAULT_AUDIO.stt_startup_timeout_seconds,
     ) -> None:
         if not 0.0 <= min_confidence <= 1.0 or not 0.0 <= retry_confidence <= 1.0:
             raise ValueError("STT confidence thresholds must be between zero and one")
@@ -227,7 +229,7 @@ class SpeechToText:
         self,
         audio: np.ndarray | str | Path,
         language: str | None = None,
-        beam_size: int = 5,
+        beam_size: int = _DEFAULT_AUDIO.stt_beam_size,
     ) -> str:
         """Transcribe an audio numpy array or file path to plain text."""
         result = self.transcribe_detailed(
@@ -241,7 +243,7 @@ class SpeechToText:
         self,
         audio: np.ndarray | str | Path,
         language: str | None = None,
-        beam_size: int = 5,
+        beam_size: int = _DEFAULT_AUDIO.stt_beam_size,
     ) -> dict[str, Any]:
         """Transcribe audio with Silero VAD filtering and anti-hallucination safeguards."""
         if isinstance(audio, np.ndarray) and (audio.size == 0 or not np.any(audio)):

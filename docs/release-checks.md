@@ -25,6 +25,32 @@ separate directory, run both `python -m ciel --help` and `ciel --help`, then
 `pip check`. Verify normal startup does not require optional training packages.
 Select an existing local Piper model to check synthesis without playback.
 
+Fresh launch should use ambient listening, live AI captions, and command STT
+`small.en` on CUDA/`int8_float16` with beam 5. The separate wake recognizer remains
+CPU `base.en`. Check plain `ciel` as well as `ciel start`; neither needs additional
+mode flags. Explicit `--no-ambient` and `--no-show-ai-transcripts` override those
+defaults for one run. Older `.env` values remain explicit overrides; use a newly
+configured environment when validating fresh defaults.
+
+For an installed package's CUDA test, include the `gpu` extra when installing
+the current source: run `python -m pip install '.[gpu]'` from the source root
+using the isolated environment's Python. Reinstall an earlier wheel before testing changed
+defaults. Without usable CUDA, check the logged CPU recovery independently.
+
+## Recorded validation — 2026-10-18 (normal startup defaults)
+
+- 1,630 non-integration tests passed; five hardware/model integrations were
+  excluded. Ruff, dependency, shell syntax, and whitespace checks passed.
+- Fresh configuration, setup, direct STT construction, example configuration, and
+  normal launch agree on small.en/CUDA/int8_float16, beam 5, guarded medium.en
+  retry, ambient conversation, live AI captions, and speech interruption.
+  Explicit CPU, wake-only, and hidden-caption settings remain supported.
+- The wheel built and installed outside the checkout. Fresh default settings,
+  plain command startup, captions, and explicit opt-outs passed with mocked
+  hardware/providers. Installer prefetch tests verify configured distinct command
+  and wake downloads without inference; no real installer or new model download
+  was run for this change.
+
 ## Recorded validation — 2026-10-18 (user confirmation)
 
 The user reported that CIEL was working well after the controller recovery fix

@@ -30,7 +30,8 @@ See the [roadmap](docs/roadmap.md) for implementation status and priorities.
 ## Install and start
 
 Use **Python 3.10+** on Linux with a working microphone and audio output.
-A GPU is optional for the default Pocket/CPU setup. Initial package and model
+A GPU is optional: command STT prefers CUDA and recovers on CPU if unavailable;
+the default Pocket voice runs on CPU. Initial package and model
 installation needs internet access. Provider replies need a configured cloud
 account or a running local Ollama server with a model installed.
 
@@ -41,8 +42,9 @@ bash setup.sh
 ciel start
 ```
 
-The installer creates `.venv`, installs CIEL with Pocket support, downloads fallback Amy and
-Whisper `base.en`, and opens the configuration wizard for API keys, voice, and
+The installer creates `.venv`, installs CIEL with Pocket support and CUDA STT libraries,
+downloads fallback Amy, the configured command STT model (default `small.en`),
+and the separate wake model (`base.en`), then opens configuration for API keys, voice, and
 audio devices. If `.env` already exists, it offers to reconfigure it.
 It also installs a `ciel` launcher in `~/.local/bin` that uses this checkout's
 `.venv` and CUDA libraries automatically. Keep the checkout in place and add
@@ -52,7 +54,7 @@ For a manual installation:
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install -e ".[pocket-tts]"
+.venv/bin/python -m pip install -e ".[pocket-tts,gpu]"
 .venv/bin/ciel setup
 .venv/bin/ciel start
 ```
@@ -62,6 +64,9 @@ voice playback; it preserves unrelated settings on reconfiguration. Amy and Whis
 models download when first needed if they are not already present. Alternatively,
 copy `.env.example` to `.env` and edit it; fresh settings, the wizard, and the example
 use CPU Pocket with the CIEL profile (provisional Alba without private references).
+Command STT uses `small.en` on CUDA with `int8_float16`, beam size 5, and a guarded
+`medium.en` retry. Ambient listening, speech interruption, and live AI captions
+start automatically. Existing explicit settings keep their selected values.
 Existing explicit voice choices are preserved. If Pocket is unavailable, playback
 tries installed local Piper voices; choose Amy in setup to download its fallback model.
 
@@ -135,10 +140,10 @@ No provider setup is needed for local clock, memory, or supported desktop action
 ## Everyday use
 
 ```bash
-.venv/bin/ciel start                    # concise console, wake-word mode by default
+.venv/bin/ciel start                    # ambient conversation and live AI captions
 .venv/bin/ciel start dev                # detailed diagnostics
-.venv/bin/ciel start --ambient          # optional continuous speech capture
-.venv/bin/ciel start --show-ai-transcripts
+.venv/bin/ciel start --no-ambient        # use wake-word mode for this run
+.venv/bin/ciel start --no-show-ai-transcripts # hide live AI captions for this run
 .venv/bin/ciel setup                    # change voice, keys, or audio devices
 ```
 
@@ -232,24 +237,27 @@ silently fall back to a larger cloud model. Each web report has a deadline of at
 
 | Setting | Fresh-install value | Purpose |
 | --- | --- | --- |
-| `STT_MODEL` / `STT_DEVICE` | `base.en` / `cpu` | Command transcription |
+| `STT_MODEL` / `STT_DEVICE` | `small.en` / `cuda` | Command transcription; CPU recovery if unavailable |
+| `STT_COMPUTE_TYPE` / `STT_BEAM_SIZE` | `int8_float16` / `5` | Command decoding precision and beam width |
+| `STT_RETRY_MODEL` | `medium.en` | Quality retry when free memory permits |
 | `WAKE_STT_MODEL` | `base.en` | Separate CPU wake recognizer |
 | `UTTERANCE_SILENCE_SECONDS` | `0.7` | Silence before ending a turn |
 | `UTTERANCE_PAUSE_GRACE_SECONDS` | `0.2` | Extra pause tolerance; total default 0.9 seconds |
-| `AMBIENT_LISTENING` | `false` | Capture speech without a wake phrase |
+| `AMBIENT_LISTENING` | `true` | Capture speech and classify intended-listener context |
 | `AMBIENT_FOLLOWUP_SECONDS` | `300` | Active ambient conversation window |
-| `BARGE_IN_MODE` | `wake` | Interrupt by name; use `speech` with headphones |
+| `BARGE_IN_MODE` | `speech` | Interrupt with speech; use `wake` to require a name |
 | `SHOW_TRANSCRIPTS` | `false` | Raw STT diagnostics in development output |
-| `SHOW_AI_TRANSCRIPTS` | `false` | Captions during playback |
+| `SHOW_AI_TRANSCRIPTS` | `true` | Captions during playback |
 
 Increase pause grace if CIEL cuts you off while thinking. The previous
 1.8-second endpoint was more tolerant of pauses in recorded reference passages;
 the current shorter default still needs live microphone acceptance.
 
-For NVIDIA CUDA transcription, install `.venv/bin/python -m pip install -e ".[gpu]"`,
-set `STT_DEVICE=cuda` and `STT_COMPUTE_TYPE=int8_float16`, then run
-`./scripts/launch_ciel_gpu.sh`. This launcher prepares CUDA library paths;
-it does not install models or force GPU settings. `small.en` is the model used
+Existing installations can add the CUDA STT libraries with
+`.venv/bin/python -m pip install -e ".[gpu]"`. The normal launch already selects
+CUDA transcription; `./scripts/launch_ciel_gpu.sh` also prepares library paths.
+Explicit `STT_DEVICE=cpu` with `STT_COMPUTE_TYPE=int8` selects CPU operation.
+`small.en` is the model used
 in the recorded GPU tests. Turbo has its own separate environment.
 
 See [usage and tuning](docs/usage.md) for ambient follow-ups, strict mode,
