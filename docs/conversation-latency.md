@@ -6,6 +6,31 @@ plus 0.2 seconds of grace. That later 0.9-second setting needs live acceptance
 and does not inherit the no-cut or latency results below. Current configuration
 is documented in the [README](../README.md).
 
+## Controller follow-up — 2026-10-17
+
+The conversation routes already selected Super, but the separate controller still
+defaulted to Lightning. Six synthetic controller requests each reached the
+eight-second application deadline without a valid model reply. The old checker
+incorrectly marked two as passed after local safety rules supplied an answer;
+diagnostics now require a valid model response as well as the expected final action.
+
+A direct probe excluded CIEL's conversation and audio path: the authenticated model
+catalog returned HTTP 200 in 0.46 seconds and listed Lightning, but a tiny Lightning
+stream received no response headers before its 12-second read timeout. The same
+synthetic request through the configured Super conversation model received headers
+in 0.62 seconds, first content in 0.73 seconds, and completed in 0.77 seconds.
+Changing only the controller model then passed the same six cases in 1.14–5.15
+seconds each. These measurements locate this observed delay at the hosted model
+endpoint; they cannot distinguish its internal queueing from model execution.
+The corrected checker then passed all 21 checks: 20 valid controller decisions in
+1.08–3.09 seconds each and one report validated against a synthetic page.
+
+Fresh controller configuration now selects `nvidia/nemotron-3-super-120b-a12b`,
+matching the measured conversation route. The eight-second decision deadline,
+private routing, and explicit custom model overrides remain. Restart CIEL to load
+the setting. These synthetic checks do not establish microphone or speaker quality
+or guarantee future hosted-service latency.
+
 ## Result
 
 CIEL was not waiting for the complete reply. It already requested an SSE stream,

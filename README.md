@@ -172,8 +172,10 @@ Explicitly addressed, reliably transcribed clock, memory, and supported desktop
 commands run through local handlers without an AI request. Other transcripts and
 typed messages go to an AI controller, which chooses silence, a reply,
 a clarification, web search, page reading, or an existing local tool. By default it uses
-`nvidia/nemotron-3.5-lightning-30b-a3b` through your NIM account. Conversation replies
+`nvidia/nemotron-3-super-120b-a12b` through your NIM account. Conversation replies
 use the normal provider settings. Stop and mute controls remain immediate.
+Existing `CONTROLLER_MODEL` overrides are preserved; update yours if it still
+selects Lightning, then restart CIEL.
 
 For searches, CIEL gives a short spoken acknowledgment, retrieves pages using an
 AI-written query, and reports the supported answer. The controller uses recent user
@@ -205,7 +207,7 @@ Edit `.env` and restart to change these controls:
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `CONTROLLER_ENABLED` | `true` | Use AI decisions; `false` restores the earlier intent handlers |
-| `CONTROLLER_MODEL` | `nvidia/nemotron-3.5-lightning-30b-a3b` | Dedicated NIM decision and web report model |
+| `CONTROLLER_MODEL` | `nvidia/nemotron-3-super-120b-a12b` | Dedicated NIM decision and web report model |
 | `CONTROLLER_TIMEOUT_SECONDS` | `8.0` | Deadline for each action decision |
 | `CONTROLLER_MAX_TOOL_STEPS` | `3` | Maximum sequential web lookups per turn |
 | `INTERNET_ENABLED` | `true` | Enable public search and page reading |

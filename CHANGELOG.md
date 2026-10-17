@@ -2,6 +2,10 @@
 
 ## Unreleased — 0.3.6 development
 
+- Use the measured working Nemotron 3 Super controller route instead of the
+  stalled Lightning endpoint. Keep the eight-second decision deadline and
+  explicit model overrides; require valid model responses in live diagnostics
+  so local safety handling cannot hide provider failures.
 - Keep superseded speech handling off the provider path, clear stale fragments
   when typing, and share one controller deadline across follow-up checks. Route
   supported personal corrections locally and explain when an unaddressed memory

@@ -25,6 +25,24 @@ separate directory, run both `python -m ciel --help` and `ciel --help`, then
 `pip check`. Verify normal startup does not require optional training packages.
 Select an existing local Piper model to check synthesis without playback.
 
+## Recorded validation — 2026-10-17 (controller timeout recovery)
+
+- 1,606 non-integration tests passed; five hardware/model integrations were
+  excluded. Ruff, dependency, and whitespace checks passed. New regressions cover
+  consistent controller defaults and refusing false diagnostic passes after model
+  timeouts, malformed replies, low confidence, or late completion.
+- The corrected live checker passed all 21 synthetic checks: 20 valid controller
+  decisions in 1.08–3.09 seconds each and one report validated against a synthetic
+  page. It used the configured NIM service without live search or private history.
+- Fresh settings select Super while preserving the eight-second decision deadline
+  and explicit custom model overrides. The current local configuration resolves to
+  Super and retains the custom Turbo voice.
+- A synthetic typed greeting passed the real controller in 6.91 seconds and
+  received a real NIM conversation reply in another 1.74 seconds. It loaded no
+  conversation database and used no microphone, playback, or desktop actions.
+  Restart an existing CIEL process to load the new setting. Live audio acceptance
+  and future hosted-service latency remain separate checks.
+
 ## Recorded validation — 2026-10-17 (repository review)
 
 - 1,595 non-integration tests passed; five hardware/model integrations were
@@ -60,7 +78,7 @@ Select an existing local Piper model to check synthesis without playback.
 
 ## Live internet acceptance
 
-With `CONTROLLER_ENABLED=true`, use the configured lightweight NIM model. Confirm
+With `CONTROLLER_ENABLED=true`, use the configured NIM controller model. Confirm
 logs show `AI chose ...` before public retrieval. Explicit local commands use the
 local-command log instead and need no NIM request. Search acknowledgment must finish
 before the first lookup; the factual report waits for source validation. Test

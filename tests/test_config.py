@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 from pydantic import ValidationError
 
-from ciel.config import AudioConfig, InternetConfig, Settings
+from ciel.config import AudioConfig, ControllerConfig, InternetConfig, Settings
 
 
 def test_default_settings():
@@ -72,6 +72,19 @@ def test_example_configuration_starts_with_cpu_pocket():
     assert not audio.ambient_listening and not audio.show_transcripts
     assert audio.barge_in_mode == "wake"
     assert not audio.stt_retry_model
+
+
+def test_fresh_controller_uses_the_validated_nim_model_consistently():
+    """Fresh and example configuration must retain the measured working route."""
+    example = Path(__file__).resolve().parents[1] / ".env.example"
+    with patch.dict(os.environ, {}, clear=True):
+        controllers = (
+            ControllerConfig(), Settings(_env_file=None).controller,
+            Settings(_env_file=example).controller,
+        )
+    for controller in controllers:
+        assert controller.model == "nvidia/nemotron-3-super-120b-a12b"
+        assert controller.timeout_seconds == 8.0
 
 
 def test_environment_override():

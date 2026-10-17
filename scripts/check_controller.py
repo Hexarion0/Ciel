@@ -8,7 +8,9 @@ It does not use the microphone, execute local actions, or search the public web.
 from __future__ import annotations
 
 import json
+import re
 import sys
+import threading
 import time
 
 from ciel.config import InternetConfig, get_settings
@@ -18,13 +20,55 @@ from ciel.providers.base import ChatMessage
 from ciel.providers.router import ModelRouter
 
 
+class _DecisionProbe:
+    """Record model health before application safety rules can replace a decision."""
+
+    def __init__(self, router: ModelRouter, timeout: float) -> None:
+        self.router = router
+        self.deadline = time.monotonic() + timeout
+        self._checks: list[tuple[bool, str | None]] = []
+        self._lock = threading.Lock()
+
+    def send(self, *args, **kwargs):
+        """Preserve routing while validating each actual controller model response."""
+        with self._lock:
+            index = len(self._checks)
+            self._checks.append((False, "Model decision did not complete"))
+        try:
+            response = self.router.send(*args, **kwargs)
+            content = response.content.strip()
+            fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", content, re.I | re.S)
+            decision = ControllerDecision.model_validate_json(
+                fenced.group(1) if fenced else content,
+            )
+            error = None if decision.confidence >= 0.5 else "Model confidence is below 0.5"
+            if time.monotonic() >= self.deadline:
+                error = "Model decision exceeded the controller deadline"
+        except Exception as failure:
+            with self._lock:
+                self._checks[index] = (False, type(failure).__name__)
+            raise
+        with self._lock:
+            self._checks[index] = (error is None, error)
+        return response
+
+    def result(self) -> tuple[bool, str | None]:
+        """Fail closed for unfinished, invalid, low-confidence, or failed model calls."""
+        with self._lock:
+            checks = self._checks[:]
+        if not checks:
+            return False, "No model decision was requested"
+        errors = [error for valid, error in checks if not valid]
+        return not errors, "; ".join(error for error in errors if error) or None
+
+
 def main() -> int:
     """Print measured choices and exit nonzero if a routing or evidence check fails."""
     settings = get_settings()
     if not settings.providers.nim_api_key:
         print("NIM_API_KEY is required for this live check.")
         return 1
-    controller = AIController(ModelRouter(), settings.controller)
+    router = ModelRouter()
     anime = "Where does Amber Works season 4 part 2 continue in the light novel?"
     # Expected action and query terms test behavior, not exact model wording.
     cases = [
@@ -79,15 +123,21 @@ def main() -> int:
         if previous and previous_reply:
             messages.append(ChatMessage("assistant", previous_reply))
         started = time.monotonic()
+        probe = _DecisionProbe(router, settings.controller.timeout_seconds)
+        controller = AIController(probe, settings.controller)
         choice = controller.decide(text, messages, **{
             "addressed": True, "active": True, "internet_enabled": True, **options,
         })
-        passed = choice.confidence >= 0.5 and choice.action == action and all(
-            term in choice.query.casefold() for term in query_terms
+        model_decision_valid, model_error = probe.result()
+        passed = (
+            model_decision_valid and choice.confidence >= 0.5 and choice.action == action
+            and all(term in choice.query.casefold() for term in query_terms)
         )
         passed = passed and (expected_intent is None or choice.intent == expected_intent)
         failures += not passed
         print(json.dumps({"case": name, "passed": passed,
+                          "model_decision_valid": model_decision_valid,
+                          "model_error": model_error,
                           "seconds": round(time.monotonic() - started, 2),
                           **choice.model_dump()}), flush=True)
 
@@ -107,6 +157,7 @@ def main() -> int:
 
     messages = [ChatMessage("system", "Be concise. This is a fictional test story."),
                 ChatMessage("user", "Where does Amber Works season 4 part 2 end in the novel?")]
+    controller = AIController(router, settings.controller)
     reply = controller.run_web(
         ControllerDecision(action="search", confidence=1,
                            query="Amber Works season 4 part 2 light novel continuation"),

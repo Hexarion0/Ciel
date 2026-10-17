@@ -72,7 +72,7 @@ class ControllerConfig(BaseModel):
     """Lightweight AI decisions and bounded public-tool loops."""
 
     enabled: bool = True
-    model: str = "nvidia/nemotron-3.5-lightning-30b-a3b"
+    model: str = "nvidia/nemotron-3-super-120b-a12b"
     timeout_seconds: float = Field(default=8.0, ge=0.1, le=30)
     max_tool_steps: int = Field(default=3, ge=1, le=5)
 
@@ -296,7 +296,7 @@ class Settings(BaseSettings):
 
     # AI controller settings; private conversations still require the local provider.
     controller_enabled: bool = Field(default=True)
-    controller_model: str = Field(default="nvidia/nemotron-3.5-lightning-30b-a3b")
+    controller_model: str = Field(default="nvidia/nemotron-3-super-120b-a12b")
     controller_timeout_seconds: float = Field(default=8.0, ge=0.1, le=30)
     controller_max_tool_steps: int = Field(default=3, ge=1, le=5)
 
