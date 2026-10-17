@@ -25,6 +25,16 @@ separate directory, run both `python -m ciel --help` and `ciel --help`, then
 `pip check`. Verify normal startup does not require optional training packages.
 Select an existing local Piper model to check synthesis without playback.
 
+## Recorded validation — 2026-10-18 (user confirmation)
+
+The user reported that CIEL was working well after the controller recovery fix
+in `e60a62d`. This is confirmation from normal use; individual acceptance-case
+results and device timings were not supplied. The broader acceptance checklist
+and clean-install validation retain their existing status.
+
+The controller fix's [GitHub checks](https://github.com/Hexarion0/Ciel/actions/runs/39050301565)
+also passed on Python 3.10 and 3.14.
+
 ## Recorded validation — 2026-10-17 (controller timeout recovery)
 
 - 1,606 non-integration tests passed; five hardware/model integrations were
