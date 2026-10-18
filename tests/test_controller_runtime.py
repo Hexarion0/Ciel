@@ -9,6 +9,7 @@ import pytest
 from ciel.config import InternetConfig
 from ciel.internet import InternetResult, InternetService, InternetSource
 from ciel.providers.base import LLMResponse
+from ciel.providers.router import ModelRouter
 from tests.test_ambient import run_callbacks
 
 
@@ -258,6 +259,253 @@ def test_superseded_background_speech_does_not_call_controller(tmp_path, monkeyp
         router.send.assert_not_called()
         assert turns == []
         tts.speak.assert_not_called()
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("private", [False, True])
+@pytest.mark.parametrize("middle", ["And include examples.", ""])
+def test_repeated_superseded_fragments_reach_one_final_controller_turn(
+    tmp_path, monkeypatch, private, middle,
+):
+    first, second, latest = Event(), Event(), Event()
+    first.set()
+    second.set()
+    initial = ("/local " if private else "") + "explain this setting."
+    router = MagicMock()
+    router.send.side_effect = [
+        _decision("answer", intent="follow_up"),
+        LLMResponse("Here is the complete explanation.", "chat", "nim"),
+    ]
+    _, tts, _, store, turns = run_callbacks(
+        tmp_path, monkeypatch,
+        [("Keep the answer short.", {
+            "cancel_event": latest, "supersedes_cancel_event": second,
+        })],
+        observed=[
+            ("Ciel, " + initial, {"superseded": True, "cancel_event": first}),
+            (middle, {
+                "superseded": True, "cancel_event": second,
+                "supersedes_cancel_event": first,
+            }),
+        ],
+        router=router, controller=True,
+    )
+    try:
+        expected = [initial, *([middle] if middle else []), "Keep the answer short."]
+        assert router.send.call_count == 2
+        assert router.send.call_args_list[0].args[0][-1].content == " ".join(expected)
+        assert router.send.call_args_list[0].kwargs["purpose"] == "controller"
+        assert [turn.content for turn in turns if turn.role == "user"] == expected
+        if private:
+            assert all(
+                ModelRouter.requires_local(request.args[0])
+                for request in router.send.call_args_list
+            )
+        tts.speak.assert_called_once()
+    finally:
+        store.close()
+
+
+def test_superseded_other_listener_cannot_join_an_addressed_fragment_chain(
+    tmp_path, monkeypatch,
+):
+    first, second = Event(), Event()
+    first.set()
+    second.set()
+    router = MagicMock()
+    router.send.side_effect = [_decision("answer"), LLMResponse("A new answer.", "chat", "nim")]
+    _, _, _, store, turns = run_callbacks(
+        tmp_path, monkeypatch, [("Ciel, explain something else.", {
+            "cancel_event": Event(), "supersedes_cancel_event": second,
+        })],
+        observed=[
+            ("Ciel, explain this setting.", {"superseded": True, "cancel_event": first}),
+            ("Actually, Mom, bring the book.", {
+                "superseded": True, "cancel_event": second,
+                "supersedes_cancel_event": first,
+            }),
+        ],
+        router=router, controller=True,
+    )
+    try:
+        assert router.send.call_args_list[0].args[0][-1].content == "explain something else."
+        assert [turn.content for turn in turns if turn.role == "user"] == [
+            "explain something else.",
+        ]
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("private", [False, True])
+def test_active_nameless_superseded_followup_is_gated_as_one_complete_turn(
+    tmp_path, monkeypatch, private,
+):
+    canceled = Event()
+    canceled.set()
+    greeting = "Ciel, " + ("/local " if private else "") + "hello."
+    router = MagicMock()
+    router.send.side_effect = [
+        _decision("answer", intent="greeting"), LLMResponse("Hello.", "chat", "nim"),
+        _decision("answer", intent="follow_up"), LLMResponse("A short explanation.", "chat", "nim"),
+    ]
+    _, tts, _, store, turns = run_callbacks(
+        tmp_path, monkeypatch,
+        [(greeting, {}), ("And keep it brief.", {
+            "cancel_event": Event(), "supersedes_cancel_event": canceled,
+        })],
+        observed_after={0: [("Explain this setting.", {
+            "superseded": True, "cancel_event": canceled,
+        })]},
+        router=router, controller=True,
+    )
+    try:
+        request = router.send.call_args_list[2]
+        assert request.kwargs["purpose"] == "controller"
+        assert request.args[0][-1].content == "Explain this setting. And keep it brief."
+        assert '"direct_address": false' in " ".join(message.content for message in request.args[0])
+        assert [turn.content for turn in turns if turn.role == "user"] == [
+            greeting.removeprefix("Ciel, "), "Explain this setting.", "And keep it brief.",
+        ]
+        if private:
+            assert all(
+                ModelRouter.requires_local(call.args[0]) for call in router.send.call_args_list
+            )
+        assert tts.speak.call_count == 2
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("case", ["expired", "other_listener", "unclear", "unlinked"])
+def test_superseded_unverified_background_cannot_join_a_new_request(
+    tmp_path, monkeypatch, case,
+):
+    from ciel.audio.ambient import AmbientConversation
+
+    canceled = Event()
+    canceled.set()
+    if case == "expired":
+        replied = AmbientConversation.replied
+
+        def expire(self):
+            replied(self)
+            self.deadline = 0
+
+        monkeypatch.setattr(AmbientConversation, "replied", expire)
+    fragment = "Mom, bring the book." if case == "other_listener" else "Explain this setting."
+    info = {"superseded": True, "cancel_event": canceled}
+    if case == "unclear":
+        info.update(stt_needs_repeat=True, stt_raw_text="uncertain speech")
+    router = MagicMock()
+    router.send.side_effect = [
+        _decision("answer", intent="greeting"), LLMResponse("Hello.", "chat", "nim"),
+        _decision("answer"), LLMResponse("A separate answer.", "chat", "nim"),
+    ]
+    _, _, _, store, turns = run_callbacks(
+        tmp_path, monkeypatch,
+        [("Ciel, hello.", {}), ("Ciel, explain something else.", {
+            "cancel_event": Event(),
+            "supersedes_cancel_event": Event() if case == "unlinked" else canceled,
+        })],
+        observed_after={0: [(fragment, info)]}, router=router, controller=True,
+    )
+    try:
+        assert router.send.call_args_list[2].args[0][-1].content == "explain something else."
+        assert [turn.content for turn in turns if turn.role == "user"] == [
+            "hello.", "explain something else.",
+        ]
+    finally:
+        store.close()
+
+
+def test_retained_nameless_followup_does_not_authorize_saving_memory(tmp_path, monkeypatch):
+    canceled = Event()
+    canceled.set()
+    router = MagicMock()
+    router.send.side_effect = [
+        _decision("answer", intent="greeting"), LLMResponse("Hello.", "chat", "nim"),
+        _decision("local"),
+    ]
+    _, tts, _, store, _turns = run_callbacks(
+        tmp_path, monkeypatch,
+        [("Ciel, hello.", {}), ("Remember my favorite game is CS2.", {
+            "cancel_event": Event(), "supersedes_cancel_event": canceled,
+        })],
+        observed_after={0: [("My favorite game changed.", {
+            "superseded": True, "cancel_event": canceled,
+        })]},
+        router=router, controller=True,
+    )
+    try:
+        assert store.get_fact("user:favorite_game") is None
+        assert "I haven't saved that" in tts.speak.call_args.args[0]
+        assert router.send.call_args.args[0][-1].content == (
+            "My favorite game changed. Remember my favorite game is CS2."
+        )
+    finally:
+        store.close()
+
+
+def test_rejected_followup_fragments_cannot_be_revived_by_later_speech(tmp_path, monkeypatch):
+    canceled, rejected = Event(), Event()
+    canceled.set()
+    router = MagicMock()
+    router.send.side_effect = [
+        _decision("answer", intent="greeting"), LLMResponse("Hello.", "chat", "nim"),
+        _decision("silent", intent="quiet"),
+        _decision("answer"), LLMResponse("A separate answer.", "chat", "nim"),
+    ]
+
+    def utterances():
+        yield "Ciel, hello.", {}
+        yield "And keep it brief.", {
+            "cancel_event": rejected, "supersedes_cancel_event": canceled,
+        }
+        rejected.set()
+        yield "Ciel, explain something else.", {
+            "cancel_event": Event(), "supersedes_cancel_event": rejected,
+        }
+
+    _, _, _, store, turns = run_callbacks(
+        tmp_path, monkeypatch, utterances(),
+        observed_after={0: [("Explain this setting.", {
+            "superseded": True, "cancel_event": canceled,
+        })]},
+        router=router, controller=True,
+    )
+    try:
+        assert router.send.call_args_list[2].args[0][-1].content == (
+            "Explain this setting. And keep it brief."
+        )
+        assert router.send.call_args_list[3].args[0][-1].content == "explain something else."
+        assert [turn.content for turn in turns if turn.role == "user"] == [
+            "hello.", "explain something else.",
+        ]
+    finally:
+        store.close()
+
+
+def test_legacy_gate_does_not_inherit_unclassified_followup_fragments(tmp_path, monkeypatch):
+    canceled = Event()
+    canceled.set()
+    router = MagicMock()
+    router.send.return_value = LLMResponse("A separate answer.", "chat", "nim")
+    _, _, _, store, turns = run_callbacks(
+        tmp_path, monkeypatch,
+        [("Hey Ciel.", {}), ("Ciel, explain something else.", {
+            "cancel_event": Event(), "supersedes_cancel_event": canceled,
+        })],
+        observed_after={0: [("Explain this setting.", {
+            "superseded": True, "cancel_event": canceled,
+        })]},
+        router=router, controller=False,
+    )
+    try:
+        router.send.assert_called_once()
+        assert "Explain this setting." not in " ".join(
+            message.content for message in router.send.call_args.args[0]
+        )
+        assert all(turn.content != "Explain this setting." for turn in turns)
     finally:
         store.close()
 

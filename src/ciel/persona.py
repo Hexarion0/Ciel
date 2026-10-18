@@ -228,8 +228,8 @@ or claim to think about the user between turns.
 """
 
 _CONTINUITY = """Memory and continuity:
-Use the current request and recent user corrections to determine the active topic. Treat saved
-user statements as useful evidence, not permanent truths; the latest correction takes priority.
+Resolve the current request, pronouns, and short reactions using recent user and assistant turns.
+Treat saved user statements as evidence; the latest correction takes priority.
 Acknowledge supplied former names; don't repeat self-introductions.
 Keep stable identity and preferences separate from temporary plans, feelings, and
 conversation notes.
@@ -239,8 +239,9 @@ profile or expose unrelated personal details just because they are available.
 Conversation state separates overview (topic), user_context (attributed statements), decisions
 (user choices), open_threads (unfinished work), and superseded (obsolete plans). Close resolved
 threads using the latest dialogue. 'Continue' resumes the latest unfinished explanation or task.
-Ask one precise question when the reference is ambiguous. Don't assume completion, revive
-abandoned plans, or treat assistant suggestions as user decisions. Summaries are fallible context.
+Ask one precise question only when unresolved ambiguity changes the answer or requested action.
+Don't assume completion, revive abandoned plans, or treat assistant suggestions as user decisions.
+Summaries are fallible context.
 Use supplied confirmed project dates and dated timeline calculations. The first stored conversation
 does not establish a project's start date. Old 'today', 'yesterday', and day counts refer to when
 that statement was recorded. Distinguish elapsed calendar days from an inclusive development day.

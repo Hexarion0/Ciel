@@ -1152,3 +1152,73 @@ def test_superseded_queued_speech_is_observed_without_being_executed():
     assert observations[0][0] == 'Ciel, explain ambient mode.'
     assert observations[0][1]['superseded']
     assert not replies
+
+
+@pytest.mark.parametrize("utterance_count", [2, 3])
+def test_close_recordings_preserve_all_audio_and_cancellation_links(utterance_count):
+    from threading import Thread
+
+    entered, release = Event(), Event()
+    decoded, observed, replies = [], [], []
+    texts = ["Ciel, explain this setting.", "And include an example.", "Keep it brief."]
+    detector = SimpleNamespace(process_frame=lambda _frame: None, reset=lambda **_kwargs: None)
+    loop = WakeListenerLoop(
+        MockAudioBackend(), detector=detector, ambient=True, monitor_resumed_speech=True,
+        recorder=VoiceRecorder(
+            silence_duration_seconds=0.7, pause_grace_seconds=0.2,
+            min_speech_duration_seconds=0.12,
+        ),
+        speech_detector=lambda audio: bool(np.any(audio)),
+        on_transcript_observed=lambda text, info: observed.append((text, info.copy())),
+    )
+    loop._running = True
+    loop._state = ListenerState.LISTENING_WAKE
+
+    def capture(index):
+        speech = np.full(1280, (index + 1) / 10, dtype=np.float32)
+        for _ in range(4):
+            loop._handle_frame(speech)
+        for _ in range(12):
+            loop._handle_frame(np.zeros(1280, dtype=np.float32))
+        assert loop.state == ListenerState.PROCESSING
+
+    def transcribe(audio, **_kwargs):
+        index = round(float(audio.max()) * 10) - 1
+        decoded.append(index)
+        if index == 0:
+            entered.set()
+            assert release.wait(timeout=2)
+        return {"text": texts[index], "confidence": 0.95}
+
+    def respond(text, info, _audio):
+        replies.append((text, info.copy()))
+        loop._stop_event.set()
+        return False
+
+    loop.stt = SimpleNamespace(transcribe_detailed=transcribe)
+    loop.on_transcription = respond
+    capture(0)
+    worker = Thread(target=loop._process_worker, daemon=True)
+    worker.start()
+    try:
+        assert entered.wait(timeout=1)
+        for index in range(1, utterance_count):
+            capture(index)
+        release.set()
+        worker.join(timeout=2)
+        assert not worker.is_alive()
+        assert decoded == list(range(utterance_count))
+        assert [text for text, _info in observed] == texts[:utterance_count]
+        assert [info["superseded"] for _text, info in observed] == (
+            [True] * (utterance_count - 1) + [False]
+        )
+        for index in range(1, utterance_count):
+            prior = observed[index - 1][1]["cancel_event"]
+            assert prior.is_set()
+            assert observed[index][1]["supersedes_cancel_event"] is prior
+        assert [text for text, _info in replies] == [texts[utterance_count - 1]]
+    finally:
+        release.set()
+        loop._stop_event.set()
+        worker.join(timeout=2)
+        loop.stop()

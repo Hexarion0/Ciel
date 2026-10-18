@@ -32,10 +32,79 @@ mode flags. Explicit `--no-ambient` and `--no-show-ai-transcripts` override thos
 defaults for one run. Older `.env` values remain explicit overrides; use a newly
 configured environment when validating fresh defaults.
 
+Check `ciel setup` with both Quick start and Customize. Cancel at the review
+and confirm the original configuration is untouched. Save, replay the voice test,
+change speakers, and return to the system default; confirm the next test and
+normal launch use that output. Saved keys must stay hidden. Check narrow windows,
+arrow navigation, `TERM=dumb`, and `NO_COLOR=1`. Normal `ciel` should show the compact
+status panel before keyboard input begins, while `ciel start dev` retains diagnostics.
+
 For an installed package's CUDA test, include the `gpu` extra when installing
 the current source: run `python -m pip install '.[gpu]'` from the source root
 using the isolated environment's Python. Reinstall an earlier wheel before testing changed
 defaults. Without usable CUDA, check the logged CPU recovery independently.
+
+## Recorded validation — 2026-10-18 (final review)
+
+- All 1,759 non-integration tests passed, including the local HTTP-server cases.
+  Five hardware/model integrations were excluded. Ruff, dependency, shell syntax,
+  and whitespace checks passed.
+- Review regressions preserve private routing beyond the five-fragment speech tail,
+  through both listener gates, reply generation, persisted history, and summaries.
+  Rejected or replaced pending chains do not save their unaccepted fragments.
+- Empty interruptions recover observer-only questions exactly once without duplicating
+  accepted turns or restarting an answer after playback began. Valid model rechecks
+  can resolve follow-up references; failed rechecks and policy questions retain their
+  existing handling. Restored speech gains no action or memory-write permission.
+- The final wheel built and installed outside the checkout. Both installed CLI entry
+  points, version output, terminal rendering, and setup review/cancel passed. Package
+  contents match the reviewed source and exclude private/generated artifacts.
+  Installation reused existing dependencies; a fresh dependency installation and new
+  live microphone/speaker acceptance were not performed. The earlier hosted synthetic
+  results below remain the latest provider checks.
+
+## Recorded validation — 2026-10-18 (short conversational references)
+
+- The complete non-integration suite passed: 1,733 tests, including the eleven
+  local HTTP-server cases previously blocked in this environment. Five hardware/model
+  integrations were excluded. Ruff and whitespace checks passed.
+- Read-only investigation confirmed the preceding assistant reply remained in
+  conversation history. The unwanted questions came from the controller's direct
+  clarification path. An invented development-day exchange reproduced the mistake.
+- Controller guidance now resolves reactions against recent assistant replies.
+  Valid model clarifications in active dialogue can use the ordinary full-context
+  reply stage. Application-generated policy questions, outages, pending local
+  confirmations, and background speech retain their existing handling. Delegation
+  grants no tool or memory-write authority and preserves private routing and cancellation.
+- All 25 hosted synthetic checks passed: 24 valid controller decisions and one
+  source-validated report. Successful decisions took 1.06–7.30 seconds. The day-reference
+  case still selected clarification, but its application-owned context-resolution flag
+  now sends it to the reply stage; the checker reports that flag separately. A normal
+  chat probe resolved the synthetic day-21 reference. An earlier run hit the existing
+  eight-second timeout; these checks do not guarantee future provider latency.
+- New runtime regressions cover complete history replay, local timeline replies,
+  contextual clarification in both reply modes, forged delegation flags, policy
+  boundaries, outages, cancellation, and absence of action or memory execution.
+  Live microphone verification remains open.
+
+## Recorded validation — 2026-10-18 (terminal setup and resumed speech)
+
+- 1,689 tests passed with `pytest -k 'not test_http'`; the mocked HTTP-stream
+  cancellation test passed separately, for 1,690 passing tests overall. Eleven
+  local HTTP-server cases and five hardware/model integrations were excluded. The HTTP checks
+  remain pending because this environment could not approve the full test run.
+  Ruff, dependency, shell syntax, and whitespace checks passed.
+- Guided setup covers review/cancel, hidden keys, atomic private configuration
+  saves, preserved custom settings, playback failure/retry, and output-device
+  changes. Real pseudo-terminal arrow navigation and terminal restoration passed;
+  plain, narrow, ASCII, and no-color rendering also passed.
+- Synthetic audio frames and delayed transcription preserve two and three
+  consecutive clips. Runtime tests retain linked nameless follow-ups for one
+  final decision, reject unrelated or expired fragments, preserve private routing,
+  and require the existing authority for memory writes. Streamed text stays visible
+  when audio fails, and canceled replies stay hidden.
+- These checks used mocked providers and playback. Live microphone/speaker
+  acceptance and a new wheel build were not performed for this change.
 
 ## Recorded validation — 2026-10-18 (normal startup defaults)
 
@@ -114,7 +183,7 @@ also passed on Python 3.10 and 3.14.
 
 ## Live internet acceptance
 
-With `CONTROLLER_ENABLED=true`, use the configured NIM controller model. Confirm
+Run `ciel start dev` with `CONTROLLER_ENABLED=true` and the configured NIM model. Confirm
 logs show `AI chose ...` before public retrieval. Explicit local commands use the
 local-command log instead and need no NIM request. Search acknowledgment must finish
 before the first lookup; the factual report waits for source validation. Test
@@ -199,7 +268,8 @@ and private audio out of reports.
 2. Say “Hey Ciel.” Expect an acknowledgement, then ask a short question.
    Repeat with “Hey Ciel, what time is it?” in one utterance. Verify the start
    of the command is retained and one reply plays.
-   Wait for `Wake keyword spotter ready` before starting. Test ten wake attempts
+   Use `ciel start dev` and wait for `Wake keyword spotter ready` before starting.
+   Test ten wake attempts
    at normal volume, ten quieter attempts, and several slower greetings. Record
    successful attempts and wake latency, along with `WAKE_MIN_RMS` and
    `WAKE_WINDOW_SECONDS`. Leave the PC humming without speaking for one minute
@@ -238,6 +308,9 @@ and private audio out of reports.
    pending: expect `merged_continuation` and a single combined request. Repeat
    with successive additions and a correction; verify the original question and
    negation survive. Speech addressed to `Mom` must still be rejected.
+   After an answered greeting, repeat with two or three closely spaced follow-up
+   fragments without saying CIEL again. Expect the full request, in order, to
+   reach one final decision. Typed replacement and `/stop` must discard that chain.
    Check `AMBIENT_LISTENING` and `SHOW_TRANSCRIPTS` defaults with a no-argument GPU
    launch, then test `--no-ambient --no-show-transcripts` overrides.
 9. Pause for 1.2 seconds mid-sentence, then finish the thought; expect one complete

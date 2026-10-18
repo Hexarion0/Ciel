@@ -87,6 +87,31 @@ def main() -> int:
          "search", ["amber", "4", "2"], {}),
         ("retry", "Okay, try again", anime, "search", ["amber", "4", "2"], {}),
         ("explanation", "Why can't you search it on the internet?", anime, "answer", [], {}),
+        ("number reaction", "That's a big number.", "What development day is this?",
+         "answer", [], {
+             "previous_reply": "It is development day 21, counting the start date as day one.",
+             "addressed": False, "transcribed": True,
+             "allow_context_resolution": True,
+         }),
+        ("size reaction", "That's huge.", "How large is the example download?",
+         "answer", [], {"previous_reply": "The example download is 8.4 GB.",
+                          "addressed": False, "transcribed": True,
+                          "allow_context_resolution": True}),
+        ("day reference", "The day.", "", "answer", [], {
+            "history": [
+                ChatMessage("user", "What development day is this?"),
+                ChatMessage(
+                    "assistant", "It is development day 21, counting the start as day one.",
+                ),
+                ChatMessage("user", "That's a big number."),
+                ChatMessage("assistant", "What number are you referring to?"),
+            ],
+            "addressed": False, "transcribed": True,
+            "allow_context_resolution": True,
+        }),
+        ("ambiguous reference", "That one.", "Which bus could I take?",
+         "clarify", [], {"previous_reply": "You could take bus 5 or bus 12.",
+                           "addressed": False, "transcribed": True}),
         ("background", "Mom, what's for dinner?", "", "silent", [],
          {"addressed": False, "active": False}),
         ("other listener", "Dad, can you turn on the TV?", anime, "silent", [],
@@ -119,9 +144,13 @@ def main() -> int:
         options = dict(overrides)
         previous_reply = options.pop("previous_reply", "I couldn't verify that online.")
         expected_intent = options.pop("expected_intent", None)
+        allow_context_resolution = options.pop("allow_context_resolution", False)
+        history = options.pop("history", None)
         messages = [ChatMessage("user", previous)] if previous else []
         if previous and previous_reply:
             messages.append(ChatMessage("assistant", previous_reply))
+        if history is not None:
+            messages = history
         started = time.monotonic()
         probe = _DecisionProbe(router, settings.controller.timeout_seconds)
         controller = AIController(probe, settings.controller)
@@ -130,12 +159,15 @@ def main() -> int:
         })
         model_decision_valid, model_error = probe.result()
         passed = (
-            model_decision_valid and choice.confidence >= 0.5 and choice.action == action
+            model_decision_valid and choice.confidence >= 0.5
+            and (choice.action == action or
+                 (allow_context_resolution and choice.resolve_with_context))
             and all(term in choice.query.casefold() for term in query_terms)
         )
         passed = passed and (expected_intent is None or choice.intent == expected_intent)
         failures += not passed
         print(json.dumps({"case": name, "passed": passed,
+                          "resolve_with_context": choice.resolve_with_context,
                           "model_decision_valid": model_decision_valid,
                           "model_error": model_error,
                           "seconds": round(time.monotonic() - started, 2),

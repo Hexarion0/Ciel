@@ -237,7 +237,7 @@ def run_callbacks(
     tmp_path, monkeypatch, utterances, *, ambient=True, router=None, observed=None,
     tts=None, interrupted=None, persona_file=None,
     streaming=False, clock=None, ai_transcripts=False, cli_args=(), tts_enabled=True,
-    controller=False,
+    controller=False, observed_after=None,
 ):
     """Run real CLI callbacks using an isolated DB and no audio hardware."""
     import sys
@@ -274,8 +274,10 @@ def run_callbacks(
                 kwargs['on_interruption'](interrupted)
             for text, info in observed or []:
                 kwargs["on_transcript_observed"](text, info)
-            for text, info in utterances:
+            for index, (text, info) in enumerate(utterances):
                 kwargs["on_transcription"](text, info, None)
+                for observed_text, observed_info in (observed_after or {}).get(index, []):
+                    kwargs["on_transcript_observed"](observed_text, observed_info)
 
         loop.start = start
         return loop
