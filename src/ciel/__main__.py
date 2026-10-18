@@ -125,6 +125,13 @@ def main() -> int:
     dev_mode = args.mode == "dev"
     logger = setup_logging("DEBUG" if dev_mode else "INFO", concise=not dev_mode)
 
+    if not dev_mode:
+        from ciel.terminal_ui import ConsoleUI
+
+        console = ConsoleUI()
+        console.banner("Your voice. Your companion.", version=__version__)
+        console.note("Preparing voice and recognition. First startup can take a moment.")
+
     logger.info("==========================================")
     logger.info("   CIEL - Desktop AI Assistant v%s  ", __version__)
     logger.info("==========================================")

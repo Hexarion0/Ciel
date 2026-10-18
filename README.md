@@ -59,8 +59,11 @@ python3 -m venv .venv
 .venv/bin/ciel start
 ```
 
-Run these commands from the repository root. The wizard writes `.env` and tests
-voice playback; it preserves unrelated settings on reconfiguration. Amy and Whisper
+Run these commands from the repository root. Setup offers **Quick start** to reuse
+your settings or **Customize** to choose AI keys, voice, audio devices, and listening
+preferences. Review the choices before saving, then check voice playback; you can
+replay the test or change speakers. Canceling before saving leaves `.env` untouched.
+Saved API keys stay hidden, and unrelated settings survive reconfiguration. Amy and Whisper
 models download when first needed if they are not already present. Alternatively,
 copy `.env.example` to `.env` and edit it; fresh settings, the wizard, and the example
 use CPU Pocket with the CIEL profile (provisional Alba without private references).
@@ -97,13 +100,13 @@ same-Wi-Fi phone access and Telegram integration are planned next.
 
 ### Choose a voice
 
-Run `.venv/bin/ciel setup`:
+Run `ciel setup`, select **Customize**, then choose your voice:
 
-| Choice | Voice | Requirements |
+| Voice | Engine | Requirements |
 | --- | --- | --- |
-| **1** | CIEL custom voice | Chatterbox Turbo model, separate Python 3.12 environment, private reference audio/transcript, NVIDIA GPU |
-| **2** | Amy | Piper voice model; CPU playback synthesis |
-| **3** | CIEL CPU voice | Pocket extra; same-speaker references or provisional built-in Alba |
+| CIEL CPU voice | Pocket | Pocket extra; same-speaker references or provisional built-in Alba |
+| Amy | Piper | Piper voice model; CPU playback synthesis |
+| CIEL custom voice | Chatterbox Turbo | Turbo model, separate Python 3.12 environment, private reference audio/transcript, NVIDIA GPU |
 
 New installations default to **Pocket on CPU**. Enter preserves an existing selection.
 See [Pocket setup, styles, and benchmarks](docs/pocket-tts.md) for installation,
@@ -138,6 +141,13 @@ at `OLLAMA_HOST` with the requested model installed (currently `llama3.2` by def
 No provider setup is needed for local clock, memory, or supported desktop actions.
 
 ## Everyday use
+
+`ciel` opens a compact launch screen with the current listening mode, voice,
+recognition device, and caption setting. A microphone being active does not imply
+every model is ready: deferred voice preparation and unavailable recognition are
+shown in the panel. `ciel start dev` keeps detailed diagnostics. Setup supports
+arrow keys and Enter in interactive terminals, with numbered choices for plain
+terminals and redirected input. Set `NO_COLOR=1` for uncolored output.
 
 ```bash
 .venv/bin/ciel start                    # ambient conversation and live AI captions

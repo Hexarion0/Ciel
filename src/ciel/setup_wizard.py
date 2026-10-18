@@ -1,16 +1,19 @@
 """Interactive setup and configuration wizard for CIEL."""
 
 import json
+import os
 from getpass import getpass
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from dotenv import dotenv_values, set_key, unset_key
 
 from ciel.audio.tts import TextToSpeech, resolve_tts_engine
-from ciel.config import AudioConfig, ProviderConfig, get_settings
+from ciel.config import AudioConfig, ProviderConfig, get_settings, normalize_audio_device
 from ciel.logging import get_logger
 from ciel.paths import resolve_asset_path, voice_profile_path
 from ciel.platform import get_audio_backend
+from ciel.terminal_ui import ConsoleUI
 
 logger = get_logger("setup")
 
@@ -54,122 +57,18 @@ def custom_voice_asset_problems(configuration: dict[str, str]) -> list[str]:
     return problems
 
 
-def run_setup_wizard() -> None:
-    """Run interactive CLI configuration wizard for CIEL."""
-    print("\n" + "=" * 55)
-    print("      CIEL - Interactive Configuration Setup")
-    print("=" * 55)
-    print("This wizard will help you configure your AI assistant.\n")
-
-    env_path = Path(".env")
-    original_env = dotenv_values(env_path, interpolate=False) if env_path.is_file() else {}
-    original_keys = {key.upper(): key for key in original_env}
-    current_env = {key.upper(): value for key, value in original_env.items() if value is not None}
-
-    # 1. AI Provider Keys
-    print("\n--- [1/4] AI Providers & API Keys ---")
-    current_nim = current_env.get("NIM_API_KEY", "")
-    if current_nim:
-        nim_prompt = "NVIDIA NIM API Key [configured; Enter to keep]: "
-    else:
-        nim_prompt = "NVIDIA NIM API Key: "
-    nim_input = getpass(nim_prompt).strip()
-    if nim_input:
-        current_env["NIM_API_KEY"] = nim_input
-    elif not current_nim:
-        current_env["NIM_API_KEY"] = ""
-
-    current_groq = current_env.get("GROQ_API_KEY", "")
-    if current_groq:
-        groq_prompt = "Groq API Key (Optional) [configured; Enter to keep]: "
-    else:
-        groq_prompt = "Groq API Key (Optional): "
-    groq_input = getpass(groq_prompt).strip()
-    if groq_input:
-        current_env["GROQ_API_KEY"] = groq_input
-
-    current_or = current_env.get("OPENROUTER_API_KEY", "")
-    if current_or:
-        or_prompt = "OpenRouter API Key (Optional) [configured; Enter to keep]: "
-    else:
-        or_prompt = "OpenRouter API Key (Optional): "
-    or_input = getpass(or_prompt).strip()
-    if or_input:
-        current_env["OPENROUTER_API_KEY"] = or_input
-
-    # 2. Voice and Speech Settings
-    print("\n--- [2/4] Text-to-Speech (TTS) Voice ---")
-    print("  [1] CIEL custom voice — Chatterbox Turbo (NVIDIA GPU required)")
-    print("      Requires the separate Turbo environment, model, and private voice reference.")
-    print("  [2] Amy — Piper (lighter, works on CPU)")
-    print("  [3] CIEL — Pocket TTS (CPU, recommended for continuous conversation)")
-    print("      Uses data/voices/ciel references, or provisional Alba until configured.")
-    audio_defaults = AudioConfig()
+def _initial_configuration(current_env: dict[str, str]) -> dict[str, str]:
+    """Fill missing settings while preserving explicit and legacy voice selections."""
+    audio = AudioConfig()
     existing_engine = current_env.get("TTS_ENGINE")
     current_voice = current_env.get(
         "TTS_VOICE",
-        "en_US-amy-medium" if existing_engine in {"auto", "piper"} else audio_defaults.tts_voice,
+        "en_US-amy-medium" if existing_engine in {"auto", "piper"} else audio.tts_voice,
     )
-    # Older voice-only configurations retain their existing engine interpretation.
     current_engine = existing_engine or (
         ("chatterbox_turbo" if current_voice == "ciel" else resolve_tts_engine(current_voice))
-        if "TTS_VOICE" in current_env else audio_defaults.tts_engine
+        if "TTS_VOICE" in current_env else audio.tts_engine
     )
-    while True:
-        voice_choice = input(
-            f"\nSelect voice [1-3] (Enter to keep {current_voice}): "
-        ).strip()
-        if voice_choice in {"", "1", "2", "3"}:
-            break
-        print("Please enter 1 for Turbo HQ, 2 for Amy, or 3 for CPU Pocket.")
-    if voice_choice == "1":
-        current_env["TTS_VOICE"] = "ciel"
-        current_env["TTS_ENGINE"] = "chatterbox_turbo"
-    elif voice_choice == "2":
-        current_env["TTS_VOICE"] = "en_US-amy-medium"
-        current_env["TTS_ENGINE"] = "piper"
-    elif voice_choice == "3":
-        current_env["TTS_VOICE"] = "ciel"
-        current_env["TTS_ENGINE"] = "pocket"
-    else:
-        current_env["TTS_VOICE"] = current_voice
-        current_env["TTS_ENGINE"] = current_engine
-
-    # 3. Audio Devices
-    print("\n--- [3/4] Audio Devices ---")
-    backend = get_audio_backend()
-    devices = backend.list_devices()
-    input_devices = [d for d in devices if d.max_input_channels > 0]
-    output_devices = [d for d in devices if d.max_output_channels > 0]
-
-    print("\nAvailable Microphones:")
-    for d in input_devices:
-        default_marker = " (System Default)" if d.is_default_input else ""
-        print(f"  [{d.index}] {d.name}{default_marker}")
-
-    mic_choice = input(
-        "\nMicrophone index or name [Enter to keep, 'default' for system default]: "
-    ).strip()
-    if mic_choice.lower() == "default":
-        current_env.pop("AUDIO_INPUT_DEVICE", None)
-    elif mic_choice:
-        current_env["AUDIO_INPUT_DEVICE"] = mic_choice
-
-    print("\nAvailable Speakers:")
-    for d in output_devices:
-        default_marker = " (System Default)" if d.is_default_output else ""
-        print(f"  [{d.index}] {d.name}{default_marker}")
-
-    spk_choice = input(
-        "\nSpeaker index or name [Enter to keep, 'default' for system default]: "
-    ).strip()
-    if spk_choice.lower() == "default":
-        current_env.pop("AUDIO_OUTPUT_DEVICE", None)
-    elif spk_choice:
-        current_env["AUDIO_OUTPUT_DEVICE"] = spk_choice
-
-    # Preserve custom settings, comments, and quoting for unchanged values.
-    print("\n--- [4/4] Saving Configuration ---")
     defaults = {
         "CIEL_ENV": "development",
         "CIEL_LOG_LEVEL": "INFO",
@@ -178,72 +77,272 @@ def run_setup_wizard() -> None:
         "WAKE_WORD": "hey ciel",
         "WAKE_THRESHOLD": "0.5",
         "WAKE_COOLDOWN": "2.0",
-        "STT_MODEL": audio_defaults.stt_model,
-        "STT_DEVICE": audio_defaults.stt_device,
-        "STT_COMPUTE_TYPE": audio_defaults.stt_compute_type,
-        "STT_LANGUAGE": audio_defaults.stt_language,
-        "STT_BEAM_SIZE": str(audio_defaults.stt_beam_size),
-        "STT_RETRY_MODEL": audio_defaults.stt_retry_model or "",
-        "STT_RETRY_MIN_FREE_MB": str(audio_defaults.stt_retry_min_free_mb),
-        "AMBIENT_LISTENING": str(audio_defaults.ambient_listening).lower(),
-        "SHOW_AI_TRANSCRIPTS": str(audio_defaults.show_ai_transcripts).lower(),
-        "BARGE_IN_MODE": audio_defaults.barge_in_mode,
+        "STT_MODEL": audio.stt_model,
+        "STT_DEVICE": audio.stt_device,
+        "STT_COMPUTE_TYPE": audio.stt_compute_type,
+        "STT_LANGUAGE": audio.stt_language,
+        "STT_BEAM_SIZE": str(audio.stt_beam_size),
+        "STT_RETRY_MODEL": audio.stt_retry_model or "",
+        "STT_RETRY_MIN_FREE_MB": str(audio.stt_retry_min_free_mb),
+        "AMBIENT_LISTENING": str(audio.ambient_listening).lower(),
+        "SHOW_AI_TRANSCRIPTS": str(audio.show_ai_transcripts).lower(),
+        "BARGE_IN_MODE": audio.barge_in_mode,
+        "TTS_VOICE": current_voice,
+        "TTS_ENGINE": current_engine,
         "TTS_SPEED": "1.0",
         "TTS_ENABLED": "true",
     }
     for key, value in defaults.items():
         current_env.setdefault(key, value)
-    if not env_path.exists():
-        env_path.touch(mode=0o600, exist_ok=False)
-        env_path.write_text("# CIEL Configuration File\n", encoding="utf-8")
-    for key in original_keys.keys() - current_env.keys():
-        if key in {"AUDIO_INPUT_DEVICE", "AUDIO_OUTPUT_DEVICE"}:
-            unset_key(env_path, original_keys[key])
-    for key, value in current_env.items():
-        original_key = original_keys.get(key, key)
-        if original_env.get(original_key) != value:
-            set_key(env_path, original_key, value, quote_mode="always")
-    env_path.chmod(0o600)
-    print("✅ Configuration successfully saved to .env")
+    return current_env
 
-    # Clear cached settings so changes take effect immediately
+
+def _save_configuration(env_path: Path, configuration: dict[str, str]) -> None:
+    """Keep unchanged comments, key casing, and literal values when saving settings."""
+    original_env = dotenv_values(env_path, interpolate=False) if env_path.is_file() else {}
+    original_keys = {key.upper(): key for key in original_env}
+    temporary_path = None
+    try:
+        with NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=env_path.parent, prefix=".ciel-setup-", delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            temporary.write(env_path.read_text(encoding="utf-8") if env_path.exists()
+                            else "# CIEL Configuration File\n")
+        for key in original_keys.keys() - configuration.keys():
+            if key in {"AUDIO_INPUT_DEVICE", "AUDIO_OUTPUT_DEVICE"}:
+                unset_key(temporary_path, original_keys[key])
+        for key, value in configuration.items():
+            original_key = original_keys.get(key, key)
+            if original_env.get(original_key) != value:
+                set_key(temporary_path, original_key, value, quote_mode="always")
+        temporary_path.chmod(0o600)
+        os.replace(temporary_path, env_path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
     get_settings.cache_clear()
 
-    # Pre-download selected TTS voice if not present
-    print("\n--- Testing Voice Output ---")
-    chosen_voice = current_env["TTS_VOICE"]
-    custom_voice = resolve_tts_engine(chosen_voice, current_env["TTS_ENGINE"]) == "chatterbox_turbo"
-    problems = custom_voice_asset_problems(current_env) if custom_voice else []
-    if problems:
-        print("⚠️ Custom voice is not ready. Missing or invalid local assets:")
-        for problem in problems:
-            print(f"  - {problem}")
-        print("Your choice is saved, but the custom voice audio test was skipped.")
-        print("Restore/install these assets and rerun setup, or choose Amy to get started.")
-        print("See docs/chatterbox-turbo-integration.md for the custom voice requirements.")
-    else:
-        print(f"Testing voice: '{chosen_voice}'...")
-        tts = None
-        try:
-            tts = TextToSpeech(
-                voice_name=chosen_voice, engine=current_env["TTS_ENGINE"], enabled=True,
-            )
-            success = tts.speak("Hi, I'm Ciel. Let's check that you can hear me.", block=True)
-            if success:
-                print("✅ Audio test successful!")
-                if custom_voice or current_env["TTS_ENGINE"] == "pocket":
-                    print(f"Selected playback engine: {tts.last_engine}. Check fallback warnings.")
-            else:
-                print("⚠️ Audio test failed: speech playback did not succeed.")
-        except Exception as err:
-            print(f"⚠️ Audio test skipped or failed: {err}")
-        finally:
-            if tts is not None:
-                tts.close()
 
-    print("\n" + "=" * 55)
-    if problems:
-        print("  Configuration saved. Custom voice setup needs the assets listed above.")
-    else:
-        print("  Setup Complete! Run: ciel start")
-    print("=" * 55 + "\n")
+def _configure_keys(ui: ConsoleUI, configuration: dict[str, str], *, primary_only: bool) -> None:
+    """Request secrets without displaying any portion of previously saved keys."""
+    ui.step("AI connection")
+    ui.note("Keys are optional. Without a cloud key, local tools remain available.")
+    providers = [("NIM_API_KEY", "NVIDIA NIM")]
+    if not primary_only:
+        providers.extend([("GROQ_API_KEY", "Groq"), ("OPENROUTER_API_KEY", "OpenRouter")])
+    for key, name in providers:
+        status = ("configured; Enter to keep" if configuration.get(key)
+                  else "optional; Enter to skip")
+        answer = getpass(f"{name} API key [{status}]: ").strip()
+        if answer:
+            configuration[key] = answer
+
+
+def _select_device(ui: ConsoleUI, configuration: dict[str, str], *, output: bool) -> None:
+    """Select a listed device or retain a custom index or name."""
+    key = "AUDIO_OUTPUT_DEVICE" if output else "AUDIO_INPUT_DEVICE"
+    title = "Speakers" if output else "Microphone"
+    ui.step(title)
+    choices = [
+        ("keep", f"Keep current ({configuration.get(key) or 'system default'})"),
+        ("default", "Use system default"),
+    ]
+    try:
+        for device in get_audio_backend().list_devices():
+            channels = device.max_output_channels if output else device.max_input_channels
+            if channels > 0:
+                choices.append((f"device:{device.index}", device.name))
+    except Exception:
+        ui.note("Audio devices could not be listed. You can still enter a device name or index.")
+    choices.append(("custom", "Enter a device name or index"))
+    selected = ui.choose(title, choices, default="keep")
+    if selected == "default":
+        configuration.pop(key, None)
+    elif selected == "custom":
+        value = ui.prompt("Device name or index (Enter to keep)").strip()
+        if value:
+            configuration[key] = value
+    elif selected.startswith("device:"):
+        configuration[key] = selected.split(":", 1)[1]
+
+
+def _enabled(configuration: dict[str, str], key: str) -> bool:
+    """Interpret the boolean spellings accepted by environment configuration."""
+    return configuration.get(key, "").strip().lower() in {"1", "true", "yes", "on", "y", "t"}
+
+
+def _voice_label(configuration: dict[str, str]) -> str:
+    """Use recognizable names while retaining arbitrary custom voice selections."""
+    voice, engine = configuration["TTS_VOICE"], configuration["TTS_ENGINE"]
+    if voice == "ciel":
+        if engine in {"chatterbox", "chatterbox_turbo", "hq"}:
+            return "Ciel Turbo"
+        if engine == "pocket":
+            return "Ciel Pocket"
+    if voice == "en_US-amy-medium":
+        return "Amy · Piper"
+    return voice
+
+
+def _customize(ui: ConsoleUI, configuration: dict[str, str]) -> None:
+    """Walk through one decision at a time while retaining existing choices on Enter."""
+    _configure_keys(ui, configuration, primary_only=False)
+    ui.step("Voice")
+    ui.note("Pocket runs on CPU; Turbo requires its separate model and private reference.")
+    voice = ui.choose("Choose a voice", [
+        ("keep", f"Keep current ({_voice_label(configuration)})"),
+        ("pocket", "Ciel Pocket · CPU"),
+        ("amy", "Amy · Piper (CPU)"),
+        ("turbo", "Ciel Turbo · NVIDIA GPU"),
+    ], default="keep")
+    if voice != "keep":
+        configuration["TTS_VOICE"] = "en_US-amy-medium" if voice == "amy" else "ciel"
+        configuration["TTS_ENGINE"] = {"amy": "piper", "turbo": "chatterbox_turbo"}.get(
+            voice, "pocket",
+        )
+    _select_device(ui, configuration, output=False)
+    _select_device(ui, configuration, output=True)
+    ui.step("Conversation")
+    listening = ui.choose("Listening", [
+        ("ambient", "Ambient conversation"), ("wake", "Wake word only"),
+    ], default="ambient" if _enabled(configuration, "AMBIENT_LISTENING") else "wake")
+    if (listening == "ambient") != _enabled(configuration, "AMBIENT_LISTENING"):
+        configuration["AMBIENT_LISTENING"] = "true" if listening == "ambient" else "false"
+    captions = ui.choose("AI reply captions", [("on", "Show captions"), ("off", "Hide captions")],
+                         default="on" if _enabled(configuration, "SHOW_AI_TRANSCRIPTS") else "off")
+    if (captions == "on") != _enabled(configuration, "SHOW_AI_TRANSCRIPTS"):
+        configuration["SHOW_AI_TRANSCRIPTS"] = "true" if captions == "on" else "false"
+
+
+def _review_configuration(ui: ConsoleUI, configuration: dict[str, str]) -> None:
+    """Show the choices that will be saved without claiming an untested connection."""
+    providers = [name for key, name in (
+        ("NIM_API_KEY", "NVIDIA NIM"), ("GROQ_API_KEY", "Groq"),
+        ("OPENROUTER_API_KEY", "OpenRouter"),
+    ) if configuration.get(key)]
+    ui.step("Review your setup")
+    ui.summary([
+        ("AI connection", f"{', '.join(providers)} · key configured" if providers
+         else "No cloud key; local tools available"),
+        ("Voice", _voice_label(configuration) if _enabled(configuration, "TTS_ENABLED")
+         else "Voice output off"),
+        ("Recognition", f"{configuration['STT_MODEL']} · {configuration['STT_DEVICE'].upper()}"),
+        ("Listening", "Ambient conversation" if _enabled(configuration, "AMBIENT_LISTENING")
+         else "Wake word only"),
+        ("Live captions", "On" if _enabled(configuration, "SHOW_AI_TRANSCRIPTS") else "Off"),
+        ("Microphone", configuration.get("AUDIO_INPUT_DEVICE") or "System default"),
+        ("Speakers", configuration.get("AUDIO_OUTPUT_DEVICE") or "System default"),
+    ])
+    if providers:
+        ui.note("The AI connection hasn't been tested yet.")
+
+
+def _test_voice(ui: ConsoleUI, configuration: dict[str, str]) -> bool:
+    """Attempt real playback and report failure or missing assets honestly."""
+    if not _enabled(configuration, "TTS_ENABLED"):
+        ui.note("Voice output is disabled. No sample was played.")
+        return False
+    chosen_voice = configuration["TTS_VOICE"]
+    engine = configuration["TTS_ENGINE"]
+    tts = None
+    try:
+        custom_voice = resolve_tts_engine(chosen_voice, engine) == "chatterbox_turbo"
+        problems = custom_voice_asset_problems(configuration) if custom_voice else []
+        if problems:
+            ui.note("Custom voice is not ready. Missing or invalid local assets:")
+            for problem in problems:
+                ui.note(problem)
+            ui.note("Your choice is saved. Restore the assets or rerun setup and choose Amy.")
+            ui.note("See docs/chatterbox-turbo-integration.md for the requirements.")
+            return False
+        ui.note(f"Playing a short sample with {chosen_voice}.")
+        tts = TextToSpeech(
+            voice_name=chosen_voice, engine=engine, enabled=True,
+            output_device=normalize_audio_device(configuration.get("AUDIO_OUTPUT_DEVICE")),
+        )
+        success = tts.speak("Hi, I'm Ciel. Let's check that you can hear me.", block=True)
+        if success:
+            ui.note("Voice playback completed. Please check what you heard.")
+            if custom_voice or engine == "pocket":
+                ui.note(f"Playback engine: {tts.last_engine}. Check any fallback warnings.")
+            return True
+        ui.note("Audio test failed: speech playback did not succeed.")
+    except Exception as error:
+        ui.note(
+            f"Audio test failed ({type(error).__name__}). Check your voice and speaker settings.",
+        )
+    finally:
+        if tts is not None:
+            try:
+                tts.close()
+            except Exception as error:
+                ui.note(f"Voice cleanup did not finish ({type(error).__name__}).")
+    return False
+
+
+def run_setup_wizard() -> None:
+    """Review configuration before saving, then let the user verify voice playback."""
+    ui = ConsoleUI()
+    saved = False
+    saving = False
+    try:
+        ui.banner("Let's make CIEL yours.")
+        ui.note("Review everything before saving. Press Ctrl+C to leave setup.")
+        env_path = Path(".env")
+        original_env = dotenv_values(env_path, interpolate=False) if env_path.is_file() else {}
+        configuration = _initial_configuration({
+            key.upper(): value for key, value in original_env.items() if value is not None
+        })
+        mode = ui.choose("Get started", [
+            ("quick", "Quick start"), ("customize", "Customize"),
+        ], default="quick")
+        if mode == "customize":
+            _customize(ui, configuration)
+        elif not any(configuration.get(key) for key in (
+            "NIM_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY",
+        )):
+            _configure_keys(ui, configuration, primary_only=True)
+        while True:
+            _review_configuration(ui, configuration)
+            action = ui.choose("Ready to save?", [
+                ("save", "Save and test"), ("customize", "Customize"), ("cancel", "Cancel"),
+            ], default="save")
+            if action == "cancel":
+                ui.finish("Setup cancelled. No changes were saved.")
+                return
+            if action == "save":
+                break
+            _customize(ui, configuration)
+        saving = True
+        _save_configuration(env_path, configuration)
+        saved = True
+        saving = False
+        ui.step("Check your voice")
+        success = _test_voice(ui, configuration)
+        while True:
+            action = ui.choose("Did it sound right?", [
+                ("yes", "Yes"), ("again", "Play again"),
+                ("output", "Change output device"), ("finish", "Finish without audio"),
+            ], default="yes" if success else "finish")
+            if action == "yes":
+                if success:
+                    ui.note("Voice confirmed.")
+                else:
+                    ui.note("Playback was not successful. Audio still needs checking.")
+                break
+            if action == "finish":
+                ui.note("Audio is not confirmed. You can rerun setup whenever you're ready.")
+                break
+            if action == "output":
+                _select_device(ui, configuration, output=True)
+                _save_configuration(env_path, configuration)
+            success = _test_voice(ui, configuration)
+        ui.finish("Configuration saved. Run: ciel")
+    except (KeyboardInterrupt, EOFError):
+        if saved:
+            ui.finish("Setup stopped. Configuration is saved. Run: ciel")
+        elif saving:
+            ui.finish("Setup stopped while saving. Run setup again to review .env.")
+        else:
+            ui.finish("Setup cancelled. No changes were saved.")

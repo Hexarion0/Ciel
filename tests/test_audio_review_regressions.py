@@ -1,6 +1,7 @@
 """Regression coverage for configuration and portable local voice assets."""
 
 import os
+from io import StringIO
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -25,14 +26,17 @@ def test_wizard_key_prompts_never_include_saved_secret_material(tmp_path, monkey
     from ciel import setup_wizard
 
     secrets = {
-        "NIM_API_KEY": "nv-secret-value", "GROQ_API_KEY": "short", "OPENROUTER_API_KEY": "or-key",
+        "NIM_API_KEY": "nv-secret-value", "GROQ_API_KEY": "xK7", "OPENROUTER_API_KEY": "or-key",
     }
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".env").write_text("".join(f"{key}={value}\n" for key, value in secrets.items()))
     prompts = []
     monkeypatch.setattr(setup_wizard, "getpass", lambda prompt: prompts.append(prompt) or "")
-    answers = iter(["2", "", ""])
-    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    output = StringIO()
+    ui = setup_wizard.ConsoleUI(
+        stream=output, input_stream=StringIO("2\n3\n1\n1\n\n\n1\n1\n"),
+    )
+    monkeypatch.setattr(setup_wizard, "ConsoleUI", lambda: ui)
     backend = MagicMock()
     backend.list_devices.return_value = []
     monkeypatch.setattr(setup_wizard, "get_audio_backend", lambda: backend)
@@ -44,6 +48,7 @@ def test_wizard_key_prompts_never_include_saved_secret_material(tmp_path, monkey
     assert len(prompts) == 3
     assert all("configured" in prompt for prompt in prompts)
     assert all(value[:6] not in " ".join(prompts) for value in secrets.values())
+    assert all(value not in output.getvalue() for value in secrets.values())
 
 
 def test_installed_custom_wake_path_is_independent_of_working_directory(tmp_path, monkeypatch):
@@ -150,8 +155,9 @@ def test_setup_checks_hq_alias_assets_before_testing_audio(tmp_path, monkeypatch
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".env").write_text("TTS_VOICE=ciel\nTTS_ENGINE=hq\n")
     monkeypatch.setattr(setup_wizard, "getpass", lambda _: "")
-    answers = iter(["", "", ""])
-    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+    output = StringIO()
+    ui = setup_wizard.ConsoleUI(stream=output, input_stream=StringIO("\n\n\n"))
+    monkeypatch.setattr(setup_wizard, "ConsoleUI", lambda: ui)
     backend = MagicMock()
     backend.list_devices.return_value = []
     monkeypatch.setattr(setup_wizard, "get_audio_backend", lambda: backend)
@@ -165,3 +171,4 @@ def test_setup_checks_hq_alias_assets_before_testing_audio(tmp_path, monkeypatch
 
     assets.assert_called_once()
     tts.assert_not_called()
+    assert "Missing custom reference" in output.getvalue()

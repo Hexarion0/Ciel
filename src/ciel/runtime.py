@@ -27,6 +27,38 @@ from ciel.providers.base import ChatMessage
 from ciel.providers.intents import answer_clock_query
 
 
+def _terminal_status_rows(
+    settings: Settings, stt: Any, tts: Any, *, ambient: bool, captions: bool,
+    voice_prepared: bool | None,
+) -> list[tuple[str, str]]:
+    """Describe the running listener without treating configured models as ready."""
+    engine = tts.engine
+    voice = {
+        "chatterbox_turbo": "Ciel Turbo",
+        "pocket": "Ciel Pocket",
+        "piper": "Amy · Piper" if settings.audio.tts_voice == "en_US-amy-medium"
+        else f"{settings.audio.tts_voice} · Piper",
+    }.get(engine, settings.audio.tts_voice)
+    if not tts.enabled:
+        voice = "Off · text replies"
+    elif engine in {"chatterbox_turbo", "pocket"}:
+        if voice_prepared is False:
+            voice += " · fallback pending"
+        elif voice_prepared is None:
+            voice += " · deferred"
+    model = getattr(stt, "model_size", settings.audio.stt_model)
+    device = getattr(stt, "device", settings.audio.stt_device)
+    recognition = f"{model} · {str(device).upper()}"
+    if not stt.is_ready():
+        recognition += " · not ready"
+    return [
+        ("● Listening", "Ambient conversation" if ambient else "Wake-word mode"),
+        ("Voice", voice),
+        ("Recognition", recognition),
+        ("Live captions", "On" if captions else "Off"),
+    ]
+
+
 def is_local_request(
     text: str, messages: list[ChatMessage], actions: ActionRegistry, *, pending: bool = False,
     persona_pending: bool = False,
@@ -1380,6 +1412,7 @@ def run_desktop(
 
         restore_caption_logging = install_caption_logging(captions)
     try:
+        voice_prepared = None
         if tts.enabled and tts.engine in {"pocket", "chatterbox_turbo"}:
             logger.info(
                 "Preparing %s before enabling listening; "
@@ -1388,6 +1421,7 @@ def run_desktop(
             warmup_started = time.monotonic()
             if stt.wait_ready(timeout=settings.audio.stt_startup_timeout_seconds):
                 warmed = tts.warmup()
+                voice_prepared = bool(warmed)
                 logger.info(
                     "%s startup preparation finished in %.2fs (%s).", tts.engine,
                     time.monotonic() - warmup_started,
@@ -1473,6 +1507,20 @@ def run_desktop(
                 "Microphone active — waiting for wake phrase '%s'.",
                 settings.audio.wake_word.title(),
             )
+        if getattr(args, "mode", None) != "dev":
+            from ciel.terminal_ui import ConsoleUI
+
+            console = ConsoleUI(stream=terminal_output or sys.stdout)
+            console.panel(_terminal_status_rows(
+                settings, stt, tts, ambient=ambient_enabled[0],
+                captions=show_ai_transcripts, voice_prepared=voice_prepared,
+            ))
+            if not ambient_enabled[0]:
+                console.note(f"Say ‘{settings.audio.wake_word}’ to begin.")
+            if keyboard_enabled:
+                console.note("/mute · /stop · /help · /exit")
+            else:
+                console.note("Press Ctrl+C to exit.")
         if terminal_input is not None:
             terminal_input.start()
         while not shutdown_requested.is_set() and loop.is_running:

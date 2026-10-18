@@ -47,6 +47,18 @@ class CielFormatter(logging.Formatter):
         super().__init__(fmt=self.FORMAT, datefmt=self.DATE_FORMAT)
 
 
+class ConversationFormatter(logging.Formatter):
+    """Show everyday messages without developer timestamps and source locations."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        message = super().format(record)
+        if record.levelno >= logging.WARNING:
+            return f"{record.levelname.title()}: {message}"
+        if message.startswith("STT ready:"):
+            return message.replace("STT ready:", "Recognition loaded:", 1)
+        return message
+
+
 class ConciseLogFilter(logging.Filter):
     """Keep conversational and operational INFO messages on normal startup."""
 
@@ -54,28 +66,18 @@ class ConciseLogFilter(logging.Filter):
         "🗣️ You:",
         "⌨️ You:",
         "[system]:",
-        "Keyboard ready",
         "Desktop web interface:",
         "🤖 CIEL",
         "Ready.",
-        "Wake detected!",
-        "Wake listener active",
-        "Microphone active",
-        "Utterance recording started",
         "Heard during CIEL reply",
+        "Heard before a newer utterance superseded this turn",
         "Merged ",
         "Interrupted speech was unclear to STT",
         "Interrupted speech wasn't merged",
-        "Wake keyword spotter ready",
+        "STT candidate (diagnostic):",
         "STT ready:",
-        "Chatterbox Turbo ready",
-        "Ambient listening active",
         "Speech was unclear; asking for a repeat",
     )
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._shown_readiness: set[str] = set()
 
     def filter(self, record: logging.LogRecord) -> bool:
         if record.levelno >= logging.WARNING:
@@ -83,10 +85,8 @@ class ConciseLogFilter(logging.Filter):
         if record.levelno != logging.INFO:
             return False
         message = record.getMessage()
-        if any(token in message for token in ("ready:", "Turbo ready")):
-            if message in self._shown_readiness:
-                return False
-            self._shown_readiness.add(message)
+        if message.startswith("[system]: AI chose "):
+            return False
         return any(visible in message for visible in self._VISIBLE_INFO)
 
 
@@ -107,7 +107,7 @@ def setup_logging(log_level: str | None = None, *, concise: bool = False) -> log
 
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(numeric_level)
-    console_handler.setFormatter(CielFormatter())
+    console_handler.setFormatter(ConversationFormatter() if concise else CielFormatter())
     console_handler.addFilter(SecretMaskingFilter())
     if concise:
         console_handler.addFilter(ConciseLogFilter())
