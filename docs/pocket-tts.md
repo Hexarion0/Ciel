@@ -7,20 +7,24 @@ than assuming that GitHub main matches the installed package.
 
 ## Install
 
-From the repository root, with the existing `.venv`:
+From the repository root, with the existing `.venv`, run setup and select Pocket:
 
 ```bash
-.venv/bin/python -m pip install -e '.[pocket-tts,benchmark,dev]'
+.venv/bin/ciel setup
 ```
 
-`bash setup.sh` now installs the Pocket extra and still downloads the Piper Amy
-fallback and Whisper model. On a fresh environment it first installs torch from
-PyTorch's CPU wheel index. Existing torch installations are preserved. For a
-manual fresh CPU installation, create a virtualenv, then run:
+The [installer](../README.md#install-and-start) installs the lightweight core first.
+After you review and save, setup installs only the components needed by your choices
+and prepares their models. Pocket is the fresh voice choice; existing selections
+are preserved. When Pocket is selected, missing PyTorch is installed from its CPU
+wheel index. Amy downloads only when selected, and CUDA libraries require choosing
+NVIDIA recognition. Rerun setup to change selections or retry missing downloads.
+
+For manual CPU installation with benchmark tools, create a virtualenv, then run:
 
 ```bash
 .venv/bin/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-.venv/bin/python -m pip install -e '.[pocket-tts,benchmark,dev]'
+.venv/bin/python -m pip install -e '.[voice,pocket-tts,benchmark]'
 ```
 
 Pocket's upstream dependency requires NumPy 2 or newer. Keep the separate
@@ -75,9 +79,9 @@ TTS_FALLBACK_VOICE=en_US-ciel-medium
 TTS_STREAMING=true
 ```
 
-Pocket loads only on the first request or explicit warmup. Normal listening startup
-warms Pocket before enabling the listener, using Ciel's existing TTS preparation
-step. Construction itself stays lazy. The fixed language
+Setup warms the selected Pocket model before the playback test and reports
+preparation failures so you can retry. Normal listening startup also warms Pocket
+before enabling the listener. Construction itself stays lazy. The fixed language
 config in 3.3.0 refers to revision-pinned model/tokenizer files. Models and voice
 states download through Hugging Face on first use. Set `HF_HOME` to an ignored
 local directory if desired, consistently for login, warmup, and normal launch:
@@ -242,7 +246,7 @@ ear. Missing styles intentionally sound like neutral.
 
 Select the normal path in `.env` with `TTS_ENGINE=pocket`. Run
 `.venv/bin/python -m ciel --listen` after model/reference setup. `ciel setup`
-also offers Pocket as voice choice 3. Use `TTS_ENGINE=chatterbox_turbo` (or `hq`)
+offers **Ciel Pocket** under **Customize**. Use `TTS_ENGINE=chatterbox_turbo` (or `hq`)
 and `TTS_VOICE=ciel` for the existing HQ assets, or `TTS_ENGINE=piper` and
 `TTS_VOICE=en_US-ciel-medium`/`en_US-amy-medium` for direct Piper.
 

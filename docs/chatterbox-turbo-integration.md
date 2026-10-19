@@ -2,10 +2,11 @@
 
 ## Setup requirements
 
-The default installer uses Pocket on CPU, with installed Piper voices for fallback.
-Choose **1: CIEL custom voice** in
-`ciel setup` to configure Turbo. The choice checks existing assets and saves
-configuration; it does not download the model or create the inference environment.
+The [installer](../README.md#install-and-start) installs the lightweight core, then
+opens setup to review and save choices before preparing selected components.
+Fresh setup selects CPU Pocket. Choose **Customize**, then **Ciel Turbo** in
+`ciel setup` to configure Turbo. Setup saves the choice and checks existing assets;
+it does not download the Turbo model or create its inference environment.
 Turbo requires an NVIDIA CUDA GPU and a separate inference environment. Wheels
 include the worker and safe default manifest; private references and model weights
 must be supplied locally.
@@ -47,8 +48,9 @@ Download sizes and installation footprints can differ across machines.
 Restore your private reference WAV and matching transcript to the paths above
 from a separate backup. The downloader supplies model weights, not the original
 CIEL voice reference. Copy the custom Piper model/config separately if you want
-that fallback too; `bash setup.sh` pre-downloads Amy as the standard fallback.
-Then run `.venv/bin/ciel setup`, choose **1**, and check actual playback.
+that fallback too. Amy is downloaded only when selected in setup; choose Amy once,
+then rerun setup and select Turbo to retain it as an installed fallback.
+Run `.venv/bin/ciel setup`, select **Ciel Turbo**, and check actual playback.
 Environment/model locations can be overridden with `TTS_CHATTERBOX_PYTHON`,
 `TTS_CHATTERBOX_MODEL`, and `TTS_VOICE_PROFILES`.
 

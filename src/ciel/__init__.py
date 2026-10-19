@@ -1,3 +1,3 @@
-"""CIEL: A JARVIS-style, always-listening desktop AI assistant."""
+"""CIEL: A personal desktop voice assistant."""
 
 __version__ = "0.3.6"

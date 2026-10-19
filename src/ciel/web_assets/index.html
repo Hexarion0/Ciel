@@ -639,7 +639,7 @@ async function submit(value) {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: message})
     });
     if (!response.ok || !result.accepted) throw Error(result.error || 'Ciel could not accept this request. Try again.');
-    if (message.toLowerCase() === '/exit') {
+    if (['/exit', '/quit'].includes(message.toLowerCase())) {
       runtime.ended = true; disconnect(); feedback('Session ended. Start ciel web to connect again.');
     } else {
       if (!message.startsWith('/') || message.toLowerCase() === '/stop') hideSpeech();

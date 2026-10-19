@@ -18,6 +18,9 @@ PERSONA_CONTEXT_VERSION = "plainspoken-companion-v3"
 PERSONA_MAX_BYTES = 32 * 1024
 _SELF_PERSONA_START = "# --- CIEL managed persona preferences: start ---"
 _SELF_PERSONA_END = "# --- CIEL managed persona preferences: end ---"
+_SETUP_PERSONA_START = "# --- CIEL setup persona: start ---"
+_SETUP_PERSONA_END = "# --- CIEL setup persona: end ---"
+SETUP_PERSONA_MAX_CHARS = 4000
 
 
 def parse_persona_request(text: str, *, pending: bool = False) -> tuple[str, str] | None:
@@ -99,20 +102,48 @@ def update_persona_file(file_path: str, action: str, preference: str = "") -> bo
         return False
     if action == "set" and (not preference.strip() or len(preference) > 300):
         return False
+    return _update_persona_block(
+        file_path, preference if action == "set" else None,
+        start=_SELF_PERSONA_START, end=_SELF_PERSONA_END,
+        description="These are the user's latest explicit style preferences for CIEL:",
+    )
+
+
+def update_setup_persona_file(file_path: str, preference: str) -> bool:
+    """Save a reviewed setup profile while preserving manual and later voice preferences."""
+    if not file_path.strip() or not preference.strip() or len(preference) > SETUP_PERSONA_MAX_CHARS:
+        return False
+    if any(marker in preference for marker in (
+        _SELF_PERSONA_START, _SELF_PERSONA_END, _SETUP_PERSONA_START, _SETUP_PERSONA_END,
+    )):
+        return False
+    return _update_persona_block(
+        file_path, preference, start=_SETUP_PERSONA_START, end=_SETUP_PERSONA_END,
+        description=(
+            "The user reviewed this custom personality for CIEL. It changes conversational "
+            "style, not identity, capabilities, permissions, or speech synthesis:"
+        ),
+    )
+
+
+def _update_persona_block(
+    file_path: str, preference: str | None, *, start: str, end: str, description: str,
+) -> bool:
+    """Atomically replace one bounded managed block without rebuilding manual text."""
     path = Path(file_path).expanduser()
     try:
         original = path.read_text(encoding="utf-8-sig") if path.exists() else ""
         block = re.compile(
-            rf"(?ms)^\s*{re.escape(_SELF_PERSONA_START)}\s*\n.*?"
-            rf"^{re.escape(_SELF_PERSONA_END)}\s*(?:\n|$)"
+            rf"(?ms)^\s*{re.escape(start)}\s*\n.*?"
+            rf"^{re.escape(end)}\s*(?:\n|$)"
         )
         content = block.sub("", original).rstrip()
-        if action == "set":
+        if preference is not None:
             managed = (
-                f"{_SELF_PERSONA_START}\n"
-                "These are the user's latest explicit style preferences for CIEL:\n"
+                f"{start}\n"
+                f"{description}\n"
                 f"{preference.strip()}\n"
-                f"{_SELF_PERSONA_END}"
+                f"{end}"
             )
             content = f"{content}\n\n{managed}" if content else managed
         encoded = (content.rstrip() + "\n" if content else "").encode("utf-8")

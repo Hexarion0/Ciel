@@ -10,6 +10,7 @@ import re
 import sys
 import threading
 import time
+from collections.abc import Callable
 from typing import Any
 
 from ciel.actions import ActionRegistry
@@ -191,6 +192,18 @@ def run_desktop(
         settings.audio.wake_word, settings.audio.ambient_followup_seconds,
         followup_policy=settings.audio.ambient_followup_policy,
     )
+    controls_lock = threading.RLock()
+
+    def set_listening_mode(enabled: bool, current: Callable[[], bool] | None = None) -> bool:
+        """Keep capture and dialogue mode together; reject superseded voice controls."""
+        with controls_lock:
+            if current is not None and not current():
+                return False
+            loop.set_ambient(enabled)
+            ambient_enabled[0] = enabled
+            ambient_context.reset()
+            return True
+
     pending_speech: list[str] = []
     unfinished_request: list[dict] = [{}]
     interrupted_reply: list[dict] = [{}]
@@ -616,9 +629,8 @@ def run_desktop(
                     actions.cancel_pending()
                     persona_change_pending[0] = False
                     enabled = bool(mode_on)
-                    loop.set_ambient(enabled)
-                    ambient_enabled[0] = enabled
-                    ambient_context.reset()
+                    if not set_listening_mode(enabled, current):
+                        return False
                     return finish("Ambient listening is on." if enabled else
                                   "Back to wake-word mode.")
                 persona = parse_persona_request(local_text, pending=persona_change_pending[0])
@@ -647,7 +659,10 @@ def run_desktop(
                     memory_service.cancel_proposal()
                     actions.cancel_pending()
                 else:
-                    local = memory_service.handle(local_text, authorized=authorized)
+                    with controls_lock:
+                        if not current():
+                            return False
+                        local = memory_service.handle(local_text, authorized=authorized)
                     if local is None:
                         local = answer_clock_query(local_text)
                     if local is not None:
@@ -917,9 +932,8 @@ def run_desktop(
             pending_speech.clear()
             unfinished_request[0] = {}
             enabled = bool(mode_on)
-            loop.set_ambient(enabled)
-            ambient_enabled[0] = enabled
-            ambient_context.reset()
+            if not set_listening_mode(enabled, current):
+                return False
             say(
                 "Ambient listening is on. Say Ciel when you want me."
                 if enabled else "Back to wake-word mode."
@@ -1020,7 +1034,12 @@ def run_desktop(
         persona_change_pending[0] = False
         if not allow_memory:
             memory_service.cancel_proposal()
-        memory_reply = memory_service.handle(cleaned_query) if allow_memory else None
+        memory_reply = None
+        if allow_memory:
+            with controls_lock:
+                if not current():
+                    return False
+                memory_reply = memory_service.handle(cleaned_query)
         if memory_reply is not None:
             if (
                 ambient_enabled[0] and not typed
@@ -1524,33 +1543,106 @@ def run_desktop(
                     "deferring %s initialization.", tts.engine,
                 )
         loop.start()
+
         def stop_keyboard_reply() -> None:
-            loop.cancel_response()
-            persona_change_pending[0] = False
-            memory_service.cancel_proposal()
-            actions.cancel_pending()
-            pending_speech.clear()
-            unfinished_request[0] = {}
+            with controls_lock:
+                loop.cancel_response()
+                persona_change_pending[0] = False
+                memory_service.cancel_proposal()
+                actions.cancel_pending()
+                pending_speech.clear()
+                unfinished_request[0] = {}
 
         def request_shutdown() -> None:
             shutdown_requested.set()
             stop_keyboard_reply()
 
+        def toggle_session_mute() -> bool:
+            with controls_lock:
+                muted = loop.toggle_microphone_mute()
+                if web_ui is not None:
+                    web_ui.set_muted(muted)
+                return muted
+
+        def set_session_mute(muted: bool) -> bool:
+            with controls_lock:
+                muted = loop.set_microphone_mute(muted)
+                if web_ui is not None:
+                    web_ui.set_muted(muted)
+                return muted
+
+        def session_mode(selection: str | None) -> str:
+            with controls_lock:
+                if selection is not None:
+                    enabled = selection == "ambient"
+                    stop_keyboard_reply()
+                    if enabled != ambient_enabled[0]:
+                        set_listening_mode(enabled)
+                mode = "ambient conversation" if ambient_enabled[0] else "wake-word"
+                microphone = "muted" if loop.microphone_muted else "active"
+                return f"Listening mode: {mode}; microphone {microphone}."
+
+        def session_memory(operation: str) -> str:
+            with controls_lock:
+                if operation != "status":
+                    enabled = operation == "resume"
+                    stop_keyboard_reply()
+                    if enabled != memory_service.recall_enabled:
+                        response = memory_service.handle(
+                            "resume memory recall" if enabled else "pause memory recall",
+                        )
+                        if response is not None:
+                            return response
+                state = "enabled" if memory_service.recall_enabled else "paused"
+                return (
+                    f"Saved-memory recall: {state}. Learning mode: {memory_service.learning_mode}. "
+                    "Saved facts are kept; recent conversation and learning remain active."
+                )
+
+        def session_status() -> str:
+            with controls_lock:
+                microphone = "muted" if loop.microphone_muted else "active"
+                state = getattr(loop, "state", None)
+                state = getattr(state, "value", state) or "running"
+                voice = f"{settings.audio.tts_voice} ({tts.engine})" if tts.enabled else "off"
+                last_engine = getattr(tts, "last_engine", None)
+                if tts.enabled and isinstance(last_engine, str) and last_engine:
+                    voice += f"; last synthesis engine: {last_engine}"
+                recognition = (
+                    f"{getattr(stt, 'model_size', settings.audio.stt_model)} on "
+                    f"{getattr(stt, 'device', settings.audio.stt_device)}; "
+                    + ("ready" if stt.is_ready() else "not ready")
+                )
+                return "\n".join((
+                    session_mode(None),
+                    f"Microphone: {microphone}. Listener: {str(state).replace('_', ' ')}.",
+                    f"Voice: {voice}.",
+                    f"Recognition: {recognition}.",
+                    f"Live captions: {'on' if show_ai_transcripts else 'off'}.",
+                    session_memory("status"),
+                ))
+
+        session_controls = {
+            "stop_reply": stop_keyboard_reply,
+            "toggle_mute": toggle_session_mute,
+            "set_mute": set_session_mute,
+            "exit_app": request_shutdown,
+            "status": session_status,
+            "mode": session_mode,
+            "memory": session_memory,
+        }
+
         if web_ui is not None:
             from ciel.terminal import TerminalInput
 
-            def toggle_web_mute() -> bool:
-                muted = loop.toggle_microphone_mute()
-                web_ui.set_muted(muted)
-                return muted
-
             web_controls = TerminalInput(
-                submit=loop.submit_text, stop_reply=stop_keyboard_reply,
-                toggle_mute=toggle_web_mute, exit_app=request_shutdown,
-                write=web_ui.feedback,
+                submit=loop.submit_text, write=web_ui.feedback, **session_controls,
             )
 
             def submit_web_message(text: str) -> bool:
+                text = text.strip()
+                if not text:
+                    return False
                 if text.startswith("/") and text.split()[0].casefold() not in {
                     "/fast", "/strong", "/deep", "/local",
                 }:
@@ -1576,16 +1668,16 @@ def run_desktop(
             from ciel.terminal import TerminalInput
 
             terminal_input = TerminalInput(
-                submit=loop.submit_text, stop_reply=stop_keyboard_reply,
-                toggle_mute=loop.toggle_microphone_mute,
-                exit_app=request_shutdown,
+                submit=loop.submit_text,
                 write=lambda message: logger.info("[system]: %s", message),
                 output=terminal_output,
                 owner_name=settings.ciel_preferred_name or None,
+                **session_controls,
             )
             logger.info(
                 "Keyboard ready — type a message and press Enter. "
-                "/mute: microphone, /stop: cancel reply, /exit: quit, /help: controls."
+                "/status: session, /mute: microphone, /stop: cancel reply, "
+                "/exit: quit, /help: all commands."
             )
         if ambient_enabled[0]:
             logger.info(
@@ -1609,7 +1701,7 @@ def run_desktop(
             if not ambient_enabled[0]:
                 console.note(f"Say ‘{settings.audio.wake_word}’ to begin.")
             if keyboard_enabled:
-                console.note("/mute · /stop · /help · /exit")
+                console.note("/status · /mute · /mode · /memory · /help · /exit")
             else:
                 console.note("Press Ctrl+C to exit.")
         if terminal_input is not None:

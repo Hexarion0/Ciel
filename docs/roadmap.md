@@ -1,6 +1,6 @@
 # CIEL development roadmap
 
-Last reviewed: **2026-10-18**. Package version: **0.3.6 development**.
+Last reviewed: **2026-10-20**. Package version: **0.3.6 development**.
 
 The goal is a reliable personal desktop assistant with natural voice conversation,
 persistent memory, useful actions, and eventually remote messaging and presence.
@@ -19,7 +19,7 @@ before treating it as ready for everyday use.
 | Actions | Trusted module discovery, validation, local telemetry, allowlisted Linux app launching | Model-selected calls, reminders, live desktop launch acceptance |
 | Internet | Free automatic search, public HTML/text reading, bounded retrieval, relevant user context, source links | Live voice/text retrieval acceptance, broader site compatibility, PDF/media extraction |
 | Personality | Modular persona prompt, continuity rules, opinions/initiative, editable preferences, voice-requested style updates/reset | Continued evaluation during real conversations |
-| Setup | Consistent Pocket fresh defaults; preserved existing voice choices; device/key configuration; missing-asset reporting | Automatic Turbo setup, managed desktop runtime, clean-machine validation |
+| Setup | Configure/review/save before selected package/model installation; CPU recognition choice by default; preserved existing settings; missing-asset reporting | Automatic Turbo setup, managed desktop runtime, clean-machine validation |
 | Desktop web interface | PC-local voice/text chat, live captions, status, and controls | Same-Wi-Fi phone access and desktop acceptance |
 | Messaging, tone, Windows, presence | Planned | Implementation |
 
@@ -41,8 +41,9 @@ The next milestone is a reliable v0.3 desktop release.
    change was saved or still needs direct address and confirmation.
    Confirm the 0.9-second endpoint preserves normal pauses. Exercise web retrieval
    and source display through voice and text using [release checks](release-checks.md).
-2. **Prove clean installation with real voice assets.** Test a fresh install and
-   restart outside the checkout with Pocket and installed Piper fallback. Import
+2. **Prove clean installation with real voice assets.** Test core installation,
+   configure-first CPU/Piper and optional Pocket/CUDA selections, cancellation,
+   failed-download retry, and restart outside the checkout. Import
    the private Turbo reference, install its separate environment and model, and
    verify missing-model and missing-GPU recovery. Keep Turbo optional.
 3. **Add persistent reminders after release acceptance.** Use the shared desktop
@@ -69,8 +70,8 @@ this section rather than silently marking later milestones complete.
 - [x] Heuristic request routing and `/fast`, `/strong`, `/deep`, `/local` overrides.
 - [x] Explicit local time/date, memory, and desktop commands without an AI decision.
 - [x] Shared terminal/web session runtime outside CLI argument and startup handling.
-- [x] Ambient listening, live AI captions, and the main CUDA speech profile by default
-      across direct launches, installed commands, setup, and example configuration.
+- [x] Ambient listening and live AI captions by default; setup offers CPU recognition
+      and explicit CUDA while preserving saved recognition settings.
 - [x] Provider fallback before visible output; no splicing after a partial answer.
 - [x] Piper speech, persistent Turbo worker, bounded sentence queues and interruption.
 - [x] Contextual vocal cues, inline placement, giggle/moan aliases, and adjustable cue
@@ -127,7 +128,11 @@ estimates the intended listener without identifying speakers.
 
 - [x] Setup menu: CPU Pocket, Amy/Piper, or custom Turbo HQ voice.
 - [x] Preserve existing settings and selected audio devices during setup.
-- [x] CPU/Pocket example configuration and installer pre-downloads for Amy fallback.
+- [x] Lightweight core install, followed by review/save and selected speech packages/models.
+- [x] CPU recognition offered by default; CUDA libraries, Pocket, and openWakeWord only
+      installed when selected/configured; preserve existing explicit choices.
+- [x] Rerun setup to install missing selected components and retry failed downloads
+      with saved settings.
 - [x] Report missing custom reference, model files, or inference environment.
 - [x] Download the exact Turbo model revision expected by the runtime.
 - [x] Keep private references, recordings, weights, environments, and databases out of Git.
@@ -152,9 +157,12 @@ The existing custom voice needs its original reference audio/transcript. A Git c
 contains the manifest, not those assets. The heavier Turbo installation should remain
 optional. See [custom voice requirements](chatterbox-turbo-integration.md).
 
-README, configuration, and fresh setup select Pocket; `setup.sh` installs its extra.
-Setup preserves existing voice choices. Verify the selected voice after restart
-with the target desktop's installed models and audio devices.
+Fresh setup selects Pocket and offers CPU recognition. `setup.sh` installs the core
+first; the wizard saves reviewed choices, installs their required extras and models,
+then tests voice playback. It preserves saved settings and installs newly needed
+components when rerun. Verify the selected voice after restart with the target
+desktop's installed models and audio devices. Clean-machine and live audio checks
+remain open.
 
 The current source installation still uses `.venv` and the separate Turbo
 environment. The desktop installer should manage these runtime needs internally;

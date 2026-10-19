@@ -13,6 +13,30 @@ from typing import TextIO
 
 from ciel.terminal_output import TerminalOutput
 
+_PROVIDER_COMMANDS = {"/fast", "/strong", "/deep", "/local"}
+_COMMAND_HELP = {
+    "/status": "/status — Show the current session, microphone, listening mode, and memory status.",
+    "/mute": "/mute [on|off] — Toggle the microphone, or explicitly mute/unmute it.",
+    "/unmute": "/unmute — Unmute the microphone; typed messages always remain available.",
+    "/mode": "/mode [ambient|wake] — Show or change this session's listening mode.",
+    "/memory": "/memory [status|pause|resume] — Inspect or pause/resume saved-memory recall. "
+               "Saved facts are kept; recent conversation and learning remain active.",
+    "/stop": "/stop — Cancel the current recording and reply.",
+    "/exit": "/exit — Shut down CIEL. /quit is an alias.",
+    "/quit": "/quit — Shut down CIEL. Alias for /exit.",
+    "/help": "/help [command] — Show all controls or help for one command.",
+    "/fast": "/fast MESSAGE — Send one message using the fast route.",
+    "/strong": "/strong MESSAGE — Send one message using the strong route.",
+    "/deep": "/deep MESSAGE — Send one message using the deep route.",
+    "/local": "/local MESSAGE — Send one message using the local route.",
+}
+_COMMAND_USAGE = {
+    "/status": "/status", "/mute": "/mute [on|off]", "/unmute": "/unmute",
+    "/mode": "/mode [ambient|wake]", "/memory": "/memory [status|pause|resume]",
+    "/stop": "/stop", "/exit": "/exit", "/quit": "/quit",
+    "/help": "/help [command]",
+}
+
 
 class TerminalInput:
     """Read complete terminal lines without blocking reply or audio workers."""
@@ -27,6 +51,11 @@ class TerminalInput:
         stream: TextIO | None = None,
         output: TextIO | None = None,
         owner_name: str | None = None,
+        *,
+        status: Callable[[], str] | None = None,
+        set_mute: Callable[[bool], bool] | None = None,
+        mode: Callable[[str | None], str] | None = None,
+        memory: Callable[[str], str] | None = None,
     ) -> None:
         self.stream = sys.stdin if stream is None else stream
         self.output = sys.stdout if output is None else output
@@ -36,6 +65,11 @@ class TerminalInput:
         self.toggle_mute = toggle_mute
         self.exit_app = exit_app
         self.write = write
+        self.status = status
+        self.set_mute = set_mute
+        self.mode = mode
+        self.memory = memory
+        self._command_lock = threading.RLock()
         self._closed = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -44,27 +78,72 @@ class TerminalInput:
         text = line.strip()
         if not text:
             return
-        command = text.casefold()
-        if command == "/exit":
+        words = text.split()
+        command = words[0].casefold()
+        if text.startswith("/") and command not in _PROVIDER_COMMANDS:
+            with self._command_lock:
+                try:
+                    self._handle_command(command, [word.casefold() for word in words[1:]])
+                except Exception:
+                    self.write(f"Could not run {command}. Try again or use /help.")
+        elif not self.submit(text):
+            self.write("Message wasn't submitted: the listener is stopping.")
+
+    def _handle_command(self, command: str, arguments: list[str]) -> None:
+        """Validate local controls before invoking runtime callbacks."""
+        if command not in _COMMAND_USAGE:
+            self.write("Unknown command. Use /help for controls.")
+            return
+        choices = {
+            "/mute": {"on", "off"}, "/mode": {"ambient", "wake"},
+            "/memory": {"status", "pause", "resume"},
+        }
+        if (
+            len(arguments) > 1
+            or arguments and command not in {*choices, "/help"}
+            or arguments and command in choices and arguments[0] not in choices[command]
+        ):
+            self.write(f"Usage: {_COMMAND_USAGE[command]}")
+            return
+        if command in {"/exit", "/quit"}:
             self.exit_app()
             self.write("Exiting CIEL; shutting down the microphone and voice worker.")
             self._closed.set()
         elif command == "/stop":
             self.stop_reply()
             self.write("Stopped the current reply.")
-        elif command == "/mute":
-            muted = self.toggle_mute()
+        elif command in {"/mute", "/unmute"}:
+            if command == "/mute" and not arguments:
+                muted = self.toggle_mute()
+            elif self.set_mute is None:
+                self.write(f"{command} is unavailable in this session.")
+                return
+            else:
+                muted = self.set_mute(command == "/mute" and arguments == ["on"])
             self.write("Microphone muted; typed messages still work." if muted
                        else "Microphone unmuted.")
         elif command == "/help":
-            self.write("Type a message and press Enter. /mute toggles the microphone; "
-                       "/stop cancels the reply; /exit quits; /help shows these controls.")
-        elif text.startswith("/") and text.split()[0].casefold() not in {
-            "/fast", "/strong", "/deep", "/local",
-        }:
-            self.write("Unknown command. Use /help for controls.")
-        elif not self.submit(text):
-            self.write("Message wasn't submitted: the listener is stopping.")
+            if arguments:
+                topic = "/" + arguments[0].lstrip("/")
+                self.write(_COMMAND_HELP.get(topic, "Unknown command. Use /help for controls."))
+            else:
+                self.write(
+                    "Type a message and press Enter. /mute toggles the microphone; "
+                    "/stop cancels the reply; /exit quits; /help shows these controls.\n"
+                    "More controls: /status; /mute on|off; /unmute; /mode [ambient|wake]; "
+                    "/memory [status|pause|resume]; /quit.\n"
+                    "Route one message with /fast, /strong, /deep, or /local. "
+                    "Use /help COMMAND for details."
+                )
+        elif command == "/status":
+            self.write(self.status() if self.status is not None else
+                       "/status is unavailable in this session.")
+        elif command == "/mode":
+            self.write(self.mode(arguments[0] if arguments else None) if self.mode is not None
+                       else "/mode is unavailable in this session.")
+        elif command == "/memory":
+            self.write(self.memory(arguments[0] if arguments else "status")
+                       if self.memory is not None else "/memory is unavailable in this session.")
 
     def start(self) -> None:
         """Start reading stdin; EOF ends keyboard input without stopping voice."""

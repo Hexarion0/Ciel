@@ -245,12 +245,15 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
   assert(!elements.get('send').disabled, 'Polling must recover after a status timeout');
   assert.equal(elements.get('input').value, 'prepared while disconnected');
 
-  // A late status response must not re-enable controls after shutdown.
-  await vm.runInContext("submit('/exit')", context);
-  vm.runInContext('render(' + JSON.stringify(state) + ')', context);
-  assert.equal(elements.get('core-state').textContent, 'Session ended.');
-  assert(elements.get('input').disabled);
-  assert(elements.get('core').disabled);
+  // Either exit command ends the session; late status cannot re-enable controls.
+  for (const command of ['/exit', '/QuIt']) {
+    vm.runInContext('runtime.ended = false; render(' + JSON.stringify(state) + ')', context);
+    assert(await vm.runInContext('submit(' + JSON.stringify(command) + ')', context));
+    vm.runInContext('render(' + JSON.stringify(state) + ')', context);
+    assert.equal(elements.get('core-state').textContent, 'Session ended.');
+    assert(elements.get('input').disabled);
+    assert(elements.get('core').disabled);
+  }
   console.log('UI checks passed: speech, announcements, controls, drafts, timeout, reconnect, shutdown.');
 })().catch(error => {
   console.error(error);

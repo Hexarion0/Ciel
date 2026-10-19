@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 
-from ciel.config import get_settings
+from ciel.config import ProviderConfig, get_settings
 from ciel.logging import get_logger
 from ciel.providers.base import ChatMessage, LLMProvider, LLMResponse, LLMStreamChunk
 from ciel.providers.streaming import streaming_client
@@ -22,12 +22,18 @@ class OpenRouterProvider(LLMProvider):
     default_model: str = "meta-llama/llama-3.1-8b-instruct:free"
     base_url: str = "https://openrouter.ai/api/v1"
 
-    def __init__(self, api_key: str | None = None, timeout: float = 30.0) -> None:
-        settings = get_settings()
+    def __init__(
+        self,
+        api_key: str | None = None,
+        timeout: float = 30.0,
+        *,
+        config: ProviderConfig | None = None,
+    ) -> None:
+        providers = config if config is not None else get_settings().providers
         if api_key:
             self.api_key = api_key
-        elif settings.providers.openrouter_api_key:
-            self.api_key = settings.providers.openrouter_api_key.get_secret_value()
+        elif providers.openrouter_api_key:
+            self.api_key = providers.openrouter_api_key.get_secret_value()
         else:
             self.api_key = None
         self.timeout = timeout

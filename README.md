@@ -17,7 +17,8 @@ internet, and desktop acceptance checks remain open in
 - Sentence-by-sentence speech while the provider is generating, interruption
   handling, and optional captions that follow playback.
 - SQLite conversation history, background summaries, and persistent facts.
-  Conversational facts need confirmation; explicit `remember ...` commands save directly.
+  Conversational facts ask for confirmation by default; explicit `remember ...`
+  commands save directly.
 - Local time/date, RAM usage, GPU temperature, CPU core count, and supported Linux app launching.
 - Free public web search and HTML/text page reading, with bounded requests and source links.
 - Editable personality preferences, voice-requested style adjustments, and concise
@@ -30,8 +31,8 @@ See the [roadmap](docs/roadmap.md) for implementation status and priorities.
 ## Install and start
 
 Use **Python 3.10+** on Linux with a working microphone and audio output.
-A GPU is optional: command STT prefers CUDA and recovers on CPU if unavailable;
-the default Pocket voice runs on CPU. Initial package and model
+A GPU is optional: fresh setup offers CPU recognition, and CUDA is an explicit
+choice. The default Pocket voice runs on CPU. Initial package and model
 installation needs internet access. Provider replies need a configured cloud
 account or a running local Ollama server with a model installed.
 
@@ -42,10 +43,12 @@ bash setup.sh
 ciel start
 ```
 
-The installer creates `.venv`, installs CIEL with Pocket support and CUDA STT libraries,
-downloads fallback Amy, the configured command STT model (default `small.en`),
-and the separate wake model (`base.en`), then opens configuration for API keys, voice, and
-audio devices. If `.env` already exists, it offers to reconfigure it.
+The installer creates or reuses `.venv` and installs CIEL's lightweight core, then
+opens setup for your name, preferences, API keys, voice, and audio devices. Review
+and save your choices before setup installs the selected voice and recognition
+packages and downloads their configured models. CPU recognition avoids the optional
+CUDA libraries; choose **NVIDIA GPU** in setup if you want GPU recognition. Existing
+saved settings are preserved by **Quick start**.
 It also installs a `ciel` launcher in `~/.local/bin` that uses this checkout's
 `.venv` and CUDA libraries automatically. Keep the checkout in place and add
 `~/.local/bin` to your shell's PATH if it is not already there.
@@ -54,24 +57,37 @@ For a manual installation:
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install -e ".[pocket-tts,gpu]"
+.venv/bin/python -m pip install -e .
 .venv/bin/ciel setup
 .venv/bin/ciel start
 ```
 
 Run these commands from the repository root. Setup offers **Quick start** to reuse
 your settings or **Customize** to choose AI keys, voice, audio devices, and listening
-preferences. Review the choices before saving, then check voice playback; you can
-replay the test or change speakers. Canceling before saving leaves `.env` untouched.
-Saved API keys stay hidden, and unrelated settings survive reconfiguration. Amy and Whisper
-models download when first needed if they are not already present. Alternatively,
-copy `.env.example` to `.env` and edit it; fresh settings, the wizard, and the example
-use CPU Pocket with the CIEL profile (provisional Alba without private references).
-Command STT uses `small.en` on CUDA with `int8_float16`, beam size 5, and a guarded
-`medium.en` retry. Ambient listening, speech interruption, and live AI captions
-start automatically. Existing explicit settings keep their selected values.
-Existing explicit voice choices are preserved. If Pocket is unavailable, playback
-tries installed local Piper voices; choose Amy in setup to download its fallback model.
+preferences. Both paths ask what CIEL should call you, an optional city and country
+for weather and local searches, and how it should learn supported facts: ask first
+(`confirm`), save only explicit remember commands (`explicit`), or save supported clear
+statements automatically (`automatic`). Enter keeps each current answer; `-` clears
+your name or city. An empty name uses your computer username, and an empty city means
+CIEL asks for a location when needed. Review the choices before saving, installing
+selected components, and checking voice playback; you can replay the test or change
+speakers. Canceling before saving leaves `.env` untouched and skips these downloads.
+Run `ciel setup` again to change choices or install missing components after a
+selection change or failed download. Saved choices survive a download failure.
+Both paths also offer an optional AI personality interview after API-key entry.
+Saved API keys stay hidden, and unrelated settings survive reconfiguration. Setup
+installs Pocket only when selected, CUDA libraries only for GPU recognition, and
+openWakeWord only when configured. It prepares the configured command and enabled
+wake recognition models, plus the selected voice; it does not download Amy for
+every voice choice. Pocket's model is prepared before the setup playback test.
+Alternatively, copy `.env.example` to `.env` and edit it, then run `ciel setup` to
+prepare its selections. Fresh setup uses CPU Pocket with the CIEL profile
+(provisional Alba without private references) and offers CPU/`int8` command STT.
+The CUDA option uses `int8_float16`; command STT uses `small.en`, beam size 5, and a
+guarded `medium.en` retry. Ambient listening, speech interruption, and live AI
+captions start automatically. Existing explicit settings keep their selected values.
+If Pocket is unavailable, playback tries installed local Piper voices; choose Amy
+in setup to download its model.
 
 Activation is optional with the commands above. In Bash/Zsh use
 `source .venv/bin/activate`; in fish use `source .venv/bin/activate.fish`.
@@ -90,7 +106,7 @@ Run `ciel web` to start the assistant and open its desktop page at
 in a temporary speech bubble and an input for typed messages and commands.
 Microphone, stop, help, and exit controls report their results on the page.
 It uses the PC's microphone and speakers, with the same memory and validated
-actions as the terminal. You can also type `/mute`, `/stop`, `/exit`, and `/help`.
+actions as the terminal. Both accept the in-session commands listed below.
 
 Use `ciel web --no-open-browser` to open the page yourself, or
 `ciel web --web-port 8766` if the default port is in use. Stop an existing
@@ -157,6 +173,40 @@ terminals and redirected input. Set `NO_COLOR=1` for uncolored output.
 .venv/bin/ciel setup                    # change voice, keys, or audio devices
 ```
 
+Use the command toolkit to inspect your setup:
+
+| Command | Purpose |
+| --- | --- |
+| `ciel status` | Show the configured listening mode, voice, STT, providers, and paths |
+| `ciel doctor` | Check local setup and show warnings, errors, and suggested fixes |
+| `ciel devices` | List audio device indexes and defaults; filter with `--input` or `--output` |
+| `ciel config` or `ciel config show` | Show effective settings, with API keys shown as configured or unconfigured |
+| `ciel help [command]` | Show general help or help for one command |
+
+Add `--json` to `status`, `doctor`, `devices`, or `config` for machine-readable output.
+`status` describes configuration; it does not check a running CIEL process or live
+provider health. `doctor` runs offline without downloads, model inference, or network
+requests. It exits with code 1 for errors and code 0 for warnings alone.
+
+While CIEL is running, type these commands in the terminal or desktop web input:
+
+| In-session command | Purpose |
+| --- | --- |
+| `/status` | Show microphone, listening mode, voice, recognition readiness, and memory status |
+| `/mute [on\|off]` | Toggle the microphone, or explicitly mute/unmute it; typed messages still work |
+| `/unmute` | Unmute the microphone |
+| `/mode [ambient\|wake]` | Show or change the listening mode |
+| `/memory [status\|pause\|resume]` | Show or pause/resume saved-fact recall |
+| `/stop` | Cancel the current recording and reply |
+| `/help [command]` | Show controls or help for one command, such as `/help memory` |
+| `/exit` or `/quit` | Shut down CIEL |
+
+Microphone and listening-mode changes apply to the current session; restarting uses
+your saved configuration. Memory recall pause/resume persists across restarts and
+keeps saved facts, recent conversation, and learning active. These controls run
+locally without an AI request. Prefix a message with `/fast`, `/strong`, `/deep`, or
+`/local` to select a provider route for that message.
+
 Try:
 
 - “Hey Ciel, what time is it?”
@@ -180,6 +230,22 @@ block; “reset your persona” clears that block while preserving your own text
 These preferences change reply style, not the actual TTS engine or playback speed.
 The default style uses simple, direct replies. Bracketed stage directions describing
 breathing, pauses, mood, or gestures are removed before speech and from saved replies.
+
+For guided customization, run `ciel setup` and choose **Build a custom personality with AI**
+at the personality step. Describe the character, tone, or reference text you have in
+mind. The selected cloud provider uses your answers to ask up to three follow-up
+questions, then shows a draft. Type `/done` to draft early or `/skip` to discard the
+interview. You can request up to two revisions before accepting the personality.
+Questions and answers are sent to that provider using your configured API key,
+including a key just entered in setup; reference links are not fetched.
+
+An accepted draft is saved to `CIEL_PERSONA_FILE` (default `persona.txt`) only when
+you save the setup. It uses a separate managed block and preserves your own text and
+voice-requested style block. Returning to **Customize** keeps an accepted draft until
+you discard it. Skipping without accepting a draft, or canceling setup before saving,
+leaves the personality file unchanged. Without a cloud key, setup skips the interview.
+If writing the personality fails, setup reports the failure; saved settings remain
+available and the old personality file is preserved.
 
 ### Internet access
 
@@ -245,10 +311,10 @@ silently fall back to a larger cloud model. Each web report has a deadline of at
 
 ### Listening and performance settings
 
-| Setting | Fresh-install value | Purpose |
+| Setting | Fresh setup value | Purpose |
 | --- | --- | --- |
-| `STT_MODEL` / `STT_DEVICE` | `small.en` / `cuda` | Command transcription; CPU recovery if unavailable |
-| `STT_COMPUTE_TYPE` / `STT_BEAM_SIZE` | `int8_float16` / `5` | Command decoding precision and beam width |
+| `STT_MODEL` / `STT_DEVICE` | `small.en` / `cpu` | Command transcription; optional CUDA choice in setup |
+| `STT_COMPUTE_TYPE` / `STT_BEAM_SIZE` | `int8` / `5` | Command decoding precision and beam width |
 | `STT_RETRY_MODEL` | `medium.en` | Quality retry when free memory permits |
 | `WAKE_STT_MODEL` | `base.en` | Separate CPU wake recognizer |
 | `UTTERANCE_SILENCE_SECONDS` | `0.7` | Silence before ending a turn |
@@ -263,9 +329,10 @@ Increase pause grace if CIEL cuts you off while thinking. The previous
 1.8-second endpoint was more tolerant of pauses in recorded reference passages;
 the current shorter default still needs live microphone acceptance.
 
-Existing installations can add the CUDA STT libraries with
-`.venv/bin/python -m pip install -e ".[gpu]"`. The normal launch already selects
-CUDA transcription; `./scripts/launch_ciel_gpu.sh` also prepares library paths.
+Run `ciel setup` and choose **NVIDIA GPU** to save CUDA recognition settings and
+install its libraries. For manual configuration, install
+`.venv/bin/python -m pip install -e ".[voice,gpu]"`, then set `STT_DEVICE=cuda` and
+`STT_COMPUTE_TYPE=int8_float16`. The launcher prepares installed CUDA library paths.
 Explicit `STT_DEVICE=cpu` with `STT_COMPUTE_TYPE=int8` selects CPU operation.
 `small.en` is the model used
 in the recorded GPU tests. Turbo has its own separate environment.

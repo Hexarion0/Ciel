@@ -6,29 +6,37 @@ import time
 
 from ciel import __version__
 
+TOOLKIT_COMMANDS = {"status", "doctor", "devices", "config"}
+COMMANDS = [
+    "run", "start", "listen", "web", "setup", "record-samples", "train-wake", "memory",
+    "status", "doctor", "devices", "config", "help",
+]
 
-def main() -> int:
-    """Initialize core settings, start logging, and launch CIEL."""
-    if sys.argv[1:2] == ["memory"]:
-        from ciel.memory.cli import main as memory_main
 
-        return memory_main(sys.argv[2:])
-    parser = argparse.ArgumentParser(description="CIEL Desktop AI Assistant")
+def _build_parser() -> argparse.ArgumentParser:
+    """Build launch help without importing audio or model dependencies."""
+    parser = argparse.ArgumentParser(
+        description="CIEL Desktop AI Assistant",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Quick commands:\n"
+            "  ciel start [dev]    Start voice conversation\n"
+            "  ciel web            Open the desktop web interface\n"
+            "  ciel setup          Configure voices, providers, and audio\n"
+            "  ciel status         Show the configured setup\n"
+            "  ciel doctor         Check local prerequisites and suggest fixes\n"
+            "  ciel devices        List microphones and speakers\n"
+            "  ciel config         Show effective settings with API keys hidden\n"
+            "  ciel memory --help  Inspect and manage saved memory\n"
+            "  ciel help COMMAND   Show help for a command"
+        ),
+    )
     parser.add_argument("--version", action="version", version=f"CIEL {__version__}")
     parser.add_argument(
         "command",
         nargs="?",
         default="run",
-        choices=[
-            "run",
-            "start",
-            "listen",
-            "web",
-            "setup",
-            "record-samples",
-            "train-wake",
-            "memory",
-        ],
+        choices=COMMANDS,
         help="Command to run",
     )
     parser.add_argument(
@@ -86,18 +94,45 @@ def main() -> int:
         default="Hey Ciel",
         help="Target wake phrase to train (default: 'Hey Ciel')",
     )
-    args = parser.parse_args()
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Dispatch local tools or initialize and launch the desktop assistant."""
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments[:1] == ["--"]:
+        arguments = arguments[1:]
+    parser = _build_parser()
+    if arguments[:1] == ["help"]:
+        if len(arguments) > 2:
+            parser.error("usage: ciel help [command]")
+        if len(arguments) == 1:
+            parser.print_help()
+            return 0
+        if arguments[1] not in COMMANDS:
+            parser.error(f"unknown command: {arguments[1]}")
+        return main([arguments[1], "--help"]) if arguments[1] != "help" else main(["--help"])
+    if arguments[:1] == ["memory"]:
+        from ciel.memory.cli import main as memory_main
+
+        return memory_main(arguments[1:])
+    if arguments and arguments[0] in TOOLKIT_COMMANDS:
+        from ciel.cli import main as toolkit_main
+
+        return toolkit_main(arguments)
+    args = parser.parse_args(arguments)
+    if args.command in TOOLKIT_COMMANDS | {"memory", "help"}:
+        parser.error(f"use 'ciel {args.command}' without launch options before the command")
     if not 1 <= args.web_port <= 65535:
         parser.error("--web-port must be between 1 and 65535")
     if args.mode == "dev" and args.command not in {"start", "listen", "web"}:
-        parser.error("the 'dev' mode can only be used with 'start' or 'listen'")
+        parser.error("the 'dev' mode can only be used with 'start', 'listen', or 'web'")
 
     # If user ran `python -m ciel setup`
     if args.command == "setup":
         from ciel.setup_wizard import run_setup_wizard
 
-        run_setup_wizard()
-        return 0
+        return 0 if run_setup_wizard(install_components=True) else 1
 
     # If user ran `python -m ciel record-samples`
     if args.command == "record-samples":

@@ -15,6 +15,7 @@ from piper.download_voices import download_voice
 from ciel.audio.alignment import CharacterTimeline, character_timeline, estimated_timeline
 from ciel.audio.chatterbox_worker import ChatterboxTurboWorker, ChatterboxWorkerError
 from ciel.audio.chunk_playback import ChunkPlayback
+from ciel.audio.engines import resolve_tts_engine
 from ciel.audio.native import sd
 from ciel.audio.pocket import PocketInitializationError, PocketTTS
 from ciel.audio.speech_events import (
@@ -32,18 +33,6 @@ from ciel.logging import get_logger
 from ciel.paths import bundled_worker_path, resolve_asset_path, voice_profile_path
 
 logger = get_logger("audio.tts")
-
-def resolve_tts_engine(voice_name: str, engine: str = "auto") -> str:
-    """An explicit engine wins; otherwise choose the engine for the voice."""
-    selected = engine.lower()
-    if selected == "auto":
-        return "piper"
-    if selected in {"chatterbox", "hq"}:
-        selected = "chatterbox_turbo"
-    if selected not in {"piper", "pocket", "chatterbox_turbo"}:
-        raise ValueError(f"Unknown TTS engine: {engine}")
-    return selected
-
 
 def resolve_piper_voice_paths(voice_name: str, models_dir: str | Path) -> tuple[Path, Path]:
     """Resolve a Piper ONNX + config pair without starting any TTS server."""

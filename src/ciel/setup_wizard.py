@@ -8,14 +8,27 @@ from tempfile import NamedTemporaryFile
 
 from dotenv import dotenv_values, set_key, unset_key
 
-from ciel.audio.tts import TextToSpeech, resolve_tts_engine
-from ciel.config import AudioConfig, ProviderConfig, get_settings, normalize_audio_device
+from ciel.audio.engines import resolve_tts_engine
+from ciel.config import (
+    AudioConfig,
+    ProviderConfig,
+    get_settings,
+    normalize_audio_device,
+    resolve_setup_values,
+)
 from ciel.logging import get_logger
 from ciel.paths import resolve_asset_path, voice_profile_path
 from ciel.platform import get_audio_backend
 from ciel.terminal_ui import ConsoleUI
 
 logger = get_logger("setup")
+
+
+def TextToSpeech(*args, **kwargs):
+    """Load voice dependencies only after the user has selected and installed them."""
+    from ciel.audio.tts import TextToSpeech as Speech
+
+    return Speech(*args, **kwargs)
 
 
 def custom_voice_asset_problems(configuration: dict[str, str]) -> list[str]:
@@ -72,6 +85,9 @@ def _initial_configuration(current_env: dict[str, str]) -> dict[str, str]:
     defaults = {
         "CIEL_ENV": "development",
         "CIEL_LOG_LEVEL": "INFO",
+        "CIEL_PREFERRED_NAME": "",
+        "INTERNET_HOME_CITY": "",
+        "MEMORY_LEARNING_MODE": "confirm",
         "NIM_MODEL": ProviderConfig().nim_model,
         "OLLAMA_HOST": "http://localhost:11434",
         "WAKE_WORD": "hey ciel",
@@ -185,11 +201,85 @@ def _voice_label(configuration: dict[str, str]) -> str:
     return voice
 
 
-def _customize(ui: ConsoleUI, configuration: dict[str, str]) -> None:
+def _personalize(ui: ConsoleUI, configuration: dict[str, str]) -> None:
+    """Ask about the user while retaining explicit values until they choose a change."""
+    ui.step("About you")
+    ui.note("Press Enter to keep each answer. Type - to clear a name or city.")
+    for key, question, fallback, limit in (
+        ("CIEL_PREFERRED_NAME", "What should Ciel call you?", "computer username", 100),
+        ("INTERNET_HOME_CITY", "What city and country should Ciel use for local searches?",
+         "ask when needed", 200),
+    ):
+        current = configuration.get(key, "")
+        while True:
+            answer = ui.prompt(f"{question} [{current or fallback}]").strip()
+            if not answer:
+                break
+            if answer == "-":
+                configuration[key] = ""
+                break
+            if len(answer) > limit:
+                ui.note(f"Please use {limit} characters or fewer.")
+                continue
+            if not answer.isprintable():
+                ui.note("Please enter text without control characters.")
+                continue
+            configuration[key] = answer
+            break
+    ui.note("Memory choices affect saved facts. Conversation history is kept separately.")
+    choices = [
+        ("confirm", "Ask before saving supported personal details"),
+        ("explicit", "Save only when I say remember"),
+        ("automatic", "Save supported clear personal statements automatically"),
+    ]
+    current_mode = configuration.get("MEMORY_LEARNING_MODE", "confirm")
+    learning = ui.choose(
+        "Remembering things", choices,
+        default=current_mode if current_mode in {value for value, _label in choices} else "confirm",
+    )
+    if learning != current_mode:
+        configuration["MEMORY_LEARNING_MODE"] = learning
+
+
+def _configure_persona(
+    ui: ConsoleUI, configuration: dict[str, str], pending: str | None,
+    original_names: dict[str, str] | None = None,
+) -> str | None:
+    """Offer an interview without changing the existing profile until setup is saved."""
+    choices = [
+        ("keep", "Keep the reviewed draft" if pending is not None else "Keep current personality"),
+        ("interview", "Build a custom personality with AI"),
+    ]
+    if pending is not None:
+        choices.append(("discard", "Discard the draft and keep the saved personality"))
+    selected = ui.choose("Personality", choices, default="keep")
+    if selected == "discard":
+        return None
+    if selected == "interview":
+        from ciel.setup_persona import run_persona_interview
+
+        names = original_names or {}
+        draft = run_persona_interview(ui, {
+            names.get(key, key): value for key, value in configuration.items()
+        })
+        if draft is None and pending is not None:
+            ui.note("Your previously reviewed draft is still selected. "
+                    "Choose Discard the draft to keep the saved personality instead.")
+        return draft if draft is not None else pending
+    return pending
+
+
+def _customize(
+    ui: ConsoleUI, configuration: dict[str, str], pending_persona: str | None = None,
+    original_names: dict[str, str] | None = None,
+) -> str | None:
     """Walk through one decision at a time while retaining existing choices on Enter."""
+    _personalize(ui, configuration)
     _configure_keys(ui, configuration, primary_only=False)
+    pending_persona = _configure_persona(ui, configuration, pending_persona, original_names)
     ui.step("Voice")
     ui.note("Pocket runs on CPU; Turbo requires its separate model and private reference.")
+    ui.note("Pocket includes CPU PyTorch. Amy needs a smaller voice download.")
     voice = ui.choose("Choose a voice", [
         ("keep", f"Keep current ({_voice_label(configuration)})"),
         ("pocket", "Ciel Pocket · CPU"),
@@ -213,9 +303,12 @@ def _customize(ui: ConsoleUI, configuration: dict[str, str]) -> None:
                          default="on" if _enabled(configuration, "SHOW_AI_TRANSCRIPTS") else "off")
     if (captions == "on") != _enabled(configuration, "SHOW_AI_TRANSCRIPTS"):
         configuration["SHOW_AI_TRANSCRIPTS"] = "true" if captions == "on" else "false"
+    return pending_persona
 
 
-def _review_configuration(ui: ConsoleUI, configuration: dict[str, str]) -> None:
+def _review_configuration(
+    ui: ConsoleUI, configuration: dict[str, str], pending_persona: str | None = None,
+) -> None:
     """Show the choices that will be saved without claiming an untested connection."""
     providers = [name for key, name in (
         ("NIM_API_KEY", "NVIDIA NIM"), ("GROQ_API_KEY", "Groq"),
@@ -223,6 +316,14 @@ def _review_configuration(ui: ConsoleUI, configuration: dict[str, str]) -> None:
     ) if configuration.get(key)]
     ui.step("Review your setup")
     ui.summary([
+        ("Call you", configuration.get("CIEL_PREFERRED_NAME") or "Computer username"),
+        ("Default city", configuration.get("INTERNET_HOME_CITY") or "Ask when needed"),
+        ("Memory learning", {
+            "confirm": "Ask before saving", "explicit": "Remember commands only",
+            "automatic": "Save supported statements automatically",
+        }.get(configuration.get("MEMORY_LEARNING_MODE", "confirm"), "Ask before saving")),
+        ("Personality", "Reviewed draft; saved after confirmation" if pending_persona is not None
+         else "Keep current personality"),
         ("AI connection", f"{', '.join(providers)} · key configured" if providers
          else "No cloud key; local tools available"),
         ("Voice", _voice_label(configuration) if _enabled(configuration, "TTS_ENABLED")
@@ -234,8 +335,32 @@ def _review_configuration(ui: ConsoleUI, configuration: dict[str, str]) -> None:
         ("Microphone", configuration.get("AUDIO_INPUT_DEVICE") or "System default"),
         ("Speakers", configuration.get("AUDIO_OUTPUT_DEVICE") or "System default"),
     ])
-    if providers:
+    if providers and pending_persona is not None:
+        ui.note("The personality interview received an AI response. "
+                "Other provider connections were not tested.")
+    elif providers:
         ui.note("The AI connection hasn't been tested yet.")
+    if pending_persona is not None:
+        ui.note("Personality draft:")
+        ui.note(pending_persona)
+
+
+def _configure_acceleration(
+    ui: ConsoleUI, configuration: dict[str, str],
+) -> None:
+    """Let the user choose GPU downloads explicitly while preserving saved STT settings."""
+    ui.step("Speech recognition")
+    ui.note("CPU needs a smaller download. NVIDIA acceleration needs large GPU libraries.")
+    saved_device = configuration["STT_DEVICE"]
+    choices = [("cpu", "CPU"), ("cuda", "NVIDIA GPU")]
+    default = saved_device
+    if default not in {"cpu", "cuda"}:
+        choices.insert(0, ("keep", f"Keep current ({saved_device})"))
+        default = "keep"
+    selected = ui.choose("Run speech recognition on", choices, default=default)
+    if selected != "keep" and selected != saved_device:
+        configuration["STT_DEVICE"] = selected
+        configuration["STT_COMPUTE_TYPE"] = "int8" if selected == "cpu" else "int8_float16"
 
 
 def _test_voice(ui: ConsoleUI, configuration: dict[str, str]) -> bool:
@@ -281,7 +406,7 @@ def _test_voice(ui: ConsoleUI, configuration: dict[str, str]) -> bool:
     return False
 
 
-def run_setup_wizard() -> None:
+def run_setup_wizard(*, install_components: bool = False) -> bool:
     """Review configuration before saving, then let the user verify voice playback."""
     ui = ConsoleUI()
     saved = False
@@ -289,35 +414,109 @@ def run_setup_wizard() -> None:
     try:
         ui.banner("Let's make CIEL yours.")
         ui.note("Review everything before saving. Press Ctrl+C to leave setup.")
+        if install_components:
+            ui.note("Choose first. Selected components download only after you save.")
         env_path = Path(".env")
         original_env = dotenv_values(env_path, interpolate=False) if env_path.is_file() else {}
+        original_names = {key.upper(): key for key in original_env}
         configuration = _initial_configuration({
             key.upper(): value for key, value in original_env.items() if value is not None
         })
+        if install_components and "STT_DEVICE" not in original_names:
+            configuration["STT_DEVICE"] = "cpu"
+            configuration["STT_COMPUTE_TYPE"] = "int8"
         mode = ui.choose("Get started", [
             ("quick", "Quick start"), ("customize", "Customize"),
         ], default="quick")
+        pending_persona = None
         if mode == "customize":
-            _customize(ui, configuration)
-        elif not any(configuration.get(key) for key in (
-            "NIM_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY",
-        )):
-            _configure_keys(ui, configuration, primary_only=True)
+            pending_persona = _customize(ui, configuration, original_names=original_names)
+        else:
+            _personalize(ui, configuration)
+            if not any(configuration.get(key) for key in (
+                "NIM_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY",
+            )):
+                _configure_keys(ui, configuration, primary_only=True)
+            pending_persona = _configure_persona(ui, configuration, pending_persona, original_names)
+        if install_components:
+            _configure_acceleration(ui, configuration)
         while True:
-            _review_configuration(ui, configuration)
+            _review_configuration(ui, configuration, pending_persona)
+            if install_components:
+                ui.note("Saving installs the selected speech recognition and voice components. "
+                        "Existing downloads are reused. "
+                        "Turbo's private assets are checked locally.")
+                if configuration["TTS_ENGINE"] == "pocket":
+                    ui.note("The Pocket voice includes CPU PyTorch. "
+                            "Choose Customize and Amy for a smaller voice download.")
             action = ui.choose("Ready to save?", [
-                ("save", "Save and test"), ("customize", "Customize"), ("cancel", "Cancel"),
+                ("save", "Save, install, and test" if install_components else "Save and test"),
+                ("customize", "Customize"), ("cancel", "Cancel"),
             ], default="save")
             if action == "cancel":
                 ui.finish("Setup cancelled. No changes were saved.")
-                return
+                return False
             if action == "save":
                 break
-            _customize(ui, configuration)
+            pending_persona = _customize(ui, configuration, pending_persona, original_names)
+            if install_components:
+                _configure_acceleration(ui, configuration)
         saving = True
+        if pending_persona is not None:
+            configuration.setdefault("CIEL_PERSONA_FILE", "persona.txt")
         _save_configuration(env_path, configuration)
         saved = True
         saving = False
+        if pending_persona is not None:
+            from ciel.persona import update_setup_persona_file
+
+            try:
+                effective = resolve_setup_values({
+                    original_names.get(key, key): value for key, value in configuration.items()
+                })
+                configured_persona = {key.upper(): value for key, value in effective.items()}.get(
+                    "CIEL_PERSONA_FILE", "persona.txt",
+                )
+                persona_path = Path(
+                    configured_persona if configured_persona.strip() else "persona.txt",
+                ).expanduser()
+                persona_saved = (
+                    persona_path.resolve() != env_path.resolve()
+                    and update_setup_persona_file(str(persona_path), pending_persona)
+                )
+            except (OSError, ValueError, RuntimeError):
+                persona_saved = False
+            if not persona_saved:
+                ui.note("Settings were saved, but the custom personality could not be saved. "
+                        "Your existing personality file was kept. Rerun setup to try again.")
+            elif configured_persona.strip():
+                ui.note("Custom personality saved. Your own file notes and style edits are kept.")
+            else:
+                activated_configuration = {
+                    **configuration, "CIEL_PERSONA_FILE": str(persona_path),
+                }
+                try:
+                    _save_configuration(env_path, activated_configuration)
+                except (OSError, UnicodeError):
+                    ui.note("The custom personality file was saved, "
+                            "but it could not be enabled. Your previous setting was kept. "
+                            "Rerun setup to enable it.")
+                else:
+                    configuration = activated_configuration
+                    ui.note("Custom personality saved. "
+                            "Your own file notes and style edits are kept.")
+        if install_components:
+            from ciel.installation import prepare_components
+
+            ui.step("Prepare your selected components")
+            try:
+                prepare_components(get_settings().audio, ui.note)
+            except Exception as error:
+                ui.note(f"Preparation did not finish ({type(error).__name__}). "
+                        "Your settings are saved. Check the download output and available disk "
+                        "space, then run ciel setup again to retry or change your choices.")
+                ui.finish("Setup needs another step before CIEL can start.")
+                return False
         ui.step("Check your voice")
         success = _test_voice(ui, configuration)
         while True:
@@ -339,10 +538,14 @@ def run_setup_wizard() -> None:
                 _save_configuration(env_path, configuration)
             success = _test_voice(ui, configuration)
         ui.finish("Configuration saved. Run: ciel")
+        return True
     except (KeyboardInterrupt, EOFError):
         if saved:
-            ui.finish("Setup stopped. Configuration is saved. Run: ciel")
+            ui.finish("Setup stopped. Configuration is saved. "
+                      + ("Rerun ciel setup to finish preparation." if install_components
+                         else "Run: ciel"))
         elif saving:
             ui.finish("Setup stopped while saving. Run setup again to review .env.")
         else:
             ui.finish("Setup cancelled. No changes were saved.")
+        return False

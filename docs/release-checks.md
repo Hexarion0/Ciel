@@ -22,25 +22,43 @@ run with `pytest -m integration` on an appropriately configured machine.
 
 Install the wheel in a fresh virtual environment outside the checkout. From a
 separate directory, run both `python -m ciel --help` and `ciel --help`, then
-`pip check`. Verify normal startup does not require optional training packages.
-Select an existing local Piper model to check synthesis without playback.
+`pip check`. Verify core installation can open setup without Whisper, Piper,
+Pocket, openWakeWord, Torch, or CUDA packages already installed. Normal voice
+startup should not require optional training packages. Select an existing local
+Piper model after installing the `voice` extra to check synthesis without playback.
 
-Fresh launch should use ambient listening, live AI captions, and command STT
-`small.en` on CUDA/`int8_float16` with beam 5. The separate wake recognizer remains
-CPU `base.en`. Check plain `ciel` as well as `ciel start`; neither needs additional
+Fresh setup should offer CPU recognition by default, with `small.en`/`int8` and
+beam 5. **Customize** should offer explicit CUDA/`int8_float16` recognition. Existing
+saved recognition settings should remain selected. Launch after setup should use
+ambient listening and live AI captions. The separate wake recognizer remains CPU
+`base.en` when enabled. Check plain `ciel` as well as `ciel start`; neither needs additional
 mode flags. Explicit `--no-ambient` and `--no-show-ai-transcripts` override those
 defaults for one run. Older `.env` values remain explicit overrides; use a newly
 configured environment when validating fresh defaults.
 
 Check `ciel setup` with both Quick start and Customize. Cancel at the review
-and confirm the original configuration is untouched. Save, replay the voice test,
+and confirm the original configuration is untouched and no optional packages or
+models have downloaded. Save, confirm only selected packages and configured models
+are prepared, replay the voice test,
 change speakers, and return to the system default; confirm the next test and
 normal launch use that output. Saved keys must stay hidden. Check narrow windows,
 arrow navigation, `TERM=dumb`, and `NO_COLOR=1`. Normal `ciel` should show the compact
 status panel before keyboard input begins, while `ciel start dev` retains diagnostics.
 
+Run `bash setup.sh` with both a fresh and existing `.venv`. It should install only
+the editable core before opening setup, always offer the wizard, and install the
+launcher. Check fresh CPU/Piper setup does not install Pocket, Torch, CUDA, or
+openWakeWord; select Pocket or configured openWakeWord separately and verify the
+needed extra is installed. No Amy model should download for an unselected voice.
+Rerun setup after changing a selection and confirm newly needed components install.
+Interrupt a model download, confirm saved choices survive, then retry with Quick
+start. Cancellation and package/download failures must produce an incomplete result
+and a nonzero exit status, without an installation-success message. Turbo still
+requires its separate environment and private assets; verify missing prerequisites
+are reported without claiming the voice is ready.
+
 For an installed package's CUDA test, include the `gpu` extra when installing
-the current source: run `python -m pip install '.[gpu]'` from the source root
+the current source: run `python -m pip install '.[voice,gpu]'` from the source root
 using the isolated environment's Python. Reinstall an earlier wheel before testing changed
 defaults. Without usable CUDA, check the logged CPU recovery independently.
 

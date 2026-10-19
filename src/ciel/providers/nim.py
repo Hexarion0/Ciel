@@ -29,19 +29,21 @@ class NimProvider(LLMProvider):
         api_key: str | None = None,
         model: str | None = None,
         timeout: float = 60.0,
+        *,
+        config: ProviderConfig | None = None,
     ) -> None:
-        settings = get_settings()
+        providers = config if config is not None else get_settings().providers
         if api_key:
             self.api_key = api_key
-        elif settings.providers.nim_api_key:
-            self.api_key = settings.providers.nim_api_key.get_secret_value()
+        elif providers.nim_api_key:
+            self.api_key = providers.nim_api_key.get_secret_value()
         else:
             self.api_key = None
 
-        self.default_model = model or settings.providers.nim_model or self.default_model
-        self.complex_model = settings.providers.nim_complex_model
+        self.default_model = model or providers.nim_model or self.default_model
+        self.complex_model = providers.nim_complex_model
         self.fallback_model = (
-            settings.providers.nim_fallback_model or "meta/llama-3.2-90b-vision-instruct"
+            providers.nim_fallback_model or "meta/llama-3.2-90b-vision-instruct"
         )
         self.timeout = timeout
 
@@ -104,6 +106,9 @@ class NimProvider(LLMProvider):
         """Request a visible answer, retry transient errors, and try one backup model."""
         target_model = model or self.default_model
         allow_model_fallback = kwargs.pop("allow_model_fallback", True)
+        max_attempts = kwargs.pop("max_attempts", 3)
+        if type(max_attempts) is not int or not 1 <= max_attempts <= 3:
+            raise ValueError("max_attempts must be an integer from 1 to 3")
         fallback_model = (
             self.fallback_model or self.RELIABLE_BACKUP_MODEL
             if allow_model_fallback else target_model
@@ -148,7 +153,7 @@ class NimProvider(LLMProvider):
                 raise RuntimeError("NIM request attempts exhausted")
 
             try:
-                data = complete(target_model, 3)
+                data = complete(target_model, max_attempts)
             except httpx.HTTPStatusError as err:
                 if (
                     err.response.status_code not in (*retryable, 404, 410)

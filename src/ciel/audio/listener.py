@@ -110,6 +110,12 @@ class WakeListenerLoop:
     def is_running(self) -> bool:
         return self._running
 
+    @property
+    def microphone_muted(self) -> bool:
+        """Return whether microphone ingestion is muted."""
+        with self._lock:
+            return self._microphone_muted
+
     @staticmethod
     def _offer(target: queue.Queue, item: Any) -> bool:
         """Never block producers; replace the oldest item if the consumer falls behind."""
@@ -181,22 +187,32 @@ class WakeListenerLoop:
     def toggle_microphone_mute(self) -> bool:
         """Toggle microphone ingestion; discard pending voice input when muting."""
         with self._lock:
-            self._microphone_muted = not self._microphone_muted
-            self._microphone_epoch += 1
-            while True:
-                try:
-                    self._frame_queue.get_nowait()
-                    self._frame_queue.task_done()
-                except queue.Empty:
-                    break
-            self._recent_audio.clear()
-            self._speech_streak = 0
-            self.detector.reset(set_cooldown=False)
-            if self._state == ListenerState.RECORDING:
-                self.recorder.cancel()
-                self._recording_generation += 1
-                self._set_state(ListenerState.LISTENING_WAKE)
+            return self._set_microphone_mute_locked(not self._microphone_muted)
+
+    def set_microphone_mute(self, muted: bool) -> bool:
+        """Set microphone ingestion without disturbing work when already set."""
+        with self._lock:
+            return self._set_microphone_mute_locked(muted)
+
+    def _set_microphone_mute_locked(self, muted: bool) -> bool:
+        if self._microphone_muted == muted:
             return self._microphone_muted
+        self._microphone_muted = muted
+        self._microphone_epoch += 1
+        while True:
+            try:
+                self._frame_queue.get_nowait()
+                self._frame_queue.task_done()
+            except queue.Empty:
+                break
+        self._recent_audio.clear()
+        self._speech_streak = 0
+        self.detector.reset(set_cooldown=False)
+        if self._state == ListenerState.RECORDING:
+            self.recorder.cancel()
+            self._recording_generation += 1
+            self._set_state(ListenerState.LISTENING_WAKE)
+        return self._microphone_muted
 
     def _discard_voice_request(self, generation: int) -> None:
         """Leave standby usable after a muted request is discarded during STT."""

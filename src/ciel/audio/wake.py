@@ -277,7 +277,7 @@ class WakeWordDetector:
 
         now = time.time()
 
-        # 1. Check openWakeWord models (e.g. hey_jarvis, alexa)
+        # 1. Check the configured openWakeWord models.
         if self.model is not None:
             predictions = self.model.predict(pcm16_chunk)
             for model_name, score in predictions.items():

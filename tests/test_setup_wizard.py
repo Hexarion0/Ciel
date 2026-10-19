@@ -1,9 +1,10 @@
 """Setup tests isolate terminal input, secrets, devices, and playback."""
 
 import json
+import os
 from io import StringIO
 from types import SimpleNamespace
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 from dotenv import dotenv_values
@@ -15,10 +16,18 @@ from ciel.terminal_ui import ConsoleUI
 class ScriptedUI:
     """Exercise wizard decisions independently of terminal menu rendering."""
 
-    def __init__(self, choices, prompts=()):
+    def __init__(
+        self, choices, prompts=(), *, names=(), cities=(), memory_choices=(), persona_choices=(),
+    ):
         self.choices = iter(choices)
         self.prompts = iter(prompts)
+        self.names = iter(names)
+        self.cities = iter(cities)
+        self.memory_choices = iter(memory_choices)
+        self.persona_choices = iter(persona_choices)
         self.summaries = []
+        self.questions = []
+        self.memory_defaults = []
         self.on_choose = None
 
     def banner(self, text):
@@ -34,7 +43,13 @@ class ScriptedUI:
     def choose(self, title, choices, default=None):
         if self.on_choose is not None:
             self.on_choose(title)
-        answer = next(self.choices)
+        if title == "Remembering things":
+            self.memory_defaults.append(default)
+            answer = next(self.memory_choices, None)
+        elif title == "Personality":
+            answer = next(self.persona_choices, None)
+        else:
+            answer = next(self.choices)
         if isinstance(answer, BaseException):
             raise answer
         selected = default if answer is None else answer
@@ -42,7 +57,13 @@ class ScriptedUI:
         return selected
 
     def prompt(self, label):
-        answer = next(self.prompts)
+        self.questions.append(label)
+        if "city" in label.lower():
+            answer = next(self.cities, "")
+        elif "call you" in label.lower() or "preferred name" in label.lower():
+            answer = next(self.names, "")
+        else:
+            answer = next(self.prompts)
         if isinstance(answer, BaseException):
             raise answer
         return answer
@@ -52,8 +73,14 @@ class ScriptedUI:
 def wizard_factory(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
-    def create(choices, *, secrets=(), prompts=(), devices=()):
-        ui = ScriptedUI(choices, prompts)
+    def create(
+        choices, *, secrets=(), prompts=(), devices=(), names=(), cities=(), memory_choices=(),
+        persona_choices=(),
+    ):
+        ui = ScriptedUI(
+            choices, prompts, names=names, cities=cities, memory_choices=memory_choices,
+            persona_choices=persona_choices,
+        )
         secret_answers = iter(secrets)
 
         def secret_input(prompt):
@@ -221,8 +248,8 @@ def test_review_can_return_to_customize(tmp_path, wizard_factory):
 def test_numbered_terminal_menu_completes_customize_flow(tmp_path, wizard_factory, monkeypatch):
     harness = wizard_factory([], secrets=["", "", ""])
     output = StringIO()
-    # Customize, Amy, keep devices, ambient, captions on, save, confirm playback.
-    terminal_input = StringIO("2\n3\n1\n1\n1\n1\n1\n1\n")
+    # Customize, keep personal defaults, Amy, keep devices, then save and confirm.
+    terminal_input = StringIO("2\n\n\n\n\n3\n1\n1\n1\n1\n1\n1\n")
     monkeypatch.setattr(
         setup_wizard, "ConsoleUI", lambda: ConsoleUI(stream=output, input_stream=terminal_input),
     )
@@ -424,6 +451,205 @@ def test_playback_errors_do_not_echo_a_saved_secret(tmp_path, wizard_factory, ca
     assert "RuntimeError" in output
 
 
+@pytest.mark.parametrize("mode", ["quick", "customize"])
+def test_both_setup_modes_ask_personal_questions_and_reload_answers(
+    tmp_path, wizard_factory, mode,
+):
+    from ciel.config import Settings
+
+    choices = (["quick", "save", "yes"] if mode == "quick" else [
+        "customize", "keep", "keep", "keep", None, None, "save", "yes",
+    ])
+    harness = wizard_factory(
+        choices, secrets=[""] * 3, names=["  Алекс  "],
+        cities=["  Ulaanbaatar, Mongolia  "], memory_choices=["explicit"],
+    )
+    setup_wizard.run_setup_wizard()
+
+    with patch.dict(os.environ, {}, clear=True):
+        settings = Settings(_env_file=tmp_path / ".env")
+    assert settings.ciel_preferred_name == "Алекс"
+    assert settings.internet.home_city == "Ulaanbaatar, Mongolia"
+    assert settings.memory.learning_mode == "explicit"
+    assert len(harness.ui.questions) == 2
+    assert harness.ui.memory_defaults == ["confirm"]
+    review = dict(harness.ui.summaries[-1])
+    assert review["Call you"] == "Алекс"
+    assert review["Default city"] == "Ulaanbaatar, Mongolia"
+    assert "Memory learning" in review
+
+
+def test_quick_setup_asks_personal_questions_when_ai_key_already_exists(
+    tmp_path, wizard_factory,
+):
+    (tmp_path / ".env").write_text('NIM_API_KEY="synthetic-existing"\n')
+    harness = wizard_factory(
+        ["quick", "save", "yes"], names=["Alex"], cities=["Hovd, Mongolia"],
+        memory_choices=["automatic"],
+    )
+    setup_wizard.run_setup_wizard()
+
+    saved = dotenv_values(tmp_path / ".env")
+    assert saved["CIEL_PREFERRED_NAME"] == "Alex"
+    assert saved["INTERNET_HOME_CITY"] == "Hovd, Mongolia"
+    assert saved["MEMORY_LEARNING_MODE"] == "automatic"
+    assert len(harness.ui.questions) == 2
+
+
+@pytest.mark.parametrize("mode", ["quick", "customize"])
+def test_personal_questions_enter_preserves_raw_values_comments_and_key_case(
+    tmp_path, wizard_factory, mode,
+):
+    original = (
+        "# Preserve my personal settings exactly\n"
+        "ciel_preferred_name='  Alex ${UNDEFINED_NAME}  ' # Name note\n"
+        "internet_home_city='  Hovd, Mongolia  ' # City note\n"
+        "memory_learning_mode=explicit # Learning note\n"
+    )
+    (tmp_path / ".env").write_text(original)
+    choices = (["quick", "save", "yes"] if mode == "quick" else [
+        "customize", "keep", "keep", "keep", None, None, "save", "yes",
+    ])
+    harness = wizard_factory(choices, secrets=[""] * 3)
+    setup_wizard.run_setup_wizard()
+
+    assert (tmp_path / ".env").read_text().startswith(original)
+    saved = dotenv_values(tmp_path / ".env", interpolate=False)
+    assert saved["ciel_preferred_name"] == "  Alex ${UNDEFINED_NAME}  "
+    assert saved["internet_home_city"] == "  Hovd, Mongolia  "
+    assert saved["memory_learning_mode"] == "explicit"
+    assert harness.ui.memory_defaults == ["explicit"]
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_personal_questions_allow_no_name_or_default_city(tmp_path, wizard_factory, existing):
+    from ciel.config import Settings
+
+    if existing:
+        (tmp_path / ".env").write_text(
+            "CIEL_PREFERRED_NAME=Old Name\nINTERNET_HOME_CITY=Old City\n",
+        )
+    answer = "-" if existing else ""
+    harness = wizard_factory(
+        ["quick", "save", "yes"], secrets=[""], names=[answer], cities=[answer],
+    )
+    setup_wizard.run_setup_wizard()
+
+    with patch.dict(os.environ, {}, clear=True):
+        settings = Settings(_env_file=tmp_path / ".env")
+    assert settings.ciel_preferred_name == ""
+    assert settings.internet.home_city == ""
+    assert settings.memory.learning_mode == "confirm"
+    review = dict(harness.ui.summaries[-1])
+    assert review["Call you"] and review["Default city"]
+    assert "Old Name" not in review["Call you"]
+    assert "Old City" not in review["Default city"]
+
+
+def test_review_can_revise_personal_answers_before_saving(tmp_path, wizard_factory):
+    harness = wizard_factory(
+        ["quick", "customize", "keep", "keep", "keep", None, None, "save", "yes"],
+        secrets=[""] * 4, names=["First Name", "Revised Name"],
+        cities=["First City", "Revised City"], memory_choices=["confirm", "automatic"],
+    )
+    setup_wizard.run_setup_wizard()
+
+    saved = dotenv_values(tmp_path / ".env")
+    assert saved["CIEL_PREFERRED_NAME"] == "Revised Name"
+    assert saved["INTERNET_HOME_CITY"] == "Revised City"
+    assert saved["MEMORY_LEARNING_MODE"] == "automatic"
+    assert len(harness.ui.questions) == 4
+    assert dict(harness.ui.summaries[0])["Call you"] == "First Name"
+    assert dict(harness.ui.summaries[1])["Call you"] == "Revised Name"
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_cancel_discards_personal_answers(tmp_path, wizard_factory, existing):
+    env_path = tmp_path / ".env"
+    original = "# Personal settings\nCIEL_PREFERRED_NAME=Original\n"
+    if existing:
+        env_path.write_text(original)
+    harness = wizard_factory(
+        ["quick", "cancel"], secrets=[""], names=["Changed"],
+        cities=["Hovd, Mongolia"], memory_choices=["automatic"],
+    )
+    setup_wizard.run_setup_wizard()
+
+    if existing:
+        assert env_path.read_text() == original
+    else:
+        assert not env_path.exists()
+    harness.settings.cache_clear.assert_not_called()
+
+
+@pytest.mark.parametrize("interruption", [KeyboardInterrupt, EOFError])
+@pytest.mark.parametrize("question", ["name", "city", "memory"])
+def test_interrupted_personal_questions_preserve_existing_file(
+    tmp_path, wizard_factory, interruption, question,
+):
+    env_path = tmp_path / ".env"
+    original = "# Personal settings\nCIEL_PREFERRED_NAME=Original\n"
+    env_path.write_text(original)
+    harness = wizard_factory(
+        ["quick"], names=[interruption()] if question == "name" else ["Changed"],
+        cities=[interruption()] if question == "city" else ["Hovd, Mongolia"],
+        memory_choices=[interruption()] if question == "memory" else [],
+    )
+    setup_wizard.run_setup_wizard()
+
+    assert env_path.read_text() == original
+    harness.settings.cache_clear.assert_not_called()
+    assert list(tmp_path.glob(".ciel-setup-*")) == []
+
+
+@pytest.mark.parametrize(
+    ("key", "invalid", "valid", "message"),
+    [
+        ("CIEL_PREFERRED_NAME", "n" * 101, "Alex", "100"),
+        ("CIEL_PREFERRED_NAME", "Alex\x1b[0m", "Alex", "control"),
+        ("INTERNET_HOME_CITY", "c" * 201, "Hovd, Mongolia", "200"),
+        ("INTERNET_HOME_CITY", "Hovd\nMongolia", "Hovd, Mongolia", "control"),
+    ],
+)
+def test_invalid_personal_answers_retry_before_saving(
+    tmp_path, wizard_factory, capsys, key, invalid, valid, message,
+):
+    harness = wizard_factory(
+        ["quick", "save", "yes"], secrets=[""],
+        names=[invalid, valid] if key == "CIEL_PREFERRED_NAME" else ["Alex"],
+        cities=[invalid, valid] if key == "INTERNET_HOME_CITY" else ["Hovd, Mongolia"],
+    )
+    setup_wizard.run_setup_wizard()
+
+    assert dotenv_values(tmp_path / ".env")[key] == valid
+    assert len(harness.ui.questions) == 3
+    assert message in capsys.readouterr().out.lower()
+
+
+def test_invalid_saved_memory_choice_defaults_safely_and_is_repaired_on_save(
+    tmp_path, wizard_factory,
+):
+    (tmp_path / ".env").write_text("MEMORY_LEARNING_MODE=unsupported\n")
+    harness = wizard_factory(["quick", "save", "yes"], secrets=[""])
+    setup_wizard.run_setup_wizard()
+
+    assert harness.ui.memory_defaults == ["confirm"]
+    assert dotenv_values(tmp_path / ".env")["MEMORY_LEARNING_MODE"] == "confirm"
+
+
+def test_personalization_defaults_only_fill_missing_settings():
+    fresh = setup_wizard._initial_configuration({})
+    assert fresh["CIEL_PREFERRED_NAME"] == ""
+    assert fresh["INTERNET_HOME_CITY"] == ""
+    assert fresh["MEMORY_LEARNING_MODE"] == "confirm"
+    existing = {
+        "CIEL_PREFERRED_NAME": "  Alex  ", "INTERNET_HOME_CITY": "  Hovd  ",
+        "MEMORY_LEARNING_MODE": "unsupported",
+    }
+    configured = setup_wizard._initial_configuration(existing.copy())
+    assert all(configured[key] == value for key, value in existing.items())
+
+
 def test_custom_asset_check_uses_configured_paths(tmp_path):
     config = {
         "TTS_VOICE": "ciel",
@@ -454,3 +680,81 @@ def test_custom_asset_check_uses_configured_paths(tmp_path):
     assert len(setup_wizard.custom_voice_asset_problems(config)) == 1
     (profile / "voice.json").write_text("invalid json")
     assert "voice profile" in setup_wizard.custom_voice_asset_problems(config)[0]
+
+
+def test_managed_setup_saves_choices_before_installing_and_playing(
+    tmp_path, wizard_factory, monkeypatch,
+):
+    from ciel import installation
+
+    harness = wizard_factory(["quick", "cpu", "save", "yes"], secrets=[""])
+
+    def prepare(audio, notify):
+        saved = dotenv_values(tmp_path / ".env")
+        assert saved["STT_DEVICE"] == "cpu"
+        assert saved["STT_COMPUTE_TYPE"] == "int8"
+        assert saved["TTS_ENGINE"] == "pocket"
+        harness.tts.assert_not_called()
+        assert audio is harness.settings.return_value.audio
+
+    preparation = MagicMock(side_effect=prepare)
+    monkeypatch.setattr(installation, "prepare_components", preparation)
+    assert setup_wizard.run_setup_wizard(install_components=True)
+    preparation.assert_called_once()
+    harness.tts.assert_called_once()
+
+
+def test_managed_setup_cancellation_installs_nothing(tmp_path, wizard_factory, monkeypatch):
+    from ciel import installation
+
+    harness = wizard_factory(["quick", "cpu", "cancel"], secrets=[""])
+    preparation = MagicMock()
+    monkeypatch.setattr(installation, "prepare_components", preparation)
+    assert not setup_wizard.run_setup_wizard(install_components=True)
+    assert not (tmp_path / ".env").exists()
+    preparation.assert_not_called()
+    harness.tts.assert_not_called()
+
+
+def test_managed_setup_preserves_saved_acceleration(tmp_path, wizard_factory, monkeypatch):
+    from ciel import installation
+
+    (tmp_path / ".env").write_text("STT_DEVICE=cuda\nSTT_COMPUTE_TYPE=float16\n")
+    wizard_factory(["quick", None, "save", "yes"], secrets=[""])
+    monkeypatch.setattr(installation, "prepare_components", MagicMock())
+    assert setup_wizard.run_setup_wizard(install_components=True)
+    saved = dotenv_values(tmp_path / ".env")
+    assert saved["STT_DEVICE"] == "cuda"
+    assert saved["STT_COMPUTE_TYPE"] == "float16"
+
+
+def test_managed_setup_preserves_pending_gpu_when_returning_to_customize(
+    tmp_path, wizard_factory, monkeypatch,
+):
+    from ciel import installation
+
+    wizard_factory([
+        "quick", "cuda", "customize", "amy", "keep", "keep", None, None,
+        None, "save", "yes",
+    ], secrets=["", "", "", ""])
+    monkeypatch.setattr(installation, "prepare_components", MagicMock())
+    assert setup_wizard.run_setup_wizard(install_components=True)
+    saved = dotenv_values(tmp_path / ".env")
+    assert saved["STT_DEVICE"] == "cuda"
+    assert saved["STT_COMPUTE_TYPE"] == "int8_float16"
+    assert saved["TTS_ENGINE"] == "piper"
+
+
+@pytest.mark.parametrize("interruption", [False, True])
+def test_managed_setup_failed_download_keeps_choices_for_retry(
+    tmp_path, wizard_factory, monkeypatch, capsys, interruption,
+):
+    from ciel import installation
+
+    harness = wizard_factory(["quick", "cpu", "save"], secrets=[""])
+    error = KeyboardInterrupt() if interruption else RuntimeError("Synthetic download failure")
+    monkeypatch.setattr(installation, "prepare_components", MagicMock(side_effect=error))
+    assert not setup_wizard.run_setup_wizard(install_components=True)
+    assert dotenv_values(tmp_path / ".env")["STT_DEVICE"] == "cpu"
+    harness.tts.assert_not_called()
+    assert "saved" in capsys.readouterr().out.lower()

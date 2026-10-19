@@ -3,8 +3,17 @@
 from functools import lru_cache
 from typing import Literal
 
+from dotenv.main import resolve_variables
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def resolve_setup_values(configuration: dict[str, str]) -> dict[str, str]:
+    """Expand pending dotenv references without changing their saved literal values."""
+    return {
+        key: value if value is not None else ""
+        for key, value in resolve_variables(configuration.items(), override=True).items()
+    }
 
 
 def _preserve_explicit_voice_selection(values: object) -> object:
