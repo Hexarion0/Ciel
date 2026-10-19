@@ -34,7 +34,11 @@ def test_wizard_key_prompts_never_include_saved_secret_material(tmp_path, monkey
     monkeypatch.setattr(setup_wizard, "getpass", lambda prompt: prompts.append(prompt) or "")
     output = StringIO()
     ui = setup_wizard.ConsoleUI(
-        stream=output, input_stream=StringIO("2\n\n\n\n\n3\n1\n1\n\n\n1\n1\n"),
+        stream=output, input_stream=StringIO("\n".join([
+            "2", "", "", "",  # Customize and keep personal defaults.
+            "1", "2", "2", "2", "3", "1",  # Select each provider, then continue.
+            "", "3", "1", "1", "", "", "1", "1", "",  # Amy, save, and confirm.
+        ])),
     )
     monkeypatch.setattr(setup_wizard, "ConsoleUI", lambda: ui)
     backend = MagicMock()
@@ -156,7 +160,7 @@ def test_setup_checks_hq_alias_assets_before_testing_audio(tmp_path, monkeypatch
     (tmp_path / ".env").write_text("TTS_VOICE=ciel\nTTS_ENGINE=hq\n")
     monkeypatch.setattr(setup_wizard, "getpass", lambda _: "")
     output = StringIO()
-    ui = setup_wizard.ConsoleUI(stream=output, input_stream=StringIO("\n\n\n\n\n\n\n"))
+    ui = setup_wizard.ConsoleUI(stream=output, input_stream=StringIO("\n" * 9))
     monkeypatch.setattr(setup_wizard, "ConsoleUI", lambda: ui)
     backend = MagicMock()
     backend.list_devices.return_value = []

@@ -23,6 +23,12 @@ from ciel.terminal_ui import ConsoleUI
 
 logger = get_logger("setup")
 
+_API_PROVIDERS = (
+    ("nim", "NVIDIA NIM", "NIM_API_KEY"),
+    ("groq", "Groq", "GROQ_API_KEY"),
+    ("openrouter", "OpenRouter", "OPENROUTER_API_KEY"),
+)
+
 
 def TextToSpeech(*args, **kwargs):
     """Load voice dependencies only after the user has selected and installed them."""
@@ -140,19 +146,36 @@ def _save_configuration(env_path: Path, configuration: dict[str, str]) -> None:
     get_settings.cache_clear()
 
 
-def _configure_keys(ui: ConsoleUI, configuration: dict[str, str], *, primary_only: bool) -> None:
-    """Request secrets without displaying any portion of previously saved keys."""
+def _configure_keys(ui: ConsoleUI, configuration: dict[str, str]) -> None:
+    """Choose a provider before requesting its secret, preserving all other saved keys."""
     ui.step("AI connection")
     ui.note("Keys are optional. Without a cloud key, local tools remain available.")
-    providers = [("NIM_API_KEY", "NVIDIA NIM")]
-    if not primary_only:
-        providers.extend([("GROQ_API_KEY", "Groq"), ("OPENROUTER_API_KEY", "OpenRouter")])
-    for key, name in providers:
+    ui.note("Choose whose API key to add or update. "
+            "With multiple providers, Ciel routes requests automatically.")
+    while True:
+        configured = any(configuration.get(key) for _value, _name, key in _API_PROVIDERS)
+        choices = [
+            (value, f"{name} · key configured" if configuration.get(key) else name)
+            for value, name, key in _API_PROVIDERS
+        ]
+        choices.append((
+            "done", "Keep saved providers and continue" if configured else "Skip for now",
+        ))
+        selected = ui.choose(
+            "API key provider", choices, default="done" if configured else "nim",
+        )
+        if selected == "done":
+            return
+        _value, name, key = next(item for item in _API_PROVIDERS if item[0] == selected)
         status = ("configured; Enter to keep" if configuration.get(key)
                   else "optional; Enter to skip")
         answer = getpass(f"{name} API key [{status}]: ").strip()
         if answer:
             configuration[key] = answer
+        if ui.choose("Add another provider?", [
+            ("no", "Continue setup"), ("yes", "Add or update another provider"),
+        ], default="no") == "no":
+            return
 
 
 def _select_device(ui: ConsoleUI, configuration: dict[str, str], *, output: bool) -> None:
@@ -275,7 +298,7 @@ def _customize(
 ) -> str | None:
     """Walk through one decision at a time while retaining existing choices on Enter."""
     _personalize(ui, configuration)
-    _configure_keys(ui, configuration, primary_only=False)
+    _configure_keys(ui, configuration)
     pending_persona = _configure_persona(ui, configuration, pending_persona, original_names)
     ui.step("Voice")
     ui.note("Pocket runs on CPU; Turbo requires its separate model and private reference.")
@@ -310,10 +333,7 @@ def _review_configuration(
     ui: ConsoleUI, configuration: dict[str, str], pending_persona: str | None = None,
 ) -> None:
     """Show the choices that will be saved without claiming an untested connection."""
-    providers = [name for key, name in (
-        ("NIM_API_KEY", "NVIDIA NIM"), ("GROQ_API_KEY", "Groq"),
-        ("OPENROUTER_API_KEY", "OpenRouter"),
-    ) if configuration.get(key)]
+    providers = [name for _value, name, key in _API_PROVIDERS if configuration.get(key)]
     ui.step("Review your setup")
     ui.summary([
         ("Call you", configuration.get("CIEL_PREFERRED_NAME") or "Computer username"),
@@ -433,10 +453,7 @@ def run_setup_wizard(*, install_components: bool = False) -> bool:
             pending_persona = _customize(ui, configuration, original_names=original_names)
         else:
             _personalize(ui, configuration)
-            if not any(configuration.get(key) for key in (
-                "NIM_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY",
-            )):
-                _configure_keys(ui, configuration, primary_only=True)
+            _configure_keys(ui, configuration)
             pending_persona = _configure_persona(ui, configuration, pending_persona, original_names)
         if install_components:
             _configure_acceleration(ui, configuration)

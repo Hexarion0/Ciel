@@ -18,6 +18,7 @@ class ScriptedUI:
 
     def __init__(
         self, choices, prompts=(), *, names=(), cities=(), memory_choices=(), persona_choices=(),
+        provider_choices=(), more_provider_choices=(),
     ):
         self.choices = iter(choices)
         self.prompts = iter(prompts)
@@ -25,6 +26,9 @@ class ScriptedUI:
         self.cities = iter(cities)
         self.memory_choices = iter(memory_choices)
         self.persona_choices = iter(persona_choices)
+        self.provider_choices = iter(provider_choices)
+        self.more_provider_choices = iter(more_provider_choices)
+        self.provider_menus = []
         self.summaries = []
         self.questions = []
         self.memory_defaults = []
@@ -48,6 +52,11 @@ class ScriptedUI:
             answer = next(self.memory_choices, None)
         elif title == "Personality":
             answer = next(self.persona_choices, None)
+        elif title == "API key provider":
+            self.provider_menus.append((choices, default))
+            answer = next(self.provider_choices, None)
+        elif title == "Add another provider?":
+            answer = next(self.more_provider_choices, None)
         else:
             answer = next(self.choices)
         if isinstance(answer, BaseException):
@@ -75,15 +84,18 @@ def wizard_factory(tmp_path, monkeypatch):
 
     def create(
         choices, *, secrets=(), prompts=(), devices=(), names=(), cities=(), memory_choices=(),
-        persona_choices=(),
+        persona_choices=(), provider_choices=(), more_provider_choices=(),
     ):
         ui = ScriptedUI(
             choices, prompts, names=names, cities=cities, memory_choices=memory_choices,
-            persona_choices=persona_choices,
+            persona_choices=persona_choices, provider_choices=provider_choices,
+            more_provider_choices=more_provider_choices,
         )
         secret_answers = iter(secrets)
+        secret_prompts = []
 
         def secret_input(prompt):
+            secret_prompts.append(prompt)
             print(prompt)
             answer = next(secret_answers)
             if isinstance(answer, BaseException):
@@ -103,9 +115,127 @@ def wizard_factory(tmp_path, monkeypatch):
         monkeypatch.setattr(setup_wizard, "TextToSpeech", tts)
         assets = MagicMock(return_value=[])
         monkeypatch.setattr(setup_wizard, "custom_voice_asset_problems", assets)
-        return SimpleNamespace(ui=ui, tts=tts, settings=settings, assets=assets, backend=backend)
+        return SimpleNamespace(
+            ui=ui, tts=tts, settings=settings, assets=assets, backend=backend,
+            secret_prompts=secret_prompts,
+        )
 
     return create
+
+
+@pytest.mark.parametrize("mode", ["quick", "customize"])
+@pytest.mark.parametrize("provider, label, key", [
+    ("nim", "NVIDIA NIM", "NIM_API_KEY"),
+    ("groq", "Groq", "GROQ_API_KEY"),
+    ("openrouter", "OpenRouter", "OPENROUTER_API_KEY"),
+])
+def test_provider_is_chosen_before_its_key_and_personality_interview(
+    tmp_path, wizard_factory, monkeypatch, capsys, mode, provider, label, key,
+):
+    from ciel import setup_persona
+
+    secret = "synthetic-selected-provider-key"
+    interview = MagicMock(return_value=None)
+    monkeypatch.setattr(setup_persona, "run_persona_interview", interview)
+    choices = [mode]
+    if mode == "customize":
+        choices.extend(["keep", "keep", "keep", None, None])
+    harness = wizard_factory(
+        [*choices, "save", "yes"], secrets=[secret], provider_choices=[provider],
+        persona_choices=["interview"],
+    )
+
+    def check_prompt_order(title):
+        if title == "API key provider":
+            assert not harness.secret_prompts
+
+    harness.ui.on_choose = check_prompt_order
+    assert setup_wizard.run_setup_wizard()
+
+    saved = dotenv_values(tmp_path / ".env")
+    assert {name: value for name, value in saved.items() if name.endswith("_API_KEY")} == {
+        key: secret,
+    }
+    assert len(harness.ui.provider_menus) == 1
+    assert harness.secret_prompts == [f"{label} API key [optional; Enter to skip]: "]
+    assert interview.call_args.args[1][key] == secret
+    output = capsys.readouterr().out
+    assert secret not in output
+    assert f"{label} · key configured" in output
+
+
+@pytest.mark.parametrize("mode", ["quick", "customize"])
+@pytest.mark.parametrize("existing", [False, True])
+def test_skip_or_keep_provider_does_not_ask_for_secrets(
+    tmp_path, wizard_factory, mode, existing,
+):
+    original = "# Saved connection\ngroq_api_key='synthetic-kept-key'\n"
+    if existing:
+        (tmp_path / ".env").write_text(original)
+    choices = [mode]
+    if mode == "customize":
+        choices.extend(["keep", "keep", "keep", None, None])
+    harness = wizard_factory([*choices, "save", "yes"], provider_choices=["done"])
+
+    assert setup_wizard.run_setup_wizard()
+
+    assert not harness.secret_prompts
+    if existing:
+        assert (tmp_path / ".env").read_text().startswith(original)
+    else:
+        assert not any(key.endswith("_API_KEY") for key in dotenv_values(tmp_path / ".env"))
+    menu, default = harness.ui.provider_menus[0]
+    assert ("done", "Keep saved providers and continue" if existing else "Skip for now") in menu
+    assert default == ("done" if existing else "nim")
+
+
+def test_multiple_selected_providers_preserve_existing_key(tmp_path, wizard_factory, capsys):
+    original = "# Saved connection\nnim_api_key='synthetic-original-key'\n"
+    (tmp_path / ".env").write_text(original)
+    harness = wizard_factory(
+        ["quick", "save", "yes"], provider_choices=["groq", "openrouter"],
+        more_provider_choices=["yes", "no"],
+        secrets=["synthetic-groq-key", "synthetic-openrouter-key"],
+    )
+
+    assert setup_wizard.run_setup_wizard()
+
+    saved = dotenv_values(tmp_path / ".env")
+    assert (tmp_path / ".env").read_text().startswith(original)
+    assert saved["GROQ_API_KEY"] == "synthetic-groq-key"
+    assert saved["OPENROUTER_API_KEY"] == "synthetic-openrouter-key"
+    assert len(harness.secret_prompts) == 2
+    assert len(harness.ui.provider_menus) == 2
+    assert "synthetic-" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("answer", ["", "synthetic-replacement-key"])
+def test_selected_saved_provider_can_keep_or_replace_key(tmp_path, wizard_factory, answer):
+    (tmp_path / ".env").write_text("groq_api_key='synthetic-original-key'\n")
+    harness = wizard_factory(
+        ["quick", "save", "yes"], provider_choices=["groq"], secrets=[answer],
+    )
+
+    assert setup_wizard.run_setup_wizard()
+
+    assert dotenv_values(tmp_path / ".env")["groq_api_key"] == (
+        answer or "synthetic-original-key"
+    )
+    assert harness.secret_prompts == ["Groq API key [configured; Enter to keep]: "]
+    assert ("groq", "Groq · key configured") in harness.ui.provider_menus[0][0]
+
+
+def test_cancel_after_adding_provider_keeps_original_file(tmp_path, wizard_factory):
+    original = "# Existing key\nNIM_API_KEY='synthetic-original-key'\n"
+    (tmp_path / ".env").write_text(original)
+    harness = wizard_factory(
+        ["quick", "cancel"], provider_choices=["openrouter"], secrets=["synthetic-new-key"],
+    )
+
+    assert not setup_wizard.run_setup_wizard()
+
+    assert len(harness.secret_prompts) == 1
+    assert (tmp_path / ".env").read_text() == original
 
 
 def test_quick_start_reviews_before_saving_default_profile(tmp_path, wizard_factory, capsys):
@@ -248,8 +378,8 @@ def test_review_can_return_to_customize(tmp_path, wizard_factory):
 def test_numbered_terminal_menu_completes_customize_flow(tmp_path, wizard_factory, monkeypatch):
     harness = wizard_factory([], secrets=["", "", ""])
     output = StringIO()
-    # Customize, keep personal defaults, Amy, keep devices, then save and confirm.
-    terminal_input = StringIO("2\n\n\n\n\n3\n1\n1\n1\n1\n1\n1\n")
+    # Customize, keep personal defaults, skip keys, keep personality, Amy, save and confirm.
+    terminal_input = StringIO("2\n\n\n\n4\n\n3\n1\n1\n1\n1\n1\n1\n")
     monkeypatch.setattr(
         setup_wizard, "ConsoleUI", lambda: ConsoleUI(stream=output, input_stream=terminal_input),
     )

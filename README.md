@@ -74,7 +74,11 @@ selected components, and checking voice playback; you can replay the test or cha
 speakers. Canceling before saving leaves `.env` untouched and skips these downloads.
 Run `ciel setup` again to change choices or install missing components after a
 selection change or failed download. Saved choices survive a download failure.
-Both paths also offer an optional AI personality interview after API-key entry.
+Both paths first let you choose an API-key provider: NVIDIA NIM, Groq, or
+OpenRouter. Setup asks only for that provider's key, then lets you add another
+provider or continue. You can also skip keys or keep saved connections. With
+multiple providers configured, Ciel routes requests automatically. Both paths
+offer an optional AI personality interview after API-key entry.
 Saved API keys stay hidden, and unrelated settings survive reconfiguration. Setup
 installs Pocket only when selected, CUDA libraries only for GPU recognition, and
 openWakeWord only when configured. It prepares the configured command and enabled
