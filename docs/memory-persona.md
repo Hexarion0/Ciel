@@ -41,6 +41,13 @@ Ask `What's my current project?`, `What's my goal?`, or `What's my occupation?`
 for a local answer when a corresponding saved fact exists. After asking about a
 supported topic, `No, it's Borealis` proposes a correction to that topic. A full
 statement such as `Actually, my current project is Borealis` also works.
+Conversational openings such as `By the way, my favorite game is Hades` and
+`I told you before that my fav game is Hades` reach the same local handler.
+After a question about one personal topic, `It's Hades, not Sable` proposes the
+exact replacement rather than saving the rejected spelling with it. A repeated
+`yeah yeah yeah` can confirm a live proposal. Ambient voice prompts include the
+wake phrase needed to authorize the answer. Broad or multiple-topic questions,
+quoted preferences, and assistant replies do not select a correction target.
 Corrections update one current record, with revision history, rather than leaving
 competing current values. Use `forget my current project`, `forget my goal`, or
 `forget my occupation` to remove the selected record.

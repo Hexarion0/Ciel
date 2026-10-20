@@ -22,7 +22,7 @@ from ciel.conversation import (
     strip_wake_phrase,
 )
 from ciel.memory.read import memory_read_intent
-from ciel.memory.service import is_memory_statement
+from ciel.memory.service import is_memory_confirmation, is_memory_statement
 from ciel.persona import parse_persona_request
 from ciel.providers.base import ChatMessage
 from ciel.providers.intents import answer_clock_query
@@ -78,10 +78,10 @@ def is_local_request(
         r"(?:please\s+)?(?:remember(?:\s+(?:that|it))?|note\s+that)[.!?]*", clean, re.I,
     ):
         return True
-    if pending and re.fullmatch(
-        r"(?:yes|yeah|yes please|save it|remember that|confirm|no|no thanks|"
-        r"don't save it|do not save it|cancel|never mind|forget that)[.!? ]*", clean, re.I,
-    ):
+    if pending and (is_memory_confirmation(clean) or re.fullmatch(
+        r"(?:no|no thanks|don't save it|do not save it|cancel|never mind|forget that)"
+        r"[.!? ]*", clean, re.I,
+    )):
         return True
     if re.fullmatch(
         r"(?:please\s+)?(?:stop listening|wake[ -]word mode|ambient mode off|"
@@ -97,6 +97,21 @@ def is_local_request(
             # An unavailable matcher grants no authority; the controller can clarify.
             continue
     return False
+
+
+def _memory_confirmation_prompt(
+    text: str, *, ambient: bool, typed: bool, wake_word: str,
+) -> str:
+    """Explain the explicit address needed to confirm a memory in ambient voice mode."""
+    if not ambient or typed or not text.startswith("Should I remember"):
+        return text
+    return re.sub(
+        r"Say yes to (save it|replace the saved value) or no to (skip it|keep it)\.",
+        lambda match: (
+            f'Say "{wake_word}, yes" to {match[1]} or "{wake_word}, no" to {match[2]}.'
+        ),
+        text,
+    )
 
 
 def run_desktop(
@@ -504,12 +519,20 @@ def run_desktop(
 
         reliable = wake_info.get("stt_confidence", 1.0) >= settings.audio.stt_retry_confidence
         authorized = explicit and reliable and not earlier_fragments and not restored_fragments
+        memory_text = re.sub(r"^/(?:local|fast|strong|deep)\s+", "", clean, flags=re.I)
+        memory_confirmation = (
+            memory_service.has_pending_confirmation and is_memory_confirmation(memory_text)
+        )
+        contextual_memory = memory_service.is_contextual_correction(memory_text)
+        memory_write_attempt = (
+            is_memory_statement(memory_text) or memory_confirmation or contextual_memory
+        )
         pending_local = bool(memory_service.has_pending_confirmation
                              or actions.has_pending_confirmation or persona_change_pending[0])
-        local_preflight = authorized and is_local_request(
+        local_preflight = authorized and (contextual_memory or is_local_request(
             clean, dialogue, actions, pending=pending_local,
             persona_pending=persona_change_pending[0],
-        )
+        ))
         recalled = [] if local_preflight else (
             recalled_context(query) if explicit or active else []
         )
@@ -547,8 +570,18 @@ def run_desktop(
                 ambient_context._observe_background(user_text, end_conversation=False)
             return False
         unfinished_request[0] = request
+        if memory_write_attempt and not authorized:
+            # A model accepting an ambient turn cannot grant memory-write permission.
+            selected = ControllerDecision(intent="request", action="local", confidence=1)
         if selected.action != "local":
-            memory_service.cancel_proposal()
+            with controls_lock:
+                if not current():
+                    return False
+                memory_service.cancel_proposal()
+                if authorized:
+                    # Keep only the user's explicit topic for a subsequent short correction.
+                    # Assistant replies and broad recall results never establish this focus.
+                    memory_service.observe_topic(memory_text)
             actions.cancel_pending()
             persona_change_pending[0] = False
         if ambient_enabled[0]:
@@ -603,11 +636,7 @@ def run_desktop(
             if selected.action == "local":
                 # Generated arguments cannot rewrite the user-authorized operation.
                 local_text = re.sub(r"^/(?:local|fast|strong|deep)\s+", "", clean, flags=re.I)
-                memory_confirmation = memory_service.has_pending_confirmation and re.fullmatch(
-                    r"(?:yes|yeah|yes please|save it|remember that|confirm)[.!? ]*",
-                    local_text, re.I,
-                )
-                if not authorized and (is_memory_statement(local_text) or memory_confirmation):
+                if not authorized and memory_write_attempt:
                     memory_service.cancel_proposal()
                     actions.cancel_pending()
                     persona_change_pending[0] = False
@@ -663,6 +692,11 @@ def run_desktop(
                         if not current():
                             return False
                         local = memory_service.handle(local_text, authorized=authorized)
+                    if local is not None:
+                        local = _memory_confirmation_prompt(
+                            local, ambient=ambient_enabled[0], typed=typed,
+                            wake_word=settings.audio.wake_word,
+                        )
                     if local is None:
                         local = answer_clock_query(local_text)
                     if local is not None:
@@ -1032,6 +1066,14 @@ def run_desktop(
                 say("I couldn't update my persona file, so my style hasn't changed.")
             return True
         persona_change_pending[0] = False
+        unapproved_memory = (
+            not allow_memory and reliable and not earlier_fragments and not restored_fragments
+        ) and (
+            is_memory_statement(cleaned_query)
+            or memory_service.is_contextual_correction(cleaned_query)
+            or (memory_service.has_pending_confirmation
+                and is_memory_confirmation(cleaned_query))
+        )
         if not allow_memory:
             memory_service.cancel_proposal()
         memory_reply = None
@@ -1040,16 +1082,16 @@ def run_desktop(
                 if not current():
                     return False
                 memory_reply = memory_service.handle(cleaned_query)
+        elif unapproved_memory:
+            memory_reply = (
+                "I haven't saved that. Please address Ciel directly or type the detail "
+                "to update saved memory."
+            )
         if memory_reply is not None:
-            if (
-                ambient_enabled[0] and not typed
-                and memory_reply.startswith("Should I remember")
-            ):
-                wake = settings.audio.wake_word
-                memory_reply = memory_reply.replace(
-                    "Say yes to save it or no to skip it.",
-                    f'Say "{wake}, yes" to save it or "{wake}, no" to skip it.',
-                )
+            memory_reply = _memory_confirmation_prompt(
+                memory_reply, ambient=ambient_enabled[0], typed=typed,
+                wake_word=settings.audio.wake_word,
+            )
             actions.cancel_pending()
             mark("local_intent_resolved", intent="memory")
             conv_manager.add_turn(role="user", content=cleaned_query)
@@ -1138,6 +1180,13 @@ def run_desktop(
         system_prompt = build_system_prompt(
             cleaned_query, recalled_memories=recalled_memories,
         )
+        if not allow_memory:
+            system_prompt += (
+                "\nNo memory write was authorized or performed for this turn. Do not claim "
+                "that a fact was saved or updated. Clarify uncertain speech or discuss the "
+                "request using recent conversation; persistent changes require a separately "
+                "addressed, reliable statement or typed instruction."
+            )
         if earlier_fragments or added_speech or wake_info.get("response_pending"):
             system_prompt += (
                 "\nThe user added speech before a response could finish. The preceding "

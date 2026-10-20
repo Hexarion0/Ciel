@@ -20,7 +20,8 @@ _PROFILE_READ = re.compile(
     r"^(?:(?:what(?:'s| is)|which is|do you (?:remember|know))\s+my "
     r"(?:current project|active project|goal|occupation|job|home city|time\s?zone|"
     r"preferred language|response style|name|"
-    r"favou?rite (?:game|food|color|colour|drink|movie|language))|what do you call me)[.!? ]*$",
+    r"(?:favou?rite|fav) (?:game|food|color|colour|drink|movie|language))|"
+    r"what do you call me)[.!? ]*$",
     re.I,
 )
 _TIMELINE = re.compile(

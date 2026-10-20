@@ -48,7 +48,7 @@ PROFILE_STATEMENTS = {
 
 RECALL_PAUSED = "Saved-memory recall is paused. Say 'resume memory recall' to use saved facts."
 _FAVORITE = re.compile(
-    r"my\s+favou?rite\s+(game|food|color|colour|drink|movie|language)\s+"
+    r"my\s+(?:favou?rite|fav)\s+(game|food|color|colour|drink|movie|language)\s+"
     r"(?:is(?: now)?|has changed to)\s+(.+)", re.I,
 )
 _NAME = re.compile(r"(?:my name is|call me|i prefer to be called)\s+(.+)", re.I)
@@ -59,15 +59,37 @@ _QUESTION_OR_REPORT = re.compile(
 
 
 def _clean_statement(text: str) -> str:
-    """Remove a discourse correction prefix without interpreting its subject."""
+    """Remove bounded conversational prefixes without interpreting their subject."""
     corrected = re.sub(
-        r"^(?:(?:no|actually|correction)[,.\s]+|i meant\s+)+", "", text, flags=re.I,
+        r"^(?:(?:no|actually|correction|by the way)[,.\s]+|i meant\s+|"
+        r"i(?:'ve| have)?(?: already)? told(?: you)?"
+        r"(?: (?:before|already|many times|several times))?"
+        r"(?: that)?\s+)+", "", text.strip(), flags=re.I,
     ).strip()
     if corrected != text.strip():
         corrected = re.sub(r"^like[, ]+(?=my\b)", "", corrected, flags=re.I)
     corrected = re.sub(r"^(?:my\s+){2,}", "my ", corrected, flags=re.I)
     return corrected.rstrip(".!")
 
+
+def _unquote_value(value: str) -> str:
+    """Remove matching quotation marks around a value, retaining its exact spelling."""
+    value = value.strip()
+    if len(value) >= 2 and (value[0], value[-1]) in {
+        ('"', '"'), ("'", "'"), ("“", "”"), ("‘", "’"), ("‘", "'"),
+    }:
+        return value[1:-1].strip()
+    return value
+
+
+def is_memory_confirmation(text: str) -> bool:
+    """Recognize an affirmative answer; a live authorized proposal is still required."""
+    answer = text.strip().casefold().strip(" .!?")
+    if answer in {"yes", "yeah", "yes please", "save it", "remember that", "confirm"}:
+        return True
+    return bool(re.fullmatch(
+        r"(?:yes|yeah)(?:[, ]+(?:yes|yeah)){0,3}(?:[, ]+(?:please|save it))?", answer,
+    ))
 
 
 def _is_question_or_quotation(text: str) -> bool:
@@ -84,7 +106,8 @@ def _clear_automatic_statement(text: str, key: str = "") -> bool:
         r"\b(?:and|then)\s+(?:(?:also|then)\s+)?"
         r"(?:i|we|you|my|our|it|they|he|she|can|could|would|will|please|open|"
         r"remember|forget|tell|show|search)\b|"
-        r"(?:[,;]\s*|\.\s+)(?:i|we|you|my|our|it|they|he|she)\b", text, re.I,
+        r"(?:[,;]\s*|\.\s+)(?:i|we|you|my|our|it|they|he|she|can|could|would|"
+        r"will|please|open|remember|forget|tell|show|search)\b", text, re.I,
     ):
         return False
     if key == "user:home_city" and re.search(
@@ -162,7 +185,7 @@ def is_memory_statement(text: str) -> bool:
 
     Controllers may use this to select the local handler. The handler still applies learning
     mode, confirmation requirements, and independent address/transcription authorization.
-    Short contextual corrections are intentionally left to an existing pending exchange.
+    Short contextual corrections require the service's explicitly tracked user topic.
     """
     original = text.strip().replace("’", "'")
     if re.fullmatch(
@@ -227,22 +250,87 @@ class MemoryService:
         return self._pending is not None and time.monotonic() <= self._pending[2]
 
     def observe_topic(self, text: str) -> None:
-        """Track an explicit topic for a subsequent short correction."""
+        """Track one unambiguous user topic for a subsequent short correction."""
         self.focus_key = None
-        lowered = text.casefold()
-        for topic, key in PROFILE_TOPICS.items():
-            if re.search(r"\b" + topic + r"\b", lowered):
-                self.focus_key = f"user:{key}"
-                return
-        if re.search(r"\b(?:project|development|developing)\b", lowered):
-            self.focus_key = "ciel:project_start_date"
-        if "first commit" in lowered:
-            self.focus_key = "ciel:first_commit_date"
-        match = re.search(
-            r"\bfavou?rite\s+(game|food|color|colour|drink|movie|language)\b", lowered
+        # Quoted/reported preferences belong to their source, not implicitly to the user.
+        lowered = re.sub(
+            r'"[^"\n]*"|“[^”\n]*”|(?<!\w)\'[^\'\n]*\'(?!\w)|‘[^’\n]*’',
+            "", text.casefold(),
         )
-        if match:
-            self.focus_key = "user:favorite_" + match.group(1).replace("colour", "color")
+        if re.search(r"\b(?:said|says|wrote|quoted|claims|claimed)\b", lowered):
+            return
+        topics = {
+            f"user:{key}" for topic, key in PROFILE_TOPICS.items()
+            if re.search(r"\b" + topic + r"\b", lowered)
+        } if re.search(r"\bmy\s+(?:" + "|".join(PROFILE_TOPICS) + r")\b", lowered) else set()
+        topics.update(
+            "user:favorite_" + match.group(1).replace("colour", "color")
+            for match in re.finditer(
+                r"\b(?:favou?rite|fav)\s+(game|food|color|colour|drink|movie|language)\b",
+                lowered,
+            )
+            if re.search(r"\bmy\s+(?:favou?rite|fav)\b", lowered)
+        )
+        if "first commit" in lowered:
+            topics.add("ciel:first_commit_date")
+        if re.search(
+            r"\bdevelopment\b|\bproject(?:'s)? (?:start(?:ed)?|began|begin|date|day)\b",
+            lowered,
+        ):
+            topics.add("ciel:project_start_date")
+        elif not topics and re.search(r"\b(?:project|developing)\b", lowered):
+            topics.add("ciel:project_start_date")
+        self.focus_key = next(iter(topics)) if len(topics) == 1 else None
+
+    def _replacement_value(self, key: str, value: str) -> str | None:
+        """Retain the corrected spelling while removing a recognized rejected value."""
+        contrast = re.fullmatch(r"(.+?),?\s+not\s+(.+)", value, re.I)
+        if contrast:
+            current = self.store.get_fact(key)
+            old_value = str(current.metadata.get("value", "")) if current else ""
+            rejected = _unquote_value(contrast.group(2)).strip().casefold()
+            if rejected not in {"that", "this", old_value.casefold()}:
+                return None
+            value = contrast.group(1).rstrip(", ")
+        return _unquote_value(value)
+
+    def is_contextual_correction(self, text: str) -> bool:
+        """Classify a short correction against the current user topic without mutating it."""
+        return self.learning_mode != "explicit" and self._contextual_value(text) is not None
+
+    def _contextual_value(self, text: str) -> str | None:
+        """Resolve only a bounded correction of a supported, explicitly tracked topic."""
+        key = self.focus_key
+        if not key or not (key.startswith("user:favorite_") or key in PROFILE_STATEMENTS):
+            return None
+        original = text.strip().replace("’", "'")
+        clean = _clean_statement(original)
+        if "?" in original or original.startswith(('"', "'", "“", "‘")):
+            return None
+        prefixed = bool(re.match(
+            r"^(?:no[,\s.]|actually\b|i meant\b|correction\b)", original, re.I,
+        ))
+        referential = re.fullmatch(r"(?:it(?:'s| is)|its)\s+(.{1,100})", clean, re.I)
+        if referential:
+            value = referential.group(1).strip()
+        elif prefixed:
+            value = clean
+        else:
+            return None
+        if not 1 <= len(value) <= 100 or is_memory_statement(clean):
+            return None
+        value = self._replacement_value(key, value)
+        if (
+            not value or not _clear_automatic_statement(value, key)
+            or _is_question_or_quotation(value)
+            or re.match(
+                r"^(?:i|you|my|our|that|this|wrong|incorrect|stop|wait|hold|what|huh|"
+                r"sorry|never|not|don'?t|unknown|unsure|remember|forget|open|close|"
+                r"tell|show|search|please|start|disable|enable|pause|resume)\b", value, re.I,
+            )
+        ):
+            return None
+        return value
 
     def handle(
         self, text: str, now: datetime | None = None, *, authorized: bool = True,
@@ -271,7 +359,7 @@ class MemoryService:
         pending, self._pending = self._pending, None
         if pending is not None and time.monotonic() <= pending[2]:
             answer = original.casefold().strip(" .!?")
-            if answer in {"yes", "yeah", "yes please", "save it", "remember that", "confirm"}:
+            if is_memory_confirmation(original):
                 current = self.store.get_fact(pending[0])
                 if (current.content if current else None) != pending[3]:
                     proposal = self._propose(
@@ -318,7 +406,7 @@ class MemoryService:
             )
             simple_recall = re.fullmatch(
                 r"(?:what(?:'s| is)|which is|do you (?:remember|know))\s+"
-                r"my favou?rite (?:game|food|color|colour|drink|movie|language)[?.!]*",
+                r"my (?:favou?rite|fav) (?:game|food|color|colour|drink|movie|language)[?.!]*",
                 original,
                 re.I,
             )
@@ -361,7 +449,11 @@ class MemoryService:
             kind, clean = project_item.memory_type, project_item.content
         elif favorite:
             topic = favorite.group(1).lower().replace("colour", "color")
-            key, value = "user:favorite_" + topic, favorite.group(2).strip()
+            key = "user:favorite_" + topic
+            value = self._replacement_value(key, favorite.group(2))
+            if not value:
+                self.focus_key = None
+                return None
             clean = f"Your favorite {topic} is {value}."
             kind = MemoryType.PREFERENCE
         elif name:
@@ -396,23 +488,11 @@ class MemoryService:
                     if key.endswith("first_commit_date")
                     else f"CIEL project development began on {value}."
                 )
-        if key is None and correction and self.focus_key:
-            short = re.fullmatch(r"(?:it(?:'s| is)\s+)?(.{1,80})", clean, re.I)
-            if (
-                short
-                and (
-                    self.focus_key.startswith("user:favorite_")
-                    or self.focus_key in PROFILE_STATEMENTS
-                )
-                and not re.match(
-                    r"^(?:i|you|that|this|wrong|incorrect|stop|wait|hold|what|huh|"
-                    r"sorry|never|not|don'?t)\b",
-                    short.group(1),
-                    re.I,
-                )
-            ):
+        if key is None and self.focus_key:
+            corrected_value = self._contextual_value(statement)
+            if corrected_value is not None:
                 inferred_subject = True
-                key, value = self.focus_key, short.group(1).strip()
+                key, value = self.focus_key, corrected_value
                 if key.startswith("user:favorite_"):
                     topic = key.split("favorite_", 1)[1]
                     clean = f"Your favorite {topic} is {value}."
@@ -476,6 +556,11 @@ class MemoryService:
         self.focus_key = key
         current = self.store.get_fact(key)
         self._pending = (key, item, time.monotonic() + 60.0, current.content if current else None)
+        if current is not None and current.content != item.content:
+            return (
+                f"Should I remember this correction? {item.content} "
+                "Say yes to replace the saved value or no to keep it."
+            )
         return f"Should I remember this? {item.content} Say yes to save it or no to skip it."
 
     def _save(self, key: str, item: MemoryItem, *, expected_content: str | None) -> str:
