@@ -40,7 +40,7 @@ class ChatUI:
 
 def test_chat_service_is_selected_before_its_token_and_summary_has_no_secret(monkeypatch):
     configuration = {"GROQ_API_KEY": "keep-existing-provider"}
-    ui = ChatUI(["telegram", "on"])
+    ui = ChatUI(["telegram"])
 
     def secret_input(prompt):
         assert ui.menus[-1][0] == "Chat service"
@@ -52,7 +52,7 @@ def test_chat_service_is_selected_before_its_token_and_summary_has_no_secret(mon
 
     assert configuration == {
         "GROQ_API_KEY": "keep-existing-provider", "CHAT_SERVICES": "telegram",
-        "TELEGRAM_BOT_TOKEN": "synthetic-telegram-secret", "CHAT_AUTOSTART": "true",
+        "TELEGRAM_BOT_TOKEN": "synthetic-telegram-secret",
     }
     assert set(dict(ui.menus[0][1])) == {"telegram", "done"}
     review = str(setup.chat_review_rows(configuration))
@@ -69,13 +69,13 @@ def test_keep_or_disable_chat_never_erases_a_saved_token(monkeypatch, choice):
     }
     secret_input = MagicMock(side_effect=AssertionError("No token prompt expected"))
     monkeypatch.setattr(setup, "getpass", secret_input)
-    ui = ChatUI([choice, None] if choice == "done" else [choice])
+    ui = ChatUI([choice])
 
     setup.configure_chat(ui, configuration)
 
     assert configuration["TELEGRAM_BOT_TOKEN"] == "saved-secret"
     assert configuration["CHAT_SERVICES"] == ("telegram" if choice == "done" else "")
-    assert configuration["CHAT_AUTOSTART"] == ("true" if choice == "done" else "false")
+    assert configuration["CHAT_AUTOSTART"] == "true"  # Obsolete setting is preserved, ignored.
     secret_input.assert_not_called()
 
 
@@ -97,7 +97,7 @@ def test_chat_setup_cancellation_preserves_env_and_does_not_change_services(
     monkeypatch.chdir(tmp_path)
     original = "# Original\nGROQ_API_KEY='existing-synthetic-key'\n"
     (tmp_path / ".env").write_text(original)
-    ui = ChatUI(["telegram", "on", cancel])
+    ui = ChatUI(["telegram", cancel])
     monkeypatch.setattr(setup, "ConsoleUI", lambda: ui)
     monkeypatch.setattr(setup, "getpass", lambda _prompt: "new-synthetic-token")
     apply = MagicMock()
@@ -115,13 +115,13 @@ def test_chat_setup_saves_before_autostart_and_preserves_other_settings(tmp_path
         "# Voice stays as configured\nTTS_ENGINE='pocket'\ntelegram_bot_token='saved-token'\n"
     )
     (tmp_path / ".env").write_text(original)
-    ui = ChatUI(["telegram", "on", "save"])
+    ui = ChatUI(["telegram", "save"])
     monkeypatch.setattr(setup, "ConsoleUI", lambda: ui)
     monkeypatch.setattr(setup, "getpass", lambda _prompt: "replacement-token")
 
     def apply(_ui, configuration, *, project_dir):
         saved = dotenv_values(tmp_path / ".env")
-        assert saved["CHAT_AUTOSTART"] == configuration["CHAT_AUTOSTART"] == "true"
+        assert "CHAT_AUTOSTART" not in saved
         assert saved["CHAT_SERVICES"] == "telegram"
         assert saved["telegram_bot_token"] == "replacement-token"
         assert project_dir == tmp_path
@@ -140,7 +140,7 @@ def test_chat_setup_saves_before_autostart_and_preserves_other_settings(tmp_path
 
 def test_main_setup_applies_chat_only_after_final_save(tmp_path, monkeypatch, wizard_factory):
     harness = wizard_factory(
-        ["quick", "save", "yes"], chat_choices=["telegram"], autostart_choices=["on"],
+        ["quick", "save", "yes"], chat_choices=["telegram"],
         secrets=["", "synthetic-chat-token"],
     )
 
@@ -171,7 +171,7 @@ def test_login_service_runs_only_chat_in_the_current_environment(tmp_path, user_
 
     assert result.success
     content = user_service.path.read_text()
-    assert '"-m" "ciel" "chat" "run"' in content
+    assert '"-m" "ciel" "chat" "_worker"' in content
     assert f"WorkingDirectory={tmp_path}/\n" in content
     assert "EnvironmentFile" not in content
     assert "TOKEN" not in content and "KEY" not in content
@@ -179,9 +179,11 @@ def test_login_service_runs_only_chat_in_the_current_environment(tmp_path, user_
         call(["systemctl", "--user", *arguments], capture_output=True, text=True, timeout=15,
              check=False)
         for arguments in [("show-environment",), ("daemon-reload",),
-                          ("enable", autostart.UNIT_NAME)]
+                          ("enable", autostart.UNIT_NAME),
+                          ("start", autostart.UNIT_NAME),
+                          ("is-active", "--quiet", autostart.UNIT_NAME)]
     ]
-    assert "--now" not in str(user_service.runner.call_args_list)
+    assert "Restart=on-failure" in content and "StartLimitIntervalSec=0" in content
 
 
 def test_service_paths_escape_systemd_substitution_and_preserve_venv_symlink(tmp_path):
@@ -226,9 +228,10 @@ def test_status_uses_actual_enablement_without_claiming_an_api_connection(user_s
     user_service.runner.side_effect = [
         subprocess.CompletedProcess([], 0, "", ""),
         subprocess.CompletedProcess([], 0, "enabled\n", ""),
+        subprocess.CompletedProcess([], 0, "", ""),
     ]
 
-    assert autostart.autostart_status() == "enabled"
+    assert autostart.autostart_status() == "automatic · running"
 
 
 def test_disabling_absent_service_needs_no_systemd_or_home_changes(tmp_path, user_service):
@@ -237,3 +240,121 @@ def test_disabling_absent_service_needs_no_systemd_or_home_changes(tmp_path, use
     assert result.success
     user_service.runner.assert_not_called()
     assert not user_service.path.parent.exists()
+
+
+def test_selected_service_ignores_legacy_manual_start_preference(tmp_path, monkeypatch):
+    apply = MagicMock(return_value=autostart.AutostartResult(True, "automatic"))
+    monkeypatch.setattr(autostart, "set_autostart", apply)
+    ui = ChatUI(["done"])
+    configuration = {"CHAT_SERVICES": "telegram", "TELEGRAM_BOT_TOKEN": "synthetic-token",
+                     "CHAT_AUTOSTART": "false"}
+    setup.configure_chat(ui, configuration)
+
+    assert len(ui.menus) == 1
+    assert setup.apply_chat_autostart(ui, configuration, project_dir=tmp_path)
+    apply.assert_called_once_with(True, tmp_path, restart=True)
+    assert "Automatic" in str(setup.chat_review_rows(configuration))
+    assert configuration["CHAT_AUTOSTART"] == "false"
+
+
+def test_repeated_startup_does_not_replace_or_restart_a_running_worker(
+    tmp_path, user_service, monkeypatch,
+):
+    user_service.path.parent.mkdir(parents=True)
+    user_service.path.write_text(autostart.render_unit(tmp_path))
+    write = MagicMock(side_effect=AssertionError("Unchanged unit must not be replaced"))
+    monkeypatch.setattr(autostart, "_write_unit", write)
+
+    assert autostart.set_autostart(True, tmp_path).success
+
+    commands = [item.args[0][2:] for item in user_service.runner.call_args_list]
+    assert ["start", autostart.UNIT_NAME] in commands
+    assert ["restart", autostart.UNIT_NAME] not in commands
+    write.assert_not_called()
+
+
+def test_failed_worker_start_reports_failure_without_offering_a_manual_start(
+    tmp_path, user_service,
+):
+    def run(arguments, **_kwargs):
+        return subprocess.CompletedProcess(arguments, 1 if "start" in arguments else 0, "", "")
+
+    user_service.runner.side_effect = run
+    result = autostart.set_autostart(True, tmp_path)
+
+    assert not result.success
+    assert "could not start" in result.message
+    assert "ciel chat run" not in result.message
+
+
+def test_unit_replacement_failure_preserves_existing_complete_file(
+    tmp_path, user_service, monkeypatch,
+):
+    user_service.path.parent.mkdir(parents=True)
+    original = autostart.render_unit(tmp_path / "old")
+    user_service.path.write_text(original)
+    monkeypatch.setattr(autostart.os, "replace", MagicMock(side_effect=OSError("interrupted")))
+
+    assert not autostart.set_autostart(True, tmp_path).success
+    assert user_service.path.read_text() == original
+    assert not list(user_service.path.parent.glob(".ciel-chat-*"))
+
+
+def test_pairing_guard_stops_worker_and_blocks_reconciliation_until_released(
+    tmp_path, user_service,
+):
+    user_service.path.parent.mkdir(parents=True)
+    user_service.path.write_text(autostart.render_unit(tmp_path))
+    with autostart.pause_for_pairing() as paused:
+        assert paused.success
+        assert not autostart.set_autostart(True, tmp_path).success
+        assert not any("start" in item.args[0] for item in user_service.runner.call_args_list)
+    assert autostart.set_autostart(True, tmp_path).success
+    commands = [item.args[0][2:] for item in user_service.runner.call_args_list]
+    assert commands.index(["stop", autostart.UNIT_NAME]) < commands.index(
+        ["start", autostart.UNIT_NAME],
+    )
+
+
+def test_pairing_guard_releases_lock_when_pairing_body_fails(tmp_path, user_service):
+    with pytest.raises(ValueError, match="synthetic pairing error"):
+        with autostart.pause_for_pairing() as paused:
+            assert paused.success
+            raise ValueError("synthetic pairing error")
+    assert autostart.set_autostart(True, tmp_path).success
+
+
+def test_main_setup_reports_incomplete_if_automatic_chat_cannot_start(
+    monkeypatch, wizard_factory, capsys,
+):
+    wizard_factory(["quick", "save", "yes"], secrets=[""])
+    monkeypatch.setattr("ciel.setup_wizard.apply_chat_autostart", lambda *a, **kw: False)
+    from ciel import setup_wizard
+
+    assert not setup_wizard.run_setup_wizard()
+    assert "Automatic chat needs attention" in capsys.readouterr().out
+
+
+def test_opening_ciel_restarts_chat_after_direct_env_edits_without_exposing_secrets(
+    tmp_path, user_service,
+):
+    env_path = tmp_path / ".env"
+    env_path.write_text("TELEGRAM_BOT_TOKEN=123:first-synthetic-secret\n")
+    assert autostart.set_autostart(True, tmp_path).success
+    first_unit = user_service.path.read_text()
+    user_service.runner.reset_mock()
+    env_path.write_text("TELEGRAM_BOT_TOKEN=123:replacement-synthetic-secret\n")
+
+    assert autostart.set_autostart(True, tmp_path).success
+    second_unit = user_service.path.read_text()
+    assert first_unit != second_unit
+    assert "first-synthetic-secret" not in first_unit
+    assert "replacement-synthetic-secret" not in second_unit
+    commands = [item.args[0][2:] for item in user_service.runner.call_args_list]
+    assert ["restart", autostart.UNIT_NAME] in commands
+    user_service.runner.reset_mock()
+
+    assert autostart.set_autostart(True, tmp_path).success
+    assert user_service.path.read_text() == second_unit
+    commands = [item.args[0][2:] for item in user_service.runner.call_args_list]
+    assert ["restart", autostart.UNIT_NAME] not in commands

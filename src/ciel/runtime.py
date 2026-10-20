@@ -159,7 +159,6 @@ def run_desktop(
     from ciel.memory.read import answer_memory_read
     from ciel.memory.service import MemoryService
     from ciel.persona import (
-        PERSONA_CONTEXT_VERSION,
         parse_persona_request,
         update_persona_file,
     )
@@ -256,11 +255,15 @@ def run_desktop(
     log_reply = logger.debug if playback_captions else logger.info
 
     memory_store = MemoryStore(db_path=settings.memory.db_path)
+    from ciel.memory.bridge import conversation_context, desktop_conversation_id
+
+    desktop_session_id = desktop_conversation_id()
     conv_manager = ConversationManager(
         store=memory_store,
-        session_id=f"desktop_session:{PERSONA_CONTEXT_VERSION}",
+        session_id=desktop_session_id,
         max_turns=settings.memory.max_short_term_turns,
         max_context_chars=settings.memory.max_context_chars,
+        context_resolver=lambda: conversation_context(settings, desktop_session_id),
     )
     logger.info("Conversation context: %s", conv_manager.session_id)
     memory_service = MemoryService(
@@ -351,6 +354,7 @@ def run_desktop(
             unfinished_request[0] = {}
             interrupted_reply[0] = {}
             web_paused[0] = True
+            dialogue_context.pause_web(True)
             if ambient_enabled[0]:
                 ambient_context.record_addressed("user", text)
         mark("local_intent_resolved", intent=kind)
@@ -543,6 +547,7 @@ def run_desktop(
             )
         if not current():
             return False
+        web_paused[0] = dialogue_context.web_paused()
         if web_paused[0] and selected.action in {"search", "read_page"}:
             selected = ControllerDecision(intent="request", action="answer", confidence=1)
         if selected.action == "silent":
@@ -880,6 +885,7 @@ def run_desktop(
         clean_control = user_text if typed else strip_wake_phrase(
             user_text, settings.audio.wake_word,
         )
+        web_paused[0] = dialogue_context.web_paused()
         explicit_control = typed or bool(wake_info.get("wake_verified")) or (
             ambient_context.is_explicit(user_text) or not ambient_enabled[0]
         )
@@ -914,6 +920,7 @@ def run_desktop(
                 if not current():
                     return False
                 web_paused[0] = False
+                dialogue_context.pause_web(False)
         if settings.controller.enabled:
             return handle_controlled_turn(user_text, wake_info, current, say,
                                           earlier_fragments, restored_fragments, retained_privacy,
@@ -1275,6 +1282,7 @@ def run_desktop(
 
         try:
             internet_result = InternetResult()
+            web_paused[0] = dialogue_context.web_paused()
             internet_private = ModelRouter.requires_local(context_messages)
             if not internet_private and not web_paused[0]:
                 mark("internet_retrieval_started")

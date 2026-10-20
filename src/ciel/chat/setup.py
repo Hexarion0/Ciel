@@ -12,10 +12,6 @@ from dotenv import dotenv_values, set_key
 from ciel.terminal_ui import ConsoleUI
 
 
-def _enabled(configuration: dict[str, str], key: str) -> bool:
-    return configuration.get(key, "").strip().lower() in {"1", "true", "yes", "on", "y", "t"}
-
-
 def _services(configuration: dict[str, str]) -> list[str]:
     return [value.strip().lower() for value in configuration.get("CHAT_SERVICES", "").split(",")
             if value.strip()]
@@ -25,7 +21,8 @@ def configure_chat(ui: ConsoleUI, configuration: dict[str, str]) -> None:
     """Select a chat service before requesting its token, retaining saved secrets on skip."""
     ui.step("Chat connections")
     ui.note("Telegram is available now. Discord and Signal can be added later.")
-    ui.note("Chat runs separately from voice. This PC must be on and connected.")
+    ui.note("Chat starts automatically and stays available after login. "
+            "This PC must be on and connected.")
     services = _services(configuration)
     token_saved = bool(configuration.get("TELEGRAM_BOT_TOKEN", "").strip())
     label = "Telegram"
@@ -40,7 +37,6 @@ def configure_chat(ui: ConsoleUI, configuration: dict[str, str]) -> None:
     selected = ui.choose("Chat service", choices, default="done")
     if selected == "disable":
         configuration["CHAT_SERVICES"] = ""
-        configuration["CHAT_AUTOSTART"] = "false"
         return
     if selected == "telegram":
         ui.note("Create a bot with @BotFather in Telegram, then enter its token here. "
@@ -58,19 +54,15 @@ def configure_chat(ui: ConsoleUI, configuration: dict[str, str]) -> None:
         else:
             ui.note("Telegram was skipped because no token was entered.")
     if _services(configuration):
-        ui.note("Login autostart keeps chat available after you sign in; "
-                "it cannot send reminders while your PC is off.")
-        start = ui.choose("Chat at login", [
-            ("off", "Start chat manually"), ("on", "Start chat when I log in · Linux systemd"),
-        ], default="on" if _enabled(configuration, "CHAT_AUTOSTART") else "off")
-        configuration["CHAT_AUTOSTART"] = "true" if start == "on" else "false"
+        ui.note("Chat starts automatically after saving and whenever you log in. "
+                "Pair Telegram once to connect your account.")
 
 
 def chat_review_rows(configuration: dict[str, str]) -> list[tuple[str, str]]:
     """Summarize selected channels without implying a live connection or owner pairing."""
     services = _services(configuration)
     if not services:
-        return [("Chat", "Off"), ("Chat at login", "Off")]
+        return [("Chat", "Off")]
     labels = []
     for service in services:
         if service == "telegram":
@@ -81,20 +73,21 @@ def chat_review_rows(configuration: dict[str, str]) -> list[tuple[str, str]]:
         else:
             labels.append(f"{service} · not supported in this version")
     return [("Chat", "; ".join(labels)),
-            ("Chat at login", "Requested; applied after saving" if _enabled(
-                configuration, "CHAT_AUTOSTART",
-            ) else "Off")]
+            ("Chat startup", "Automatic · applied after saving")]
 
 
 def apply_chat_autostart(
     ui: ConsoleUI, configuration: dict[str, str], *, project_dir: Path,
 ) -> bool:
-    """Apply only the saved chat login preference and report real systemd outcomes."""
-    from ciel.chat.autostart import set_autostart
+    """Always start selected, configured services and report the actual systemd result."""
+    from ciel.chat.autostart import reconcile_chat_startup
+    from ciel.config import ChatConfig
 
-    enabled = bool(_services(configuration)) and _enabled(configuration, "CHAT_AUTOSTART")
-    result = set_autostart(enabled, project_dir)
-    if enabled or not result.success:
+    chat = ChatConfig(services=_services(configuration),
+                      telegram_bot_token=configuration.get("TELEGRAM_BOT_TOKEN") or None,
+                      state_path=configuration.get("CHAT_STATE_PATH", "data/chat.db"))
+    result = reconcile_chat_startup(chat, project_dir=project_dir, restart=True)
+    if chat.services or not result.success:
         ui.note(result.message)
     return result.success
 
@@ -137,7 +130,6 @@ def run_chat_setup() -> bool:
         configuration = {key.upper(): value for key, value in raw.items() if value is not None}
         configuration.setdefault("CHAT_SERVICES", "")
         configuration.setdefault("CHAT_STATE_PATH", "data/chat.db")
-        configuration.setdefault("CHAT_AUTOSTART", "false")
         while True:
             configure_chat(ui, configuration)
             ui.step("Review chat setup")
@@ -155,9 +147,9 @@ def run_chat_setup() -> bool:
         success = apply_chat_autostart(ui, configuration, project_dir=env_path.parent.resolve())
         if "telegram" in _services(configuration):
             ui.note("Pair your Telegram account with: ciel chat pair telegram")
-            ui.note("Then start chat with: ciel chat run")
         ui.finish("Chat settings saved." + (
-            " Autostart needs another step." if not success else ""
+            " Automatic startup needs attention; Ciel will retry when opened."
+            if not success else ""
         ))
         return success
     except (KeyboardInterrupt, EOFError):

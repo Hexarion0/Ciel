@@ -170,6 +170,36 @@ semantic recall remains disabled until an actual model passes evaluation.
 
 ## Continuity inside conversations
 
+Voice and the currently paired Telegram account now read one chronological
+conversation. Existing archives stay intact; no migration or copying is needed.
+Messages and summaries carry their origin and recorded time. Unpairing or changing
+the paired account excludes its old chat archive immediately. Clearing one channel
+also invalidates shared summaries containing it, preserving the other channel's
+history. Confirmations remain in the channel where the fact was proposed.
+
+If a summary is deferred or invalid, a bounded tail of up to 32 unsummarized turns
+can remain available within the existing character budget. Older user messages
+are also searchable by topic through a local persisted word index. Matching
+passages include their recorded date and channel, labeled as historical dialogue,
+not confirmed current facts. Assistant claims are not indexed as personal evidence.
+Corrected values, forgotten details, and known secret tokens are excluded from
+this historical recall. This does not automatically save new personal facts.
+An adjacent explicit user choice can accompany its topic even if it omits the
+topic's name; each message retains its own date and attribution.
+
+Confirmed current facts remain ahead of historical dialogue in recalled context.
+Both share `MEMORY_RECALL_MAX_CHARS`; historical excerpts use at most 2,000 of
+those characters and three results. Recall pause applies to both. No embedding
+download or hosted request is needed to search older user messages.
+A synthetic 10,000-turn archive check on the development PC took 0.217 seconds
+for initial indexing/query and 0.009 seconds for the indexed query. This is a
+local measurement, not a guarantee for other hardware or archive sizes.
+
+An explicit "do not search" carries across the owner's channels and process
+restarts. A fresh explicit lookup resumes browsing. Resetting a channel removes
+only its own browsing preference; `/local` continues to restrict the shared
+conversation's provider routing and web access.
+
 Short references such as `What about that?`, `Tell me more`, and `Continue` can
 use the latest substantive user topic to retrieve relevant saved notes. A clear
 new topic uses its own words. Assistant claims are not used to select personal

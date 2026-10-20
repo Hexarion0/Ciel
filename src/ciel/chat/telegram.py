@@ -1,11 +1,13 @@
 """Owner-paired Telegram Bot API transport; independent of audio libraries."""
 
+import asyncio
 import logging
 import re
 import secrets
 import threading
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from typing import Any
 
 import httpx
@@ -46,18 +48,49 @@ def protect_telegram_logs() -> None:
 class TelegramClient:
     """Small synchronous Bot API client with sanitized errors and explicit timeouts."""
 
-    def __init__(self, token: str, *, client: httpx.Client | None = None) -> None:
+    def __init__(
+        self, token: str, *, client: httpx.Client | None = None,
+        stop: threading.Event | None = None,
+    ) -> None:
         protect_telegram_logs()
         if not token.strip() or any(character.isspace() for character in token):
             raise TelegramError("Set TELEGRAM_BOT_TOKEN using ciel chat setup first.")
         self._base_url = f"https://api.telegram.org/bot{token}/"
-        self._client = client or httpx.Client(timeout=httpx.Timeout(35.0, connect=10.0))
         self._owns_client = client is None
+        self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(35.0, connect=10.0))
+        self._stop = stop
+        # Keep the async connection pool and its cleanup on one loop across synchronous calls.
+        self._loop = asyncio.new_event_loop() if self._owns_client else None
+
+    def set_stop_event(self, stop: threading.Event) -> None:
+        """Attach service/pairing cancellation without changing injected client constructors."""
+        self._stop = stop
+
+    async def _post(self, method: str, parameters: dict[str, Any]) -> httpx.Response:
+        """Cancel the actual in-flight HTTP task before releasing pairing or polling locks."""
+        task = asyncio.create_task(self._client.post(self._base_url + method, json=parameters))
+        try:
+            while not task.done():
+                if self._stop is not None and self._stop.is_set():
+                    raise TelegramError("Telegram request cancelled.")
+                await asyncio.wait({task}, timeout=0.05)
+            if self._stop is not None and self._stop.is_set():
+                raise TelegramError("Telegram request cancelled.")
+            return await task
+        finally:
+            if not task.done():
+                task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
 
     def request(self, method: str, **parameters: Any) -> Any:
         """Call a fixed Bot API method without exposing httpx's token-containing errors."""
         try:
-            response = self._client.post(self._base_url + method, json=parameters)
+            if self._stop is not None and self._stop.is_set():
+                raise TelegramError("Telegram request cancelled.")
+            response = self._loop.run_until_complete(self._post(method, parameters)) if (
+                self._loop is not None
+            ) else self._client.post(self._base_url + method, json=parameters)
             payload = response.json()
         except (httpx.HTTPError, ValueError):
             raise TelegramError(
@@ -131,8 +164,11 @@ class TelegramClient:
 
     def close(self) -> None:
         """Release only the HTTP client created by this transport."""
-        if self._owns_client:
-            self._client.close()
+        if self._owns_client and self._loop is not None and not self._loop.is_closed():
+            try:
+                self._loop.run_until_complete(self._client.aclose())
+            finally:
+                self._loop.close()
 
 
 def message_chunks(text: str) -> list[str]:
@@ -225,6 +261,8 @@ class TelegramService:
             try:
                 return self.client.updates(self.state.offset(self.bot_id), timeout=timeout)
             except TelegramError as error:
+                if self.stop.is_set():
+                    return []
                 if not error.transient or attempt == 5:
                     raise
                 self.report(f"{error} Retrying the connection.")
@@ -282,7 +320,8 @@ class TelegramService:
                 try:
                     self.client.send(
                         user_id,
-                        "Paired with Ciel. Start the chat service on your PC to talk here.",
+                        "Paired with Ciel. Chat resumes automatically on your PC; "
+                        "you can talk here shortly.",
                         self.stop,
                     )
                 except TelegramError:

@@ -3,6 +3,7 @@
 import argparse
 import sys
 import time
+from pathlib import Path
 
 from ciel import __version__
 
@@ -28,7 +29,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "  ciel devices        List microphones and speakers\n"
             "  ciel config         Show effective settings with API keys hidden\n"
             "  ciel memory --help  Inspect and manage saved memory\n"
-            "  ciel chat --help    Configure or run messaging without voice\n"
+            "  ciel chat --help    Configure automatically started messaging\n"
             "  ciel help COMMAND   Show help for a command"
         ),
     )
@@ -159,9 +160,16 @@ def main(argv: list[str] | None = None) -> int:
 
     from ciel.config import get_settings
     from ciel.logging import setup_logging
-    from ciel.platform import get_audio_backend
 
     settings = get_settings()
+    from ciel.chat.autostart import reconcile_chat_startup
+
+    chat_startup = reconcile_chat_startup(settings.chat, project_dir=Path.cwd())
+    if not chat_startup.success:
+        print(chat_startup.message)
+
+    from ciel.platform import get_audio_backend
+
     dev_mode = args.mode == "dev"
     logger = setup_logging("DEBUG" if dev_mode else "INFO", concise=not dev_mode)
 

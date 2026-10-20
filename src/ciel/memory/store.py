@@ -158,6 +158,15 @@ class MemoryStore:
                     "session_id TEXT PRIMARY KEY, generation INTEGER NOT NULL DEFAULT 0);"
                 )
                 conn.execute(
+                    "CREATE TABLE IF NOT EXISTS memory_session_members ("
+                    "summary_session_id TEXT NOT NULL, member_session_id TEXT NOT NULL, "
+                    "PRIMARY KEY(summary_session_id, member_session_id));"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_session_members_archive "
+                    "ON memory_session_members(member_session_id, summary_session_id);"
+                )
+                conn.execute(
                     "CREATE TABLE IF NOT EXISTS memory_settings ("
                     "name TEXT PRIMARY KEY, value_json TEXT NOT NULL);"
                 )
@@ -742,6 +751,61 @@ class MemoryStore:
             )
             return [self._row_to_turn(r) for r in cursor.fetchall()]
 
+    def register_session_projection(self, summary_session_id: str, session_ids: list[str]) -> None:
+        """Track summary dependencies so a channel reset invalidates every shared view."""
+        if session_ids == [summary_session_id]:
+            return
+        with self._lock:
+            connection = self._get_connection()
+            with connection:
+                connection.executemany(
+                    "INSERT OR IGNORE INTO memory_session_members VALUES (?, ?)",
+                    [(summary_session_id, session) for session in session_ids],
+                )
+
+    def get_context_turn_count(self, session_ids: list[str]) -> int:
+        """Count turns in an explicitly selected owner context."""
+        if not session_ids:
+            return 0
+        placeholders = ",".join("?" for _ in session_ids)
+        with self._lock:
+            return self._get_connection().execute(
+                f"SELECT COUNT(*) FROM conversation_turns WHERE session_id IN ({placeholders})",
+                session_ids,
+            ).fetchone()[0]
+
+    def get_context_turns(
+        self, session_ids: list[str], limit: int = 10,
+    ) -> list[ConversationTurn]:
+        """Read a chronological bounded tail across the exact selected channel archives."""
+        if not session_ids:
+            return []
+        placeholders = ",".join("?" for _ in session_ids)
+        with self._lock:
+            rows = self._get_connection().execute(
+                "SELECT * FROM (SELECT * FROM conversation_turns "
+                f"WHERE session_id IN ({placeholders}) ORDER BY id DESC LIMIT ?) ORDER BY id ASC",
+                [*session_ids, limit],
+            ).fetchall()
+            return [self._row_to_turn(row) for row in rows]
+
+    def get_context_summary_batch(
+        self, session_ids: list[str], after_id: int, keep_recent: int, limit: int,
+    ) -> list[ConversationTurn]:
+        """Read the next summary batch across a shared history, keeping its recent tail."""
+        if not session_ids:
+            return []
+        placeholders = ",".join("?" for _ in session_ids)
+        with self._lock:
+            rows = self._get_connection().execute(
+                f"SELECT * FROM conversation_turns WHERE session_id IN ({placeholders}) "
+                "AND id > ? AND id NOT IN (SELECT id FROM conversation_turns "
+                f"WHERE session_id IN ({placeholders}) ORDER BY id DESC LIMIT ?) "
+                "ORDER BY id ASC LIMIT ?",
+                [*session_ids, after_id, *session_ids, keep_recent, limit],
+            ).fetchall()
+            return [self._row_to_turn(row) for row in rows]
+
     def get_session_summary(self, session_id: str) -> MemoryItem | None:
         """Retrieve the latest summary using exact metadata identity."""
         with self._lock:
@@ -839,24 +903,30 @@ class MemoryStore:
             return [self._row_to_turn(row) for row in rows]
 
     def clear_session(self, session_id: str) -> int:
-        """Atomically clear a session's turns and persisted summaries."""
+        """Clear this archive and invalidate dependent summaries without deleting other channels."""
         with self._lock:
             conn = self._get_connection()
             with conn:
                 conn.execute("BEGIN IMMEDIATE;")
-                conn.execute(
+                affected = [session_id, *[row[0] for row in conn.execute(
+                    "SELECT summary_session_id FROM memory_session_members "
+                    "WHERE member_session_id=?", (session_id,),
+                )]]
+                conn.executemany(
                     "INSERT INTO memory_session_state(session_id,generation) VALUES (?,1) "
-                    "ON CONFLICT(session_id) DO UPDATE SET generation=generation+1;", (session_id,),
+                    "ON CONFLICT(session_id) DO UPDATE SET generation=generation+1;",
+                    [(identity,) for identity in affected],
                 )
                 cursor = conn.execute(
                     "DELETE FROM conversation_turns WHERE session_id = ?;",
                     (session_id,),
                 )
                 cleared = cursor.rowcount
+                placeholders = ",".join("?" for _ in affected)
                 conn.execute(
                     "DELETE FROM memories WHERE memory_type = ? "
-                    f"AND ({_SESSION_ID_SQL}) = ?;",
-                    (MemoryType.CONVERSATION.value, session_id),
+                    f"AND ({_SESSION_ID_SQL}) IN ({placeholders});",
+                    [MemoryType.CONVERSATION.value, *affected],
                 )
                 return cleared
 

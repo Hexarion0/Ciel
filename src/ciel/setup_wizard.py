@@ -116,7 +116,6 @@ def _initial_configuration(current_env: dict[str, str]) -> dict[str, str]:
         "TTS_ENABLED": "true",
         "CHAT_SERVICES": "",
         "CHAT_STATE_PATH": "data/chat.db",
-        "CHAT_AUTOSTART": "false",
     }
     for key, value in defaults.items():
         current_env.setdefault(key, value)
@@ -491,7 +490,7 @@ def run_setup_wizard(*, install_components: bool = False) -> bool:
         _save_configuration(env_path, configuration)
         saved = True
         saving = False
-        apply_chat_autostart(ui, configuration, project_dir=env_path.parent.resolve())
+        chat_ready = apply_chat_autostart(ui, configuration, project_dir=env_path.parent.resolve())
         if pending_persona is not None:
             from ciel.persona import update_setup_persona_file
 
@@ -562,8 +561,10 @@ def run_setup_wizard(*, install_components: bool = False) -> bool:
                 _select_device(ui, configuration, output=True)
                 _save_configuration(env_path, configuration)
             success = _test_voice(ui, configuration)
-        ui.finish("Configuration saved. Run: ciel")
-        return True
+        ui.finish("Configuration saved. Run: ciel" if chat_ready else
+                  "Configuration saved. Automatic chat needs attention; "
+                  "Ciel will retry when opened. Run: ciel")
+        return chat_ready
     except (KeyboardInterrupt, EOFError):
         if saved:
             ui.finish("Setup stopped. Configuration is saved. "

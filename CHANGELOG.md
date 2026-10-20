@@ -2,6 +2,14 @@
 
 ## Unreleased — 0.3.6 development
 
+- Automatically start selected chat services after setup/pairing, on Ciel launch,
+  and at login. Remove manual-start choices and coordinate pairing with the worker.
+- Bridge recent voice/chat conversation and summaries for the paired owner while
+  preserving archives, channel-specific confirmations, and local-only routing.
+  Keep a larger bounded unsummarized tail and index older user dialogue by topic,
+  excluding forgotten and superseded values from historical recall.
+- Improve corrected search scope, tracking-link deduplication, source relevance,
+  and citation subject checks. Carry explicit browsing controls across channels.
 - Strengthen Ciel's companion voice with reasoned opinions and conversational
   follow-ups. Handle wait/cancel/no-search before model decisions, discard canceled
   fragments, and keep lookups paused until the user explicitly requests another.

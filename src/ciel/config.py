@@ -149,7 +149,6 @@ class ChatConfig(BaseModel):
     services: list[Literal["telegram"]] = Field(default_factory=list)
     telegram_bot_token: SecretStr | None = None
     state_path: str = Field(default="data/chat.db", min_length=1)
-    autostart: bool = False
 
 
 class AudioConfig(BaseModel):
@@ -305,7 +304,6 @@ class Settings(BaseSettings):
     chat_services: str = ""
     telegram_bot_token: SecretStr | None = None
     chat_state_path: str = Field(default="data/chat.db", min_length=1)
-    chat_autostart: bool = False
 
     # Memory & Persistence settings
     memory_db_path: str = Field(default="data/ciel.db")
@@ -496,7 +494,6 @@ class Settings(BaseSettings):
             services=self.chat_services.split(",") if self.chat_services else [],
             telegram_bot_token=self.telegram_bot_token,
             state_path=self.chat_state_path,
-            autostart=self.chat_autostart,
         )
 
     @property

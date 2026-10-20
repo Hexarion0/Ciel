@@ -9,6 +9,7 @@ SENSITIVE_PATTERNS = [
     re.compile(r"(nvapi-[A-Za-z0-9_-]{10,})", re.IGNORECASE),
     re.compile(r"(sk-[A-Za-z0-9_-]{10,})", re.IGNORECASE),
     re.compile(r"(gsk_[A-Za-z0-9_-]{10,})", re.IGNORECASE),
+    re.compile(r"(?<!\w)[0-9]{5,15}:[A-Za-z0-9_-]{20,}(?!\w)"),
     re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/-]+", re.IGNORECASE),
 ]
 

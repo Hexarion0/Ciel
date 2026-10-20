@@ -401,7 +401,7 @@ def test_free_backends_are_lazy_and_use_independent_search_providers(monkeypatch
     assert not service.prepare("Hello").attempted
     factory.assert_not_called()
     assert service.prepare("News today").sources
-    assert client.text.call_args.kwargs == {"backend": "duckduckgo,brave", "max_results": 5}
+    assert client.text.call_args.kwargs == {"backend": "duckduckgo,brave", "max_results": 10}
     assert factory.call_args.kwargs["timeout"] <= 8
 
 
@@ -721,8 +721,9 @@ def test_duplicate_unsafe_and_empty_search_results_are_not_sources(service):
 def test_search_and_read_evidence_remain_distinct(service, monkeypatch):
     service.config.max_pages = 1
     monkeypatch.setattr(service, "_read_page", Mock(return_value=InternetSource(
-        "Article", "https://example.com/release", content="Verified article excerpt",
+        "Latest release article", "https://example.com/release",
+        content="Latest release verified article excerpt",
     )))
     result = service.prepare("Latest release")
     assert result.sources[0].snippet == "Public information about Latest release"
-    assert result.sources[0].content == "Verified article excerpt"
+    assert result.sources[0].content == "Latest release verified article excerpt"

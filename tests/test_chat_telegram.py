@@ -370,3 +370,81 @@ def test_explicit_rate_limit_can_retry_but_ambiguous_network_failure_cannot():
         with pytest.raises(TelegramError):
             client.send(42, "hello", stop)
     stop.wait.assert_called_once_with(1)
+
+
+def test_stop_cancels_blocked_owned_http_request_and_closes_it(monkeypatch):
+    import asyncio
+
+    from ciel.chat import telegram
+
+    entered, cancelled, closed, stop = (threading.Event() for _ in range(4))
+    errors = []
+
+    class BlockingHTTP:
+        async def post(self, *_args, **_kwargs):
+            entered.set()
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        async def aclose(self):
+            closed.set()
+
+    monkeypatch.setattr(telegram.httpx, "AsyncClient", lambda **_kwargs: BlockingHTTP())
+
+    def request():
+        client = TelegramClient(TOKEN, stop=stop)
+        try:
+            client.identity()
+        except TelegramError as error:
+            errors.append(error)
+        finally:
+            client.close()
+
+    thread = threading.Thread(target=request, daemon=True)
+    thread.start()
+    assert entered.wait(1), "HTTP request did not start"
+    stop.set()
+    thread.join(1)
+
+    assert not thread.is_alive(), "Cancellation waited for the 35-second HTTP timeout"
+    assert cancelled.is_set() and closed.is_set()
+    assert len(errors) == 1 and TOKEN not in str(errors[0])
+
+
+def test_owned_client_reuses_one_loop_for_requests_and_cleanup_without_live_network(monkeypatch):
+    import asyncio
+
+    from ciel.chat import telegram
+
+    calls, loops = [], []
+
+    class AsyncHTTP:
+        async def post(self, url, *, json):
+            method = url.rsplit("/", 1)[-1]
+            calls.append(method)
+            loops.append(asyncio.get_running_loop())
+            result = {"getMe": {"id": 123}, "getWebhookInfo": {"url": ""},
+                      "getUpdates": [], "sendMessage": {"message_id": 1}}[method]
+            return httpx.Response(200, json={"ok": True, "result": result})
+
+        async def aclose(self):
+            loops.append(asyncio.get_running_loop())
+            calls.append("close")
+            assert not {task for task in asyncio.all_tasks()
+                        if task is not asyncio.current_task()}
+
+    monkeypatch.setattr(telegram.httpx, "AsyncClient", lambda **_kwargs: AsyncHTTP())
+    client = TelegramClient(TOKEN, stop=threading.Event())
+    try:
+        assert client.identity() == {"id": 123}
+        client.check_polling()
+        assert client.updates(0) == []
+        client.send(42, "hello", threading.Event())
+    finally:
+        client.close()
+    client.close()  # Closing twice cannot reopen or reuse the event loop.
+    assert calls == ["getMe", "getWebhookInfo", "getUpdates", "sendMessage", "close"]
+    assert len(set(loops)) == 1 and loops[0].is_closed()

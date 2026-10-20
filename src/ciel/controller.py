@@ -22,7 +22,15 @@ from pydantic import (
 
 from ciel.audio.speech_events import strip_speech_events
 from ciel.config import ControllerConfig
-from ciel.internet import InternetResult, InternetService, InternetSource, _bounded, _clean
+from ciel.internet import (
+    InternetResult,
+    InternetService,
+    InternetSource,
+    _bounded,
+    _clean,
+    _current_scope,
+    source_identity,
+)
 from ciel.logging import get_logger
 from ciel.memory.read import memory_read_intent
 from ciel.memory.service import is_memory_statement
@@ -537,9 +545,9 @@ class AIController:
             *messages, ChatMessage("user", text),
         ]) or not internet.config.enabled:
             return ControllerReply(canceled=not current(), text="Web access is unavailable here.")
-        decision = initial
+        decision = initial.model_copy(update={"query": _current_scope(initial.query, text)})
         # Preserve the original intent for evidence checks even if an AI query uses shorthand.
-        goal = _clean(f"{initial.query}\nUser request: {text}", 1600)
+        goal = _clean(f"{_current_scope(initial.query, text)}\nUser request: {text}", 1600)
         sources: list[InternetSource] = []
         visited: set[str] = set()
         fingerprints: set[tuple[str, ...]] = set()
@@ -565,14 +573,17 @@ class AIController:
             )
             if not current():
                 return ControllerReply(canceled=True)
-            known = {source.url: source for source in sources}
+            known = {source_identity(source.url): source for source in sources}
             for source in result.sources:
-                previous = known.get(source.url)
+                identity = source_identity(source.url)
+                previous = known.get(identity)
                 if previous is None or source.content:
-                    known[source.url] = source
+                    known[identity] = source
             # Fresh results must still fit after an earlier query fills the source budget.
-            ordered_urls = dict.fromkeys([source.url for source in result.sources] + list(known))
-            sources = [known[url] for url in ordered_urls][:internet.config.research_max_results]
+            ordered_keys = dict.fromkeys(
+                [source_identity(source.url) for source in result.sources] + list(known),
+            )
+            sources = [known[key] for key in ordered_keys][:internet.config.research_max_results]
             lookup = InternetResult(attempted=True, query=goal, sources=sources)
             lookup.context = InternetService._context(sources, failed=not sources, query=goal)
             self.last_lookup = {"query": goal, "outcome": "unsupported", "sources": len(sources)}

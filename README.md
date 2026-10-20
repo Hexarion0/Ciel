@@ -23,8 +23,8 @@ internet, and desktop acceptance checks remain open in
 - Free public web search and HTML/text page reading, with bounded requests and source links.
 - Editable personality preferences, voice-requested style adjustments, and concise
   or development console output.
-- Optional owner-paired Telegram text chat, shared saved facts, separate chat history,
-  and Linux login autostart without loading voice models.
+- Owner-paired Telegram text chat, automatically started when configured, with
+  conversation continuity across voice and chat without loading voice models.
 
 Reminders, additional chat services, model-selected tool calls, Windows support, tone detection,
 and presence detection are **planned**.
@@ -130,18 +130,22 @@ then pair your account using the temporary code shown on your PC:
 ```bash
 ciel chat setup
 ciel chat pair telegram
-ciel chat run
 ```
 
-Chat uses your existing AI providers and saved facts, with its own conversation
-history and memory confirmations. It does not load the microphone or speech models.
+Selected chat starts automatically after setup, after pairing, whenever Ciel opens,
+and when you log in. There is no manual-start or startup-toggle choice. Check its
+state with `ciel chat status`; deselect the service in setup to disable it.
+
+Chat uses your existing AI providers, saved facts, and the paired owner's recent
+voice conversation. You can continue a voice conversation in Telegram and return
+to it by voice. The archives retain their channel and time; memory confirmations
+stay in the channel where they were proposed. Chat does not load speech models.
 Use `/help`, `/memory`, `/cancel`, and `/reset` in the paired chat. `/local <message>`
 keeps AI generation local; Telegram still transports your messages.
 
-Setup can enable **Start chat when I log in** on Linux. The PC must be on and
-connected. Check with `ciel chat autostart status`; disable it with
-`ciel chat autostart disable`. The service starts at the next login; run chat manually
-for the first check. Only one pairing or chat process can run at a time.
+Automatic startup uses Linux systemd user services. The PC must be on, logged in,
+and connected. Pairing automatically pauses and resumes chat; no separate start
+or stop commands are needed. Only the paired account's private text messages are accepted.
 
 This first version supports text. Reminders, Discord, Signal, voice messages, and
 remote desktop actions come later. Live Telegram delivery and login autostart still

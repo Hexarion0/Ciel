@@ -6,7 +6,7 @@ import json
 import re
 
 from ciel.audio.speech_events import strip_stage_directions
-from ciel.internet import InternetResult, InternetService, _labeled_numbers
+from ciel.internet import InternetResult, InternetService, _labeled_numbers, _topic_terms
 from ciel.providers.base import ChatMessage
 
 _INSTRUCTION = """WEB ANSWER FORMAT FOR THIS TURN:
@@ -41,6 +41,11 @@ _WORD_NUMBERS = {
         "zero one two three four five six seven eight nine ten eleven twelve thirteen "
         "fourteen fifteen sixteen seventeen eighteen nineteen twenty".split(),
     )
+}
+_CLAIM_OPENERS = {
+    "according", "available", "begin", "continue", "currently", "download", "end",
+    "latest", "new", "official", "read", "released", "see", "source", "start",
+    "season", "episode", "part", "volume", "chapter", "version", "release",
 }
 
 
@@ -148,6 +153,17 @@ def verified_web_answer(content: str, lookup: InternetResult) -> str:
         if not text or len(text.split()) > 40 or "http" in text.casefold() or "`" in text:
             return fallback
         if not set(_NUMBER.findall(text)) <= set(_NUMBER.findall(quote)):
+            return fallback
+        # A real quote and a matching number cannot support an unrelated subject.
+        # This is a conservative lexical bound, not a claim of semantic proof.
+        claim_terms = _topic_terms(text)
+        if claim_terms and not (claim_terms & _topic_terms(quote)):
+            return fallback
+        named = _topic_terms(" ".join(
+            word for word in re.findall(r"[^\W_]+(?:-[^\W_]+)*", text)
+            if word[0].isupper()
+        )) - _CLAIM_OPENERS
+        if not named <= _topic_terms(evidence.title + " " + quote):
             return fallback
         labels = _labels(text)
         if not labels <= _labels(quote):

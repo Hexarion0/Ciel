@@ -17,6 +17,7 @@ from ciel.dialogue import DialogueContext
 from ciel.internet import InternetResult, InternetService
 from ciel.logging import get_logger
 from ciel.memory import ConversationManager, MemoryStore
+from ciel.memory.bridge import conversation_context
 from ciel.memory.models import normalize_sources
 from ciel.memory.service import MemoryService
 from ciel.persona import (
@@ -40,11 +41,11 @@ _DESKTOP_ACTION = re.compile(
     r"(?:open|launch|close|execute|run|shut down|shutdown|reboot)\s+", re.I,
 )
 _HELP = (
-    "You can chat with me and use the same saved facts as voice mode. "
+    "You can continue your voice conversations here and use the same saved facts. "
     "Memory changes follow your configured learning and confirmation choices.\n\n"
     "/memory — show saved personal details\n"
     "/cancel — discard a pending memory change\n"
-    "/reset — clear this channel's conversation, keeping saved facts\n"
+    "/reset — clear this chat's history, keeping voice history and saved facts\n"
     "/local <message> — use only local AI; Telegram still transports the messages\n"
     "/fast, /strong, /deep — use your existing AI routing choices\n\n"
     "Reminders, voice messages, and desktop actions are not available in chat yet."
@@ -87,7 +88,7 @@ def _text_prompt(*, settings: Settings, memories: list[str]) -> str:
 
 
 class ChatSession:
-    """Serialize one owner's typed turns with a channel-specific persisted history.
+    """Serialize one owner's typed turns with a shared view of explicitly paired history.
 
     Transport adapters must verify owner identity before constructing this object.
     Application-owned memory handlers establish writes; generated text cannot do so.
@@ -105,6 +106,7 @@ class ChatSession:
             store=self.store, session_id=session_id,
             max_turns=settings.memory.max_short_term_turns,
             max_context_chars=settings.memory.max_context_chars,
+            context_resolver=lambda: conversation_context(settings, session_id),
         )
         self.memory = MemoryService(
             self.store, learning_mode=settings.memory.learning_mode,
@@ -137,8 +139,12 @@ class ChatSession:
             if text == "/reset":
                 self.memory.cancel_proposal()
                 self._search_paused = False
+                self.context.clear_web_preference()
                 self.conversation.clear_session()
-                return "This chat's conversation was cleared. Your saved facts are kept."
+                return (
+                    "This chat's history was cleared. Voice history and saved facts are kept. "
+                    "I can still remember what we discussed in voice."
+                )
             if text in {"/start", "/help"}:
                 self.memory.cancel_proposal()
                 return _HELP
@@ -158,6 +164,7 @@ class ChatSession:
             control = conversation_control(local_text)
             if control is not None:
                 self._search_paused = True
+                self.context.pause_web(True)
                 self.memory.cancel_proposal()
                 if control != "no_search" or not re.search(r"[,;]\s*instead\b", local_text, re.I):
                     return self._finish({
@@ -166,6 +173,7 @@ class ChatSession:
                     }[control])
             elif is_explicit_web_request(local_text):
                 self._search_paused = False
+                self.context.pause_web(False)
             local = self.context.memory_reply(local_text, recent_messages=dialogue)
             if local is not None:
                 return self._finish(local, model="memory")
@@ -198,6 +206,7 @@ class ChatSession:
                 deadline.cancel()
 
     def _generate(self, query: str, canceled: threading.Event) -> str:
+        self._search_paused = self.context.web_paused()
         recalled = self.context.recall(query)
         prompt = self.context.system_prompt(recalled, generate=_text_prompt)
         prompt += (

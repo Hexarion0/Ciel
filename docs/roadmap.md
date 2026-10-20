@@ -15,13 +15,13 @@ before treating it as ready for everyday use.
 | Voices | Default CPU Pocket streaming; local Piper fallback; optional custom Turbo HQ; bundled worker and manifest | Reproducible custom-voice installation and private asset import |
 | Providers | NIM, Groq, OpenRouter, Ollama, routing, retries/fallback, latency tracing | Usage totals, budget controls, broader live fallback verification |
 | Controller | Local handlers for explicit commands without NIM; lightweight AI decisions for other turns; bounded retries and cancellation | Live microphone acceptance and broader decision-quality evaluation |
-| Memory | SQLite conversations, structured state, confirmed profiles/goals, contextual recall, optional local semantic recall, corrections, forgetting, automated restart recall | Live voice-based restart acceptance and summary quality evaluation |
+| Memory | SQLite conversations, shared voice/chat context, indexed older user dialogue, structured state, current facts/revisions, optional local semantic recall, forgetting | Live cross-channel and voice-based restart acceptance, summary quality evaluation |
 | Actions | Trusted module discovery, validation, local telemetry, allowlisted Linux app launching | Model-selected calls, reminders, live desktop launch acceptance |
 | Internet | Free automatic search, public HTML/text reading, bounded retrieval, relevant user context, source links | Live voice/text retrieval acceptance, broader site compatibility, PDF/media extraction |
 | Personality | Modular persona prompt, continuity rules, opinions/initiative, editable preferences, voice-requested style updates/reset | Continued evaluation during real conversations |
 | Setup | Configure/review/save before selected package/model installation; CPU recognition choice by default; preserved existing settings; missing-asset reporting | Automatic Turbo setup, managed desktop runtime, clean-machine validation |
 | Desktop web interface | PC-local voice/text chat, live captions, status, and controls | Same-Wi-Fi phone access and desktop acceptance |
-| Messaging | Owner-paired Telegram text, optional Linux login autostart, shared saved facts with separate history | Live Telegram acceptance, reminders, additional services |
+| Messaging | Owner-paired Telegram text, automatic startup, shared conversation with separate archives | Live Telegram acceptance, reminders, additional services |
 | Tone, Windows, presence | Planned | Implementation |
 
 A checked item below means the implementation exists. It does not establish
@@ -37,7 +37,8 @@ of the current v0.3 desktop build.
 
 1. **Accept Telegram text chat on the target PC.** Configure it through the chat
    service selector, pair the owner, check ordinary replies and confirmed memory
-   changes, and test login autostart, network recovery, and restart. Keep Discord
+   changes, continue a voice conversation through chat, and test automatic startup,
+   network recovery, unpairing, and restart. Keep Discord
    and Signal as later adapters. See [chat behavior and limits](telegram-chat.md).
 2. **Validate the combined build on the target desktop.** Run wake, Pocket
    playback, barge-in, confirmed memory across restart, and Discord launch checks.
@@ -229,9 +230,10 @@ dashboard requirements need them.
 ## Messaging — v0.6
 
 - [x] Telegram text request/reply without audio initialization.
-- [x] Chat-service selection before credentials, with optional Linux login autostart.
+- [x] Chat-service selection before credentials, with automatic Linux login and setup startup.
 - [x] Expiring owner pairing, private-chat restrictions, duplicate claims, and bounded retries.
-- [x] Shared durable facts with separate channel history and pending confirmations.
+- [x] Shared durable facts, recent dialogue, historical recall, and summaries across channels.
+- [x] Preserve channel archives and keep pending confirmations channel-specific.
 - [ ] Accept live Telegram delivery, login startup, and provider/network recovery.
 - [ ] Telegram voice input and optional spoken output.
 - [ ] Discord text request/reply, permissions, and channel restrictions.

@@ -18,7 +18,7 @@ from difflib import SequenceMatcher
 from html import unescape
 from html.parser import HTMLParser
 from typing import TypeVar
-from urllib.parse import parse_qsl, unquote, urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlsplit, urlunsplit
 
 import httpx
 
@@ -381,6 +381,59 @@ def _labeled_numbers(text: str) -> list[tuple[str, str]]:
     ]
 
 
+def _current_scope(previous: str, latest: str) -> str:
+    """Remove superseded installment numbers before combining a user's follow-up.
+
+    Only an explicitly labeled replacement overrides an earlier label. An unrelated
+    year, price, or model number must not silently rewrite the user's named topic.
+    """
+    requested: dict[str, set[str]] = {}
+    for label, number in _labeled_numbers(latest):
+        requested.setdefault(label, set()).add(number)
+    # Comparing two seasons/versions does not correct either one away.
+    replacements = {label: next(iter(values)) for label, values in requested.items()
+                    if len(values) == 1}
+    if not replacements:
+        return previous
+    pattern = re.compile(
+        r"\b(?:\d+(?:\.\d+)*(?:st|nd|rd|th)?\s+(?P<unit>" + _NUMBER_LABELS
+        + r")s?|(?P<label>" + _NUMBER_LABELS
+        + r")s?\s+\d+(?:\.\d+)*(?:st|nd|rd|th)?)\b", re.I,
+    )
+
+    def replace(match: re.Match[str]) -> str:
+        label = (match.group("unit") or match.group("label")).casefold()
+        return f"{label} {replacements[label]}" if label in replacements else match.group()
+
+    return pattern.sub(replace, previous)
+
+
+def source_identity(url: str) -> str:
+    """Compare public source links without fragments or common tracking parameters.
+
+    This is only a deduplication key. Fetching still validates the original URL,
+    and content-selecting query parameters remain part of the identity.
+    """
+    parsed = urlsplit(url)
+    query = [
+        (key, value) for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if not key.casefold().startswith("utm_")
+        and key.casefold() not in {"fbclid", "gclid", "dclid", "msclkid", "mc_cid", "mc_eid"}
+    ]
+    # Sorting keys must not collapse different values or distinct document paths.
+    query.sort(key=lambda item: item[0])
+    return urlunsplit((parsed.scheme.casefold(), parsed.netloc.casefold(),
+                       parsed.path or "/", urlencode(query), ""))
+
+
+def _source_score(query: str, source: InternetSource) -> tuple[int, int]:
+    """Prefer previews with the requested named topic in the title, stably on ties."""
+    expected = _topic_terms(query) - _GENERIC_ANCHORS
+    title = _topic_terms(source.title)
+    preview = _topic_terms(source.snippet)
+    return len(expected & title), len(expected & (title | preview))
+
+
 def _relevant(query: str, source: InternetSource) -> bool:
     """Reject obvious topic mismatches; topical evidence still does not verify an answer."""
     expected = _topic_terms(query)
@@ -660,6 +713,12 @@ class InternetService:
         local_only: bool = False,
     ) -> InternetResult:
         """Search changing facts or explicit requests; ask for missing local-search location."""
+        # The controller imports this module too, so resolve shared control wording
+        # only when a complete application calls the fallback retrieval entry point.
+        from ciel.controller import conversation_control
+
+        if conversation_control(query) is not None:
+            return InternetResult()
         recent = (recent_messages or [])[-32:]
         if (
             not self.config.enabled or local_only
@@ -696,7 +755,7 @@ class InternetService:
                 if _WEATHER.search(previous) and new_city and _city(new_city.group(1)):
                     clean = f"weather in {_city(new_city.group(1))}"
                 else:
-                    clean = _clean(f"{previous} {clean}")
+                    clean = _clean(f"{_current_scope(previous, clean)} {clean}")
                 explicit = explicit or bool(_EXPLICIT.search(previous))
             elif _LOCATION_NEEDED.search(previous) and not _request_city(previous) and _city(clean):
                 clean = _clean(f"{previous} in {_city(clean)}")
@@ -789,10 +848,10 @@ class InternetService:
         # The outer daemon enforces the total budget even if DDGS exceeds its own timeout.
         timeout = max(1, math.ceil(min(remaining * 0.6, 8.0)))
         results = DDGS(timeout=timeout).text(
-            query, backend="duckduckgo,brave", max_results=maximum,
+            query, backend="duckduckgo,brave", max_results=min(maximum * 2, 20),
         )
         _remaining(deadline, canceled)
-        return list(results)[:maximum]
+        return list(results)[:min(maximum * 2, 20)]
 
     def _retrieve(
         self, query: str, urls: list[str], research: bool, deadline: float,
@@ -805,7 +864,8 @@ class InternetService:
         sources: list[InternetSource] = []
         if urls:
             read_deadline = deadline - min(0.15, _remaining(deadline, canceled) * 0.1)
-            for url in urls[:pages]:
+            unique_urls = list({source_identity(url): url for url in urls}.values())
+            for url in unique_urls[:pages]:
                 try:
                     sources.append(self._read_page(
                         url, min(read_deadline, time.monotonic() + (4.0 if research else 2.0)),
@@ -818,8 +878,8 @@ class InternetService:
                         break
         else:
             results = self._search(query, maximum, deadline, canceled)
-            seen: set[str] = set()
-            for result in results[:maximum]:
+            candidates: dict[str, InternetSource] = {}
+            for result in results[:min(maximum * 2, 20)]:
                 if not isinstance(result, dict):
                     continue
                 try:
@@ -833,17 +893,21 @@ class InternetService:
                 ):
                     # Aggregate answer pages provide no attributable original source.
                     continue
-                if url in seen:
-                    continue
                 snippet = _clean(str(result.get("body") or result.get("snippet") or ""), 800)
                 if not snippet:
                     continue
-                seen.add(url)
                 source = InternetSource(
                     _clean(str(result.get("title") or urlsplit(url).hostname), 160), url, snippet,
                 )
                 if _relevant(query, source):
-                    sources.append(source)
+                    identity = source_identity(url)
+                    previous = candidates.get(identity)
+                    if previous is None or _source_score(query, source) > _source_score(
+                        query, previous,
+                    ):
+                        candidates[identity] = source
+            sources = sorted(candidates.values(), key=lambda item: _source_score(query, item),
+                             reverse=True)[:maximum]
             remember_sources(sources)
             read_deadline = deadline - min(0.15, _remaining(deadline, canceled) * 0.1)
             for index, source in enumerate(sources[:pages]):
@@ -853,6 +917,10 @@ class InternetService:
                         min(read_deadline, time.monotonic() + (4.0 if research else 2.0)),
                         canceled,
                     )
+                    # Redirects and generic landing pages can differ from the search
+                    # preview. Check the page alone before promoting it to read evidence.
+                    if not _relevant(query, page):
+                        continue
                     page.snippet = source.snippet
                     sources[index] = page
                     remember_sources(sources)
@@ -861,6 +929,16 @@ class InternetService:
                         raise TimeoutError("Web request canceled") from None
                     if time.monotonic() >= read_deadline:
                         break
+        # Two different public links can redirect to the same article. Keep the
+        # strongest read evidence once, including in partial-progress snapshots.
+        unique: dict[str, InternetSource] = {}
+        for source in sources:
+            identity = source_identity(source.url)
+            previous = unique.get(identity)
+            if previous is None or (source.content and not previous.content):
+                unique[identity] = source
+        sources = list(unique.values())
+        remember_sources(sources)
         _remaining(deadline, canceled)
         if not sources:
             logger.info("[system]: No usable web evidence was found; answer remains unverified.")
