@@ -41,6 +41,14 @@ Ask `What's my current project?`, `What's my goal?`, or `What's my occupation?`
 for a local answer when a corresponding saved fact exists. After asking about a
 supported topic, `No, it's Borealis` proposes a correction to that topic. A full
 statement such as `Actually, my current project is Borealis` also works.
+Explicit requests such as `Update my favorite game to Hades`, `Change my home
+city to Tokyo`, and `Replace my current project with Borealis` use those same
+saved fields. Polite requests such as `Can you update my favorite game to Hades?`
+also work. These commands work in explicit-only mode; conflicting replacements
+still ask for confirmation when configured. `Yes, update that`, `yep`, `save that`,
+and `confirm it` confirm a live proposal. In ambient voice mode, include Ciel's
+wake phrase when confirming. An incomplete or unsupported explicit memory update
+asks for the specific detail and new value without claiming it was saved.
 Conversational openings such as `By the way, my favorite game is Hades` and
 `I told you before that my fav game is Hades` reach the same local handler.
 After a question about one personal topic, `It's Hades, not Sable` proposes the
@@ -51,6 +59,12 @@ quoted preferences, and assistant replies do not select a correction target.
 Corrections update one current record, with revision history, rather than leaving
 competing current values. Use `forget my current project`, `forget my goal`, or
 `forget my occupation` to remove the selected record.
+
+`What do you remember about me?` and `What do you know about me?` now give a bounded
+overview of current saved personal fields directly from the database. Old chat
+claims, prior revisions, unconfirmed proposals, and arbitrary notes are excluded.
+This overview respects recall pause and works without an AI connection. It lists
+some saved profile details, rather than claiming to summarize every conversation.
 
 Saved profile details accompany informal conversation as bounded, dated
 context. A saved goal describes what you said when it was recorded; the persona

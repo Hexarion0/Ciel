@@ -45,6 +45,10 @@ PROFILE_STATEMENTS = {
     "user:preferred_language": "my preferred language is",
     "user:response_style": "my response style is",
 }
+UPDATE_DETAIL_NEEDED = (
+    "Which saved detail should I update, and what should its new value be? "
+    "For example, say 'update my favorite game to Hades'. I haven't changed anything yet."
+)
 
 RECALL_PAUSED = "Saved-memory recall is paused. Say 'resume memory recall' to use saved facts."
 _FAVORITE = re.compile(
@@ -85,10 +89,14 @@ def _unquote_value(value: str) -> str:
 def is_memory_confirmation(text: str) -> bool:
     """Recognize an affirmative answer; a live authorized proposal is still required."""
     answer = text.strip().casefold().strip(" .!?")
-    if answer in {"yes", "yeah", "yes please", "save it", "remember that", "confirm"}:
+    if answer in {
+        "yes", "yeah", "yep", "yup", "yes please", "save it", "save that",
+        "remember that", "confirm", "confirm it",
+    }:
         return True
     return bool(re.fullmatch(
-        r"(?:yes|yeah)(?:[, ]+(?:yes|yeah)){0,3}(?:[, ]+(?:please|save it))?", answer,
+        r"(?:yes|yeah)(?:[, ]+(?:yes|yeah)){0,3}"
+        r"(?:[, ]+(?:please|(?:save|update|remember|confirm) (?:it|that)))?", answer,
     ))
 
 
@@ -152,6 +160,73 @@ def parse_profile_fact(text: str) -> tuple[str, str, str, MemoryType] | None:
     return None
 
 
+def _validated_update_statement(text: str) -> str:
+    """Limit explicit update payloads to one supported, unambiguous personal fact."""
+    clean = _clean_statement(text)
+    if _is_question_or_quotation(clean) or not _clear_automatic_statement(clean):
+        return ""
+    if re.search(
+        r"(?:\b(?:and|then)\b|[,;]|\.\s+)\s*(?:also\s+)?"
+        r"(?:save|update|change|replace|confirm|close|start|stop|pause|resume|disable|enable|"
+        r"set|delete|send|remove|run|execute|install|download|reset|turn|message|play|"
+        r"launch|check|make|call)\b",
+        clean, re.I,
+    ):
+        return ""
+    profile = parse_profile_fact(clean)
+    if profile is not None:
+        return clean if _clear_automatic_statement(clean, profile[0]) else ""
+    favorite = _FAVORITE.fullmatch(clean)
+    name = _NAME.fullmatch(clean)
+    value = favorite.group(2) if favorite else name.group(1) if name else ""
+    if not 1 <= len(value.strip()) <= 180 or re.match(
+        r"^(?:not|unknown|unsure|maybe|probably)\b", value.strip(), re.I,
+    ):
+        return ""
+    if name and not _valid_name(value.strip()):
+        return ""
+    return clean if favorite or name else ""
+
+
+def _parse_update_request(text: str) -> str | None:
+    """Return a supported declaration, or an empty clarification request, for updates.
+
+    None means this is not an application-owned memory update. Recognizing an update
+    only selects the local handler; independent authorization and normal replacement
+    confirmation still apply before persistence.
+    """
+    request = re.fullmatch(
+        r"(?:(?:please\s+)?|(?:can|could|would|will) you (?:please\s+)?)"
+        r"(update|change|replace)\s+(.+)", text.strip(), re.I,
+    )
+    if request is None:
+        return None
+    body = request.group(2).strip().rstrip(".!?").strip()
+    wrapper = re.match(r"(?:(?:my|your|the)\s+)?(?:saved\s+)?memory\b", body, re.I)
+    if wrapper is not None:
+        payload = body[wrapper.end():].strip()
+        payload = re.sub(r"^(?:[:,-]\s*|(?:with|to|that)\s+)", "", payload, flags=re.I)
+        return _validated_update_statement(payload)
+    field = re.match(
+        r"my\s+((?:favou?rite|fav)\s+(?:game|food|color|colour|drink|movie|language)|"
+        + "|".join(PROFILE_TOPICS) + r"|preferred name|name)\b(.*)", body, re.I,
+    )
+    if field is None:
+        return None
+    topic = field.group(1).casefold()
+    connector = "with" if request.group(1).casefold() == "replace" else "to"
+    value = re.fullmatch(r"\s+" + connector + r"\s+(.+)", field.group(2), re.I)
+    if value is None:
+        return ""
+    if topic in {"name", "preferred name"}:
+        declaration = "my name is " + value.group(1)
+    elif topic in PROFILE_TOPICS:
+        declaration = PROFILE_STATEMENTS["user:" + PROFILE_TOPICS[topic]] + " " + value.group(1)
+    else:
+        declaration = "my " + topic + " is " + value.group(1)
+    return _validated_update_statement(declaration)
+
+
 def parse_project_date(text: str, now: datetime) -> str | None:
     """Resolve explicit month/day dates and ISO dates; never infer a date from 'day three'."""
     iso = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", text)
@@ -188,6 +263,8 @@ def is_memory_statement(text: str) -> bool:
     Short contextual corrections require the service's explicitly tracked user topic.
     """
     original = text.strip().replace("’", "'")
+    if _parse_update_request(original) is not None:
+        return True
     if re.fullmatch(
         r"(?:please\s+)?(?:remember(?:\s+that)?|note\s+that)\s+.+|"
         r"(?:please\s+)?forget(?:\s+.+)?[.!?]*", original, re.I,
@@ -374,6 +451,13 @@ class MemoryService:
                 return "Okay, I won't save that fact."
         elif pending is not None:
             self.focus_key = None
+        update = _parse_update_request(original)
+        if update == "":
+            self.focus_key = None
+            return UPDATE_DETAIL_NEEDED
+        if update is not None:
+            # Reuse explicit remember behavior, including confirmation and guarded writes.
+            original = "Remember " + update
         if re.fullmatch(
             r"(?:please\s+)?(?:remember(?:\s+(?:that|it))?|note\s+that)[.!?]*", original, re.I,
         ):
@@ -453,7 +537,7 @@ class MemoryService:
             value = self._replacement_value(key, favorite.group(2))
             if not value:
                 self.focus_key = None
-                return None
+                return UPDATE_DETAIL_NEEDED if update is not None else None
             clean = f"Your favorite {topic} is {value}."
             kind = MemoryType.PREFERENCE
         elif name:

@@ -218,6 +218,8 @@ Try:
 - “Ciel, can you open Discord for me?”
 - “Ciel, my favorite game is CS2.” Then “Ciel, yes” to save it.
 - “Ciel, what's my favorite game?”
+- “Ciel, update my favorite game to Hades.” Then “Ciel, yes, update that.”
+- “Ciel, what do you remember about me?”
 - “Ciel, what's the weather in Paris today?”
 - “Ciel, compare current Linux gaming laptops.”
 - “Ciel, be more playful.”

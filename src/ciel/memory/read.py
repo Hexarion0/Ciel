@@ -8,6 +8,18 @@ from ciel.memory.store import MemoryStore
 from ciel.providers.base import ChatMessage
 
 _CAPABILITY = re.compile(r"^do you (?:have|use) (?:a )?(?:memory|memory system)[.!? ]*$", re.I)
+_OVERVIEW = re.compile(
+    r"^(?:what do you (?:remember|know) about me|"
+    r"tell me what you (?:remember|know) about me|what have you saved about me|"
+    r"what personal details have you saved about me)[.!? ]*$", re.I,
+)
+_PROFILE_KEYS = (
+    "preferred_name", "favorite_game", "current_project", "goal", "occupation",
+    "home_city", "timezone", "preferred_language", "response_style", "favorite_food",
+    "favorite_color", "favorite_drink", "favorite_movie", "favorite_language",
+)
+_PROFILE_SOURCES = {"user_explicit", "user_confirmed", "user_statement"}
+_PAUSED = "Saved-memory recall is paused. Say 'resume memory recall' to use saved facts."
 _CONTROL = re.compile(
     r"^(?:please\s+)?(?:pause|disable|resume|enable)\s+(?:saved[- ]memory|memory)\s+"
     r"recall[.!? ]*$", re.I,
@@ -74,13 +86,16 @@ def _previous_name(text: str, recent_messages: list[ChatMessage]) -> str | None:
 
 def memory_read_intent(
     text: str, recent_messages: list[ChatMessage] | None = None,
-) -> Literal["capability", "timeline", "name_history", "recall", "control", "status"] | None:
+) -> Literal["capability", "timeline", "name_history", "recall", "control", "status",
+             "overview"] | None:
     """Recognize complete read-only turns without interpreting commands or compound requests."""
     clean = text.strip().replace("’", "'")
     if _CONTROL.fullmatch(clean):
         return "control"
     if _STATUS.fullmatch(clean):
         return "status"
+    if _OVERVIEW.fullmatch(clean):
+        return "overview"
     if _PROFILE_READ.fullmatch(clean):
         return "recall"
     if _MEMORY_SOURCE.fullmatch(clean):
@@ -103,6 +118,27 @@ def memory_read_intent(
     return None
 
 
+def _profile_overview(store: MemoryStore) -> str:
+    """Read bounded current profile values without summaries, old revisions, or model guesses."""
+    prefix = "Here are some current saved details about you: "
+    details = []
+    size = len(prefix)
+    for key in _PROFILE_KEYS:
+        item = store.get_fact(f"user:{key}")
+        if item is None or item.source not in _PROFILE_SOURCES:
+            continue
+        content = store.redact_forgotten(item.content).strip()
+        if not content or len(content) > 240 or size + len(content) + 1 > 1500:
+            continue
+        details.append(content)
+        size += len(content) + 1
+        if len(details) == 8:
+            break
+    if not details:
+        return "I don't have a saved personal profile detail to list yet."
+    return prefix + " ".join(details)
+
+
 def answer_memory_read(
     store: MemoryStore, text: str, now: datetime | None = None,
     *, recent_messages: list[ChatMessage] | None = None,
@@ -122,10 +158,15 @@ def answer_memory_read(
     if kind == "name_history":
         name = _previous_name(text.strip(), recent_messages or [])
         return f"Right, you called me {name} before renaming me CIEL."
+    if kind == "overview":
+        if not enabled:
+            return _PAUSED
+        reply = _profile_overview(store)
+        return _PAUSED if store.get_setting("recall_enabled", recall_enabled) is False else reply
     if kind != "timeline":
         return None
     if not enabled:
-        return "Saved-memory recall is paused. Say 'resume memory recall' to use saved facts."
+        return _PAUSED
     start = store.get_fact("ciel:project_start_date")
     try:
         start_date = date.fromisoformat(str(start.metadata["value"])) if start else None

@@ -342,6 +342,13 @@ def run_desktop(
                if settings.memory.confirm_corrections else
                "clear supported corrections follow the configured learning mode.")
         )
+        prompt += (
+            "\nNo durable memory write was performed for this turn. This conversational "
+            "response cannot save, replace, or forget a fact. Do not claim a new memory "
+            "update succeeded or promise that these words will save it. If a requested "
+            "memory change was not handled, ask for the specific fact and its new value. "
+            "Earlier application acknowledgements describe earlier saves only."
+        )
         prompt += voice_delivery_instruction(enabled=settings.audio.tts_enabled)
         if tts.engine == "chatterbox_turbo":
             prompt += speech_event_instruction(
@@ -1081,7 +1088,14 @@ def run_desktop(
             with controls_lock:
                 if not current():
                     return False
-                memory_reply = memory_service.handle(cleaned_query)
+                if memory_read_intent(cleaned_query) == "overview":
+                    memory_service.cancel_proposal()
+                    memory_reply = answer_memory_read(
+                        memory_store, cleaned_query,
+                        recall_enabled=settings.memory.recall_enabled,
+                    )
+                else:
+                    memory_reply = memory_service.handle(cleaned_query)
         elif unapproved_memory:
             memory_reply = (
                 "I haven't saved that. Please address Ciel directly or type the detail "
