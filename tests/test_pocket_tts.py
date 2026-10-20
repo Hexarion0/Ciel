@@ -19,6 +19,9 @@ from ciel.config import AudioConfig, Settings
 class Tensor:
     """Minimal CPU tensor double without a torch import."""
 
+    def __init__(self, wave=None):
+        self.wave = wave
+
     def detach(self):
         return self
 
@@ -26,7 +29,7 @@ class Tensor:
         return self
 
     def numpy(self):
-        return np.ones(1920, dtype=np.float32)
+        return np.ones(1920, dtype=np.float32) if self.wave is None else self.wave
 
 
 @pytest.fixture
@@ -73,17 +76,71 @@ def test_configuration_reaches_audio(monkeypatch, tmp_path):
     path = tmp_path / ".env"
     path.write_text(
         "TTS_ENGINE=pocket\nTTS_POCKET_QUANTIZATION=int8\nTTS_POCKET_STREAMING=false\n"
+        "TTS_POCKET_GAIN_DB=-11.35\n"
         f"TTS_POCKET_REFERENCES={tmp_path}\nTTS_POCKET_NEUTRAL_REFERENCE={tmp_path}/neutral.wav\n"
     )
     for name in ("TTS_ENGINE", "TTS_POCKET_QUANTIZATION", "TTS_POCKET_STREAMING",
-                 "TTS_POCKET_REFERENCES", "TTS_POCKET_NEUTRAL_REFERENCE"):
+                 "TTS_POCKET_REFERENCES", "TTS_POCKET_NEUTRAL_REFERENCE", "TTS_POCKET_GAIN_DB"):
         monkeypatch.delenv(name, raising=False)
     audio = Settings(_env_file=path).audio
     assert audio.tts_engine == "pocket"
     assert audio.tts_pocket_quantization == "int8"
     assert not audio.tts_pocket_streaming
+    assert audio.tts_pocket_gain_db == -11.35
     assert audio.tts_pocket_references == str(tmp_path)
     assert audio.tts_pocket_neutral_reference == str(tmp_path / "neutral.wav")
+
+
+@pytest.mark.parametrize("config", [AudioConfig, Settings])
+@pytest.mark.parametrize("gain", [-60.01, 0.01, float("inf"), -float("inf"), float("nan")])
+def test_pocket_gain_rejects_invalid_configuration(config, gain):
+    with pytest.raises(ValidationError):
+        config(tts_pocket_gain_db=gain)
+
+
+@pytest.mark.parametrize("gain", [-60, -11.35, 0])
+def test_pocket_gain_configuration_boundaries(gain):
+    assert Settings(_env_file=None, tts_pocket_gain_db=gain).audio.tts_pocket_gain_db == gain
+
+
+def test_pocket_gain_defaults_to_original_level(monkeypatch):
+    monkeypatch.delenv("TTS_POCKET_GAIN_DB", raising=False)
+    assert AudioConfig().tts_pocket_gain_db == 0
+    assert Settings(_env_file=None).audio.tts_pocket_gain_db == 0
+
+
+@pytest.mark.parametrize("gain", [-60.01, 0.01, float("inf"), -float("inf"), float("nan")])
+def test_pocket_adapter_rejects_invalid_gain(tmp_path, gain):
+    with pytest.raises(ValueError, match="gain"):
+        PocketTTS(tmp_path, gain_db=gain)
+
+
+@pytest.mark.parametrize("gain", [None, -11.35])
+def test_pocket_gain_preserves_every_chunk_and_sample_rate(tmp_path, model, gain):
+    source = [np.array([0.5, -0.25, 0, 0.125], dtype=np.float32),
+              np.array([-0.75, 0.25], dtype=np.float32)]
+    snapshots = [wave.copy() for wave in source]
+    model.generate_audio_stream.side_effect = lambda *_a, **_k: iter(map(Tensor, source))
+    provider = PocketTTS(tmp_path, **({"gain_db": gain} if gain is not None else {}))
+    chunks = list(provider.stream(TTSRequest("Hello"), threading.Event()))
+    assert len(chunks) == len(source)
+    factor = np.float32(1 if gain is None else 10 ** (gain / 20))
+    for (wave, rate), original, snapshot in zip(chunks, source, snapshots, strict=True):
+        assert wave.dtype == np.float32
+        assert wave.shape == original.shape
+        assert rate == 24000
+        np.testing.assert_array_equal(wave, snapshot * factor)
+        np.testing.assert_array_equal(original, snapshot)
+
+
+def test_pocket_gain_reaches_tts_adapter(monkeypatch, tmp_path, model):
+    settings = Settings(_env_file=None, tts_pocket_references=str(tmp_path),
+                        tts_pocket_gain_db=-11.35)
+    monkeypatch.setattr("ciel.audio.tts.get_settings", lambda: settings)
+    tts = TextToSpeech(engine="pocket", voice_name="ciel")
+    wave, rate = tts.synthesize("Hello.")
+    assert rate == 24000
+    np.testing.assert_array_equal(wave, np.full(3840, np.float32(10 ** (-11.35 / 20))))
 
 
 def test_lazy_cpu_init_model_and_reference_reused(tts, model):

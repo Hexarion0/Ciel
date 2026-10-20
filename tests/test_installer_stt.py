@@ -102,13 +102,14 @@ def test_installer_prepares_selected_pocket_model_with_configured_options(
         tts_engine="pocket", tts_pocket_references="custom/references",
         tts_pocket_neutral_reference="custom/reference.wav", tts_pocket_quantization="int8",
         tts_pocket_language="french_2026-09", tts_pocket_builtin_voice="cosette",
+        tts_pocket_gain_db=-11.35,
     )
 
     installation.prepare_models(audio, downloads.notify)
 
     downloads.pocket.assert_called_once_with(
         tmp_path / "custom/references", neutral_reference=tmp_path / "custom/reference.wav",
-        quantization="int8", language="french_2026-09", builtin_voice="cosette",
+        quantization="int8", language="french_2026-09", builtin_voice="cosette", gain_db=-11.35,
     )
     downloads.pocket.return_value.warmup.assert_called_once_with()
     downloads.pocket.return_value.close.assert_called_once_with()

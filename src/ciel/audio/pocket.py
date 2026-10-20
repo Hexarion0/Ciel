@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -40,16 +41,19 @@ class PocketTTS:
     def __init__(
         self, references: Path, *, neutral_reference: Path | None = None,
         quantization: str = "none", language: str = "english_2026-09",
-        builtin_voice: str = "alba",
+        builtin_voice: str = "alba", gain_db: float = 0.0,
     ) -> None:
         if quantization not in {"none", "int8"}:
             raise ValueError("Pocket quantization must be none or int8")
+        if not math.isfinite(gain_db) or not -60 <= gain_db <= 0:
+            raise ValueError("Pocket gain must be finite and between -60 and 0 dB")
         self.references = references
         self.neutral_reference = neutral_reference
         self.quantization = quantization
         self.effective_quantization = "none"
         self.language = language
         self.builtin_voice = builtin_voice
+        self._gain = np.float32(10 ** (gain_db / 20))
         self._model: Any = None
         self._states: dict[str, Any] = {}
         self._lock = threading.Lock()
@@ -158,6 +162,8 @@ class PocketTTS:
                 if not np.isfinite(wave).all():
                     raise RuntimeError("Pocket produced non-finite audio")
                 if wave.size:
+                    if self._gain != 1:
+                        wave = wave * self._gain
                     yield wave, model.sample_rate
         finally:
             try:

@@ -161,6 +161,7 @@ def _prepare_pocket(audio: AudioConfig) -> None:
         quantization=audio.tts_pocket_quantization,
         language=audio.tts_pocket_language,
         builtin_voice=audio.tts_pocket_builtin_voice,
+        gain_db=audio.tts_pocket_gain_db,
     )
     try:
         pocket.warmup()

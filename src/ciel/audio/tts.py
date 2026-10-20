@@ -193,6 +193,7 @@ class TextToSpeech:
                 quantization=settings.tts_pocket_quantization,
                 language=settings.tts_pocket_language,
                 builtin_voice=settings.tts_pocket_builtin_voice,
+                gain_db=settings.tts_pocket_gain_db,
             )
         return self._pocket
 

@@ -72,12 +72,21 @@ TTS_VOICE=ciel
 TTS_POCKET_DEVICE=cpu
 TTS_POCKET_QUANTIZATION=none
 TTS_POCKET_STREAMING=true
+TTS_POCKET_GAIN_DB=0
 TTS_POCKET_REFERENCES=data/voices/ciel
 TTS_POCKET_LANGUAGE=english_2026-09
 TTS_POCKET_BUILTIN_VOICE=alba
 TTS_FALLBACK_VOICE=en_US-ciel-medium
 TTS_STREAMING=true
 ```
+
+`TTS_POCKET_GAIN_DB` lowers Pocket's output by a fixed amount from `-60` to
+`0` dB. The default `0` preserves the model's original level. For example,
+`TTS_POCKET_GAIN_DB=-11.35` applies the quieter level used in the Azelma listening
+comparison. This scales every generated chunk without filtering, changing pitch,
+or changing timing; it also applies when another engine falls back to Pocket.
+It does not change Piper or Turbo output levels or remove generated noise.
+Choose a level by listening on your own output device.
 
 Setup warms the selected Pocket model before the playback test and reports
 preparation failures so you can retry. Normal listening startup also warms Pocket

@@ -208,6 +208,7 @@ class AudioConfig(BaseModel):
     tts_pocket_device: Literal["cpu"] = Field(default="cpu")
     tts_pocket_quantization: Literal["none", "int8"] = Field(default="none")
     tts_pocket_streaming: bool = Field(default=True)
+    tts_pocket_gain_db: float = Field(default=0.0, ge=-60, le=0, allow_inf_nan=False)
     tts_pocket_references: str = Field(default="data/voices/ciel")
     tts_pocket_neutral_reference: str | None = Field(default=None)
     tts_pocket_language: str = Field(default="english_2026-09", min_length=1)
@@ -354,6 +355,7 @@ class Settings(BaseSettings):
     tts_pocket_device: Literal["cpu"] = Field(default="cpu")
     tts_pocket_quantization: Literal["none", "int8"] = Field(default="none")
     tts_pocket_streaming: bool = Field(default=True)
+    tts_pocket_gain_db: float = Field(default=0.0, ge=-60, le=0, allow_inf_nan=False)
     tts_pocket_references: str = Field(default="data/voices/ciel")
     tts_pocket_neutral_reference: str | None = Field(default=None)
     tts_pocket_language: str = Field(default="english_2026-09", min_length=1)
@@ -492,6 +494,7 @@ class Settings(BaseSettings):
             tts_pocket_device=self.tts_pocket_device,
             tts_pocket_quantization=self.tts_pocket_quantization,
             tts_pocket_streaming=self.tts_pocket_streaming,
+            tts_pocket_gain_db=self.tts_pocket_gain_db,
             tts_pocket_references=self.tts_pocket_references,
             tts_pocket_neutral_reference=self.tts_pocket_neutral_reference,
             tts_pocket_language=self.tts_pocket_language,
