@@ -9,6 +9,7 @@ from tempfile import NamedTemporaryFile
 from dotenv import dotenv_values, set_key, unset_key
 
 from ciel.audio.engines import resolve_tts_engine
+from ciel.chat.setup import apply_chat_autostart, chat_review_rows, configure_chat
 from ciel.config import (
     AudioConfig,
     ProviderConfig,
@@ -113,6 +114,9 @@ def _initial_configuration(current_env: dict[str, str]) -> dict[str, str]:
         "TTS_ENGINE": current_engine,
         "TTS_SPEED": "1.0",
         "TTS_ENABLED": "true",
+        "CHAT_SERVICES": "",
+        "CHAT_STATE_PATH": "data/chat.db",
+        "CHAT_AUTOSTART": "false",
     }
     for key, value in defaults.items():
         current_env.setdefault(key, value)
@@ -299,6 +303,7 @@ def _customize(
     """Walk through one decision at a time while retaining existing choices on Enter."""
     _personalize(ui, configuration)
     _configure_keys(ui, configuration)
+    configure_chat(ui, configuration)
     pending_persona = _configure_persona(ui, configuration, pending_persona, original_names)
     ui.step("Voice")
     ui.note("Pocket runs on CPU; Turbo requires its separate model and private reference.")
@@ -354,6 +359,7 @@ def _review_configuration(
         ("Live captions", "On" if _enabled(configuration, "SHOW_AI_TRANSCRIPTS") else "Off"),
         ("Microphone", configuration.get("AUDIO_INPUT_DEVICE") or "System default"),
         ("Speakers", configuration.get("AUDIO_OUTPUT_DEVICE") or "System default"),
+        *chat_review_rows(configuration),
     ])
     if providers and pending_persona is not None:
         ui.note("The personality interview received an AI response. "
@@ -454,6 +460,7 @@ def run_setup_wizard(*, install_components: bool = False) -> bool:
         else:
             _personalize(ui, configuration)
             _configure_keys(ui, configuration)
+            configure_chat(ui, configuration)
             pending_persona = _configure_persona(ui, configuration, pending_persona, original_names)
         if install_components:
             _configure_acceleration(ui, configuration)
@@ -484,6 +491,7 @@ def run_setup_wizard(*, install_components: bool = False) -> bool:
         _save_configuration(env_path, configuration)
         saved = True
         saving = False
+        apply_chat_autostart(ui, configuration, project_dir=env_path.parent.resolve())
         if pending_persona is not None:
             from ciel.persona import update_setup_persona_file
 

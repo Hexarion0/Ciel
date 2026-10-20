@@ -9,7 +9,7 @@ from ciel import __version__
 TOOLKIT_COMMANDS = {"status", "doctor", "devices", "config"}
 COMMANDS = [
     "run", "start", "listen", "web", "setup", "record-samples", "train-wake", "memory",
-    "status", "doctor", "devices", "config", "help",
+    "status", "doctor", "devices", "config", "chat", "help",
 ]
 
 
@@ -28,6 +28,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "  ciel devices        List microphones and speakers\n"
             "  ciel config         Show effective settings with API keys hidden\n"
             "  ciel memory --help  Inspect and manage saved memory\n"
+            "  ciel chat --help    Configure or run messaging without voice\n"
             "  ciel help COMMAND   Show help for a command"
         ),
     )
@@ -116,12 +117,16 @@ def main(argv: list[str] | None = None) -> int:
         from ciel.memory.cli import main as memory_main
 
         return memory_main(arguments[1:])
+    if arguments[:1] == ["chat"]:
+        from ciel.chat.cli import main as chat_main
+
+        return chat_main(arguments[1:])
     if arguments and arguments[0] in TOOLKIT_COMMANDS:
         from ciel.cli import main as toolkit_main
 
         return toolkit_main(arguments)
     args = parser.parse_args(arguments)
-    if args.command in TOOLKIT_COMMANDS | {"memory", "help"}:
+    if args.command in TOOLKIT_COMMANDS | {"memory", "chat", "help"}:
         parser.error(f"use 'ciel {args.command}' without launch options before the command")
     if not 1 <= args.web_port <= 65535:
         parser.error("--web-port must be between 1 and 65535")

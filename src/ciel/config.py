@@ -143,6 +143,15 @@ class ProviderConfig(BaseModel):
     )
 
 
+class ChatConfig(BaseModel):
+    """Optional messaging channels, independent of desktop audio."""
+
+    services: list[Literal["telegram"]] = Field(default_factory=list)
+    telegram_bot_token: SecretStr | None = None
+    state_path: str = Field(default="data/chat.db", min_length=1)
+    autostart: bool = False
+
+
 class AudioConfig(BaseModel):
     """Audio, wake word, and speech-to-text settings."""
 
@@ -292,6 +301,12 @@ class Settings(BaseSettings):
     groq_api_key: SecretStr | None = Field(default=None)
     ollama_host: str = Field(default="http://localhost:11434")
 
+    # Messaging is disabled until a service is selected and paired locally.
+    chat_services: str = ""
+    telegram_bot_token: SecretStr | None = None
+    chat_state_path: str = Field(default="data/chat.db", min_length=1)
+    chat_autostart: bool = False
+
     # Memory & Persistence settings
     memory_db_path: str = Field(default="data/ciel.db")
     memory_max_short_term_turns: int = Field(default=10, ge=1)
@@ -397,6 +412,19 @@ class Settings(BaseSettings):
         """Parse device selections loaded from environment variables."""
         return normalize_audio_device(value)
 
+    @field_validator("chat_services", mode="before")
+    @classmethod
+    def parse_chat_services(cls, value: str) -> str:
+        """Accept comma-separated implemented services without enabling future placeholders."""
+        if not isinstance(value, str):
+            raise ValueError("CHAT_SERVICES must be a comma-separated string")
+        names = list(dict.fromkeys(
+            part.strip().lower() for part in value.split(",") if part.strip()
+        ))
+        if any(name != "telegram" for name in names):
+            raise ValueError("CHAT_SERVICES supports telegram; leave empty to disable chat")
+        return ",".join(names)
+
     @property
     def app(self) -> AppConfig:
         """Structured application configuration."""
@@ -459,6 +487,16 @@ class Settings(BaseSettings):
             openrouter_api_key=self.openrouter_api_key,
             groq_api_key=self.groq_api_key,
             ollama_host=self.ollama_host,
+        )
+
+    @property
+    def chat(self) -> ChatConfig:
+        """Structured optional chat configuration; secrets remain masked."""
+        return ChatConfig(
+            services=self.chat_services.split(",") if self.chat_services else [],
+            telegram_bot_token=self.telegram_bot_token,
+            state_path=self.chat_state_path,
+            autostart=self.chat_autostart,
         )
 
     @property

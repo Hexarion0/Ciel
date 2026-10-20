@@ -2,6 +2,13 @@
 
 ## Unreleased — 0.3.6 development
 
+- Strengthen Ciel's companion voice with reasoned opinions and conversational
+  follow-ups. Handle wait/cancel/no-search before model decisions, discard canceled
+  fragments, and keep lookups paused until the user explicitly requests another.
+- Add optional owner-paired Telegram text chat with service-first setup, separate
+  history, shared persona and saved facts, guarded memory corrections, durable
+  duplicate suppression, and optional Linux user-service login startup. Keep chat
+  independent of audio models; reminders and additional messaging adapters remain planned.
 - Launch ambient conversation and live AI captions by default. Align command STT
   across configuration, setup, and installation with small.en on CUDA/int8_float16,
   beam 5, and a guarded medium.en retry. Preserve explicit overrides, CPU recovery,

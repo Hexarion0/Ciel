@@ -23,8 +23,10 @@ internet, and desktop acceptance checks remain open in
 - Free public web search and HTML/text page reading, with bounded requests and source links.
 - Editable personality preferences, voice-requested style adjustments, and concise
   or development console output.
+- Optional owner-paired Telegram text chat, shared saved facts, separate chat history,
+  and Linux login autostart without loading voice models.
 
-Reminders, model-selected tool calls, messaging, Windows support, tone detection,
+Reminders, additional chat services, model-selected tool calls, Windows support, tone detection,
 and presence detection are **planned**.
 See the [roadmap](docs/roadmap.md) for implementation status and priorities.
 
@@ -116,7 +118,34 @@ Use `ciel web --no-open-browser` to open the page yourself, or
 `ciel web --web-port 8766` if the default port is in use. Stop an existing
 terminal Ciel session before starting web mode so two processes do not
 share the microphone and voice models. This first interface serves the PC;
-same-Wi-Fi phone access and Telegram integration are planned next.
+same-Wi-Fi dashboard access remains planned. Telegram chat runs separately below.
+
+## Telegram chat
+
+Run `ciel chat setup` to select Telegram and enter its bot token locally. Like AI
+provider selection, setup asks for credentials only after you choose a service.
+Create your bot through [Telegram's BotFather](https://core.telegram.org/bots/tutorial),
+then pair your account using the temporary code shown on your PC:
+
+```bash
+ciel chat setup
+ciel chat pair telegram
+ciel chat run
+```
+
+Chat uses your existing AI providers and saved facts, with its own conversation
+history and memory confirmations. It does not load the microphone or speech models.
+Use `/help`, `/memory`, `/cancel`, and `/reset` in the paired chat. `/local <message>`
+keeps AI generation local; Telegram still transports your messages.
+
+Setup can enable **Start chat when I log in** on Linux. The PC must be on and
+connected. Check with `ciel chat autostart status`; disable it with
+`ciel chat autostart disable`. The service starts at the next login; run chat manually
+for the first check. Only one pairing or chat process can run at a time.
+
+This first version supports text. Reminders, Discord, Signal, voice messages, and
+remote desktop actions come later. Live Telegram delivery and login autostart still
+need acceptance with your own bot. See [chat behavior and limits](docs/telegram-chat.md).
 
 ### Choose a voice
 

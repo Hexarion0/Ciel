@@ -182,6 +182,49 @@ def test_builtin_persona_does_not_compete_with_plainspoken_preferences():
     assert "User: Okay, good.\nCIEL: Alright." in prompt
 
 
+@pytest.mark.parametrize("channel", ["voice", "text"])
+def test_companion_prompt_requests_reasoned_views_without_claiming_human_experience(channel):
+    """Check the delivered prompt contract, not a model's response to it."""
+    from ciel.persona import build_advanced_persona
+
+    prompt = build_advanced_persona(
+        "user", "12:00", "Linux", "test", "unknown", 0, 0, 0, 4, 1.0, 8.0,
+        channel=channel,
+    )
+
+    assert "friendly, practical AI companion" in prompt
+    assert "An opinion here means a reasoned assessment" in prompt
+    assert "When asked 'what do you think?'" in prompt
+    assert "I don't have opinions" in prompt
+    assert "I'm just a tool" in prompt
+    assert "Be honest about your identity when asked" in prompt
+    assert "Never invent shared history or lived experiences" in prompt
+    assert "Avoid unwelcome pet names or intimacy" in prompt
+    assert "User: Should I try it?\nCIEL: I'd try a tiny prototype." in prompt
+    assert "User: What do you think?\nCIEL: I think" in prompt
+    if channel == "voice":
+        assert "short spoken sentences" in prompt
+        assert "Spoken output:" in prompt
+    else:
+        assert "short spoken sentences" not in prompt
+        assert "The user typed these messages intentionally" in prompt
+        assert "Text output:" in prompt
+
+
+def test_companion_prompt_allows_bounded_discussion_without_blanket_advice_refusals():
+    from ciel.persona import build_advanced_persona
+
+    prompt = build_advanced_persona(
+        "user", "12:00", "Linux", "test", "unknown", 0, 0, 0, 4, 1.0, 8.0,
+    )
+
+    assert "give a grounded recommendation" in prompt
+    assert "a blanket legal or technical disclaimer" in prompt
+    assert "Evaluate the actual request" in prompt
+    assert "Set a specific boundary if the request itself would facilitate harm" in prompt
+    assert "Do not invent precise facts" in prompt
+
+
 def test_plainspoken_context_preserves_facts_and_archives(tmp_path):
     from ciel.memory.manager import ConversationManager
     from ciel.memory.models import ConversationTurn, MemoryItem
@@ -216,7 +259,7 @@ def test_unusable_persona_file_falls_back_to_builtin(tmp_path, contents):
 
     prompt = generate_system_prompt(snapshot=SystemSnapshot(), settings=settings)
 
-    assert "friendly, practical AI assistant" in prompt
+    assert "friendly, practical AI companion" in prompt
     assert "User-configured personality preferences:" not in prompt
 
 

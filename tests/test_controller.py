@@ -510,3 +510,35 @@ def test_active_supported_correction_routes_locally_without_granting_write_permi
         addressed=False, active=True, transcribed=True, internet_enabled=True,
     )
     assert decision.action == "local"
+
+
+@pytest.mark.parametrize("text", ["What do you think?", "Should I try it?"])
+def test_reflective_followup_cannot_become_model_selected_web_research(text):
+    from ciel.config import ControllerConfig
+    from ciel.controller import AIController
+
+    router = MagicMock()
+    router.send.return_value = _response(
+        "search", query="reverse engineering anti-cheat program", intent="follow_up",
+    )
+    decision = AIController(router, ControllerConfig()).decide(
+        text, [
+            ChatMessage("user", "I'm thinking of reverse engineering an anti-cheat program."),
+            ChatMessage("assistant", "What interests you about it?"),
+        ], addressed=True, active=True, internet_enabled=True,
+    )
+    assert decision.action == "answer" and decision.speech == ""
+    assert decision.query == ""
+
+
+def test_reflective_question_about_changing_facts_keeps_requested_research():
+    from ciel.config import ControllerConfig
+    from ciel.controller import AIController
+
+    router = MagicMock()
+    router.send.return_value = _response("search", query="latest Python release changes")
+    decision = AIController(router, ControllerConfig()).decide(
+        "What do you think about the latest Python release? Check the changes online.",
+        [], addressed=True, active=True, internet_enabled=True,
+    )
+    assert decision.action == "search"

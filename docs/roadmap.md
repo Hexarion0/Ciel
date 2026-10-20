@@ -1,6 +1,6 @@
 # CIEL development roadmap
 
-Last reviewed: **2026-10-20**. Package version: **0.3.6 development**.
+Last reviewed: **2026-10-21**. Package version: **0.3.6 development**.
 
 The goal is a reliable personal desktop assistant with natural voice conversation,
 persistent memory, useful actions, and eventually remote messaging and presence.
@@ -21,7 +21,8 @@ before treating it as ready for everyday use.
 | Personality | Modular persona prompt, continuity rules, opinions/initiative, editable preferences, voice-requested style updates/reset | Continued evaluation during real conversations |
 | Setup | Configure/review/save before selected package/model installation; CPU recognition choice by default; preserved existing settings; missing-asset reporting | Automatic Turbo setup, managed desktop runtime, clean-machine validation |
 | Desktop web interface | PC-local voice/text chat, live captions, status, and controls | Same-Wi-Fi phone access and desktop acceptance |
-| Messaging, tone, Windows, presence | Planned | Implementation |
+| Messaging | Owner-paired Telegram text, optional Linux login autostart, shared saved facts with separate history | Live Telegram acceptance, reminders, additional services |
+| Tone, Windows, presence | Planned | Implementation |
 
 A checked item below means the implementation exists. It does not establish
 microphone accuracy, speaker quality, or a completed release. Historical evidence
@@ -31,9 +32,14 @@ and the [changelog](../CHANGELOG.md). The repository has a `v0.2` tag; no stable
 
 ## Next work, in order
 
-The next milestone is a reliable v0.3 desktop release.
+The next feature priority is Telegram chat before reminders, alongside acceptance
+of the current v0.3 desktop build.
 
-1. **Validate the combined build on the target desktop.** Run wake, Pocket
+1. **Accept Telegram text chat on the target PC.** Configure it through the chat
+   service selector, pair the owner, check ordinary replies and confirmed memory
+   changes, and test login autostart, network recovery, and restart. Keep Discord
+   and Signal as later adapters. See [chat behavior and limits](telegram-chat.md).
+2. **Validate the combined build on the target desktop.** Run wake, Pocket
    playback, barge-in, confirmed memory across restart, and Discord launch checks.
    Include provider and network outages, PC noise, and a sustained conversation.
    Repeat interrupted long turns and personal corrections: stale fragments must
@@ -41,14 +47,14 @@ The next milestone is a reliable v0.3 desktop release.
    change was saved or still needs direct address and confirmation.
    Confirm the 0.9-second endpoint preserves normal pauses. Exercise web retrieval
    and source display through voice and text using [release checks](release-checks.md).
-2. **Prove clean installation with real voice assets.** Test core installation,
+3. **Prove clean installation with real voice assets.** Test core installation,
    configure-first CPU/Piper and optional Pocket/CUDA selections, cancellation,
    failed-download retry, and restart outside the checkout. Import
    the private Turbo reference, install its separate environment and model, and
    verify missing-model and missing-GPU recovery. Keep Turbo optional.
-3. **Add persistent reminders after release acceptance.** Use the shared desktop
-   runtime for confirmation, cancellation, and delivery. Start with relative times,
-   list/cancel, and restart recovery before recurrence or remote clients.
+4. **Add persistent reminders after chat acceptance.** Reuse the paired Telegram
+   channel for delivery and shared memory/conversation components for confirmation.
+   Start with relative times, list/cancel, and restart recovery before recurrence.
 
 The current code handles explicit local commands without NIM, aligns Pocket
 defaults across configuration and setup, bundles the Turbo worker and manifest,
@@ -216,16 +222,21 @@ not use model-selected action calls or grant website account access.
 
 The first desktop interface uses Python's HTTP server and a small HTML/CSS/JS
 frontend. PC voice input stays in the existing listener. Add same-Wi-Fi phone
-access after desktop acceptance, then Telegram through the same conversation
-backend. Reassess FastAPI/WebSocket if those requirements need them.
+access after desktop acceptance. Telegram now runs independently using shared
+persona, memory, and provider components. Reassess FastAPI/WebSocket if later
+dashboard requirements need them.
 
 ## Messaging — v0.6
 
-- [ ] Telegram text request/reply.
+- [x] Telegram text request/reply without audio initialization.
+- [x] Chat-service selection before credentials, with optional Linux login autostart.
+- [x] Expiring owner pairing, private-chat restrictions, duplicate claims, and bounded retries.
+- [x] Shared durable facts with separate channel history and pending confirmations.
+- [ ] Accept live Telegram delivery, login startup, and provider/network recovery.
 - [ ] Telegram voice input and optional spoken output.
 - [ ] Discord text request/reply, permissions, and channel restrictions.
-- [ ] Separate channel/user identity before sharing conversation memory.
-- [ ] Rate limits, request budgets, and loop prevention.
+- [ ] Signal text support, subject to a maintained integration path.
+- [ ] Broader rate limits, configurable request budgets, and multi-adapter loop prevention.
 - [ ] Consider Discord voice after text messaging is stable.
 - [ ] Reassess WhatsApp as an optional extension, based on maintenance cost.
 

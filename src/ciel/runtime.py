@@ -151,10 +151,10 @@ def run_desktop(
         strip_stage_directions,
         voice_delivery_instruction,
     )
+    from ciel.dialogue import DialogueContext
     from ciel.internet import InternetResult, InternetService
     from ciel.latency import active_trace, latency_phase, mark
     from ciel.memory import ConversationManager, MemoryStore
-    from ciel.memory.context import recall_context_memories
     from ciel.memory.models import normalize_sources
     from ciel.memory.read import answer_memory_read
     from ciel.memory.service import MemoryService
@@ -206,7 +206,7 @@ def run_desktop(
         **({"include_alignments": True} if track_speech else {}),
     )
     router = get_model_router()
-    from ciel.controller import AIController
+    from ciel.controller import AIController, conversation_control, is_explicit_web_request
 
     controller = AIController(router, settings.controller)
     from ciel.audio.ambient import AmbientConversation, SpeechDecision
@@ -288,6 +288,9 @@ def run_desktop(
             logger.info("Semantic recall awaits a passing local memory evaluation.")
     actions = ActionRegistry.discover()
     internet = InternetService(settings.internet)
+    dialogue_context = DialogueContext(
+        settings, memory_store, conv_manager, memory_service, semantic_recall=semantic_recall,
+    )
     web_ui = None
     if web_mode:
         from ciel.web import DesktopWebUI
@@ -299,66 +302,15 @@ def run_desktop(
         web_ui.load_history(conv_manager.get_recent_turns(limit=100))
 
     def recalled_context(query: str) -> list[str]:
-        recent_messages = [
-            ChatMessage(turn.role, turn.content)
-            for turn in conv_manager.get_recent_turns(limit=8)
-        ]
-        location_hint = query
-        if re.match(
-            r"^(?:what about|how about|and\b|also\b|tomorrow\b|next week\b|"
-            r"try again|retry|check again|search again|double[- ]check)\b",
-            query, re.I,
-        ):
-            location_hint += " " + next((
-                message.content for message in reversed(recent_messages)
-                if message.role == "user" and message.content.strip() != query.strip()
-            ), "")
-        recall_query = query
-        if re.search(
-            r"\b(?:weather|forecast|near me|nearby|around here|local restaurants?)\b",
-            location_hint, re.I,
-        ):
-            recall_query += "\nhome city live based location"
-        return recall_context_memories(
-            memory_store, recall_query, recent_messages=recent_messages,
-            enabled=settings.memory.recall_enabled, limit=settings.memory.recall_limit,
-            max_chars=settings.memory.recall_max_chars,
-            semantic_recall=semantic_recall,
-        )
+        return dialogue_context.recall(query)
 
     def build_system_prompt(
         query: str = "", *, recalled_memories: list[str] | None = None,
     ) -> str:
         if recalled_memories is None:
             recalled_memories = recalled_context(query)
-        profile_name = (
-            memory_store.get_fact("user:preferred_name")
-            if memory_service.recall_enabled else None
-        )
-        prompt_settings = settings
-        if profile_name is not None:
-            prompt_settings = settings.model_copy(
-                update={"ciel_preferred_name": memory_store.redact_forgotten(
-                    str(profile_name.metadata.get("value", "")),
-                )}
-            )
-        prompt = generate_system_prompt(
-            settings=prompt_settings, memories=recalled_memories
-        )
-        prompt += (
-            "\nApplication memory status: saved-fact recall is "
-            + ("enabled" if memory_service.recall_enabled else "paused")
-            + f"; learning mode={settings.memory.learning_mode}; "
-            + ("conflicting replacements require confirmation."
-               if settings.memory.confirm_corrections else
-               "clear supported corrections follow the configured learning mode.")
-        )
-        prompt += (
-            "\nNo durable memory write was performed for this turn. This conversational "
-            "response cannot save, replace, or forget a fact. Do not claim a new memory "
-            "update succeeded or promise that these words will save it. If a requested "
-            "memory change was not handled, ask for the specific fact and its new value. "
-            "Earlier application acknowledgements describe earlier saves only."
+        prompt = dialogue_context.system_prompt(
+            recalled_memories, generate=generate_system_prompt,
         )
         prompt += voice_delivery_instruction(enabled=settings.audio.tts_enabled)
         if tts.engine == "chatterbox_turbo":
@@ -368,17 +320,44 @@ def run_desktop(
             )
         return prompt
 
-    _wait_re = re.compile(
-        r"^(wait|hold\s+on|hang\s+on|one\s+sec(ond)?|pause)[.?!]*$",
-        re.IGNORECASE,
-    )
-    _stop_re = re.compile(
-        r"^(stop|be\s+quiet|shut\s+up|never\s*mind|cancel)[.?!]*$",
-        re.IGNORECASE,
-    )
+    web_paused = [False]
     _in_followup = [False]  # mutable flag shared across calls
     persona_change_pending = [False]
     persona_change_deadline = [0.0]
+
+    def active_control_turn(info: dict, fragments: list[str]) -> bool:
+        """Use the start of this recording, not a delayed STT completion time."""
+        now = time.monotonic()
+        began = info.get("speech_started_at", now)
+        if not isinstance(began, (int, float)) or not 0 <= began <= now:
+            began = now
+        return bool(fragments) or bool(
+            ambient_context.interaction and (
+                began <= ambient_context.deadline or info.get("during_reply")
+            )
+        )
+
+    def apply_conversation_control(
+        kind: str, text: str, current: Callable[[], bool] | None = None,
+    ) -> str | None:
+        """Discard the canceled task before any listener/model can revive it."""
+        with controls_lock:
+            if current is not None and not current():
+                return None
+            memory_service.cancel_proposal()
+            actions.cancel_pending()
+            persona_change_pending[0] = False
+            pending_speech.clear()
+            unfinished_request[0] = {}
+            interrupted_reply[0] = {}
+            web_paused[0] = True
+            if ambient_enabled[0]:
+                ambient_context.record_addressed("user", text)
+        mark("local_intent_resolved", intent=kind)
+        return {
+            "wait": "Take your time.", "stop": "Got it, quiet now.",
+            "no_search": "Okay, I won't search.",
+        }[kind]
 
     def on_wake(info: dict):
         logger.info("🎯 Wake detected! Details: %s", info)
@@ -493,7 +472,7 @@ def run_desktop(
     def handle_controlled_turn(
         user_text: str, wake_info: dict, current, say,
         earlier_fragments: list[str], restored_fragments: list[str],
-        retained_privacy: dict, persisted_prefix: int,
+        retained_privacy: dict, persisted_prefix: int, *, conversation_only: bool = False,
     ) -> bool:
         """Apply one AI decision before normal local handlers or public retrieval."""
         typed = wake_info.get("input_source") == "keyboard"
@@ -506,16 +485,6 @@ def run_desktop(
             time.monotonic() <= ambient_context.deadline
             or (wake_info.get("during_reply") and bool(ambient_context.interaction))
         )
-        # Emergency controls retain their immediate, application-owned behavior.
-        if (explicit or active) and _stop_re.fullmatch(clean):
-            memory_service.cancel_proposal()
-            actions.cancel_pending()
-            persona_change_pending[0] = False
-            pending_speech.clear()
-            unfinished_request[0] = {}
-            ambient_context.reset()
-            say("Got it, quiet now.")
-            return False
         if not user_text or wake_info.get("stt_needs_repeat"):
             if explicit and wake_info.get("stt_needs_repeat"):
                 say("I didn't catch that clearly. Could you say it again?")
@@ -554,7 +523,9 @@ def run_desktop(
         recalled = [] if local_preflight else (
             recalled_context(query) if explicit or active else []
         )
-        if local_preflight:
+        if conversation_only:
+            selected = ControllerDecision(intent="request", action="answer", confidence=1)
+        elif local_preflight:
             selected = ControllerDecision(intent="request", action="local", confidence=1)
             logger.info("[system]: Matched an explicitly addressed local command.")
         else:
@@ -564,13 +535,16 @@ def run_desktop(
                 background=ambient_context.context_note(),
                 pending_local=pending_local,
                 home_city=settings.internet.home_city,
-                automatic_search=settings.internet.automatic, memories=recalled,
+                automatic_search=settings.internet.automatic and not web_paused[0],
+                memories=recalled,
                 transcribed=not typed,
                 strict_followups=settings.audio.ambient_followup_policy == "strict",
                 latest_utterance=clean,
             )
         if not current():
             return False
+        if web_paused[0] and selected.action in {"search", "read_page"}:
+            selected = ControllerDecision(intent="request", action="answer", confidence=1)
         if selected.action == "silent":
             unfinished_request[0] = {}
             pending_speech.clear()
@@ -698,27 +672,21 @@ def run_desktop(
                                       "Got it. I'll use that style from now on.")
                     return finish("I couldn't update my style preferences.")
                 persona_change_pending[0] = False
-                local = answer_memory_read(
-                    memory_store, local_text, recent_messages=dialogue,
-                    recall_enabled=settings.memory.recall_enabled,
-                )
+                with controls_lock:
+                    if not current():
+                        return False
+                    local = dialogue_context.memory_reply(
+                        local_text, recent_messages=dialogue, authorized=authorized,
+                    )
                 if local is not None:
-                    memory_service.cancel_proposal()
+                    local = _memory_confirmation_prompt(
+                        local, ambient=ambient_enabled[0], typed=typed,
+                        wake_word=settings.audio.wake_word,
+                    )
+                if local is None:
+                    local = answer_clock_query(local_text)
+                if local is not None:
                     actions.cancel_pending()
-                else:
-                    with controls_lock:
-                        if not current():
-                            return False
-                        local = memory_service.handle(local_text, authorized=authorized)
-                    if local is not None:
-                        local = _memory_confirmation_prompt(
-                            local, ambient=ambient_enabled[0], typed=typed,
-                            wake_word=settings.audio.wake_word,
-                        )
-                    if local is None:
-                        local = answer_clock_query(local_text)
-                    if local is not None:
-                        actions.cancel_pending()
                 if local is None:
                     local = actions.handle(
                         local_text, authorized=authorized, cancel_event=cancel_event,
@@ -731,6 +699,12 @@ def run_desktop(
                 if local_preflight:
                     recalled = recalled_context(query)
             prompt = build_system_prompt(query, recalled_memories=recalled)
+            if web_paused[0]:
+                prompt += (
+                    "\nThe user paused online lookups. Answer conversationally using the "
+                    "current context. No lookup was performed; do not announce a search. "
+                    "A fresh affirmative user lookup request is needed to resume browsing."
+                )
             if contextual_clarification:
                 prompt += (
                     "\nThe routing stage was unsure about this follow-up. Use the full recent "
@@ -903,14 +877,55 @@ def run_desktop(
             user_text = "\n".join(restored_fragments)
             earlier_fragments = []
             logger.info("Resuming the pending request after an empty interruption.")
+        clean_control = user_text if typed else strip_wake_phrase(
+            user_text, settings.audio.wake_word,
+        )
+        explicit_control = typed or bool(wake_info.get("wake_verified")) or (
+            ambient_context.is_explicit(user_text) or not ambient_enabled[0]
+        )
+        control_candidate = conversation_control(clean_control)
+        fresh_lookup = is_explicit_web_request(clean_control)
+        control_allowed = explicit_control or bool(
+            (control_candidate or fresh_lookup) and active_control_turn(
+                wake_info, earlier_fragments or restored_fragments,
+            )
+        )
+        control = control_candidate if control_allowed and not (
+            wake_info.get("stt_needs_repeat")
+        ) else None
+        conversation_only = bool(control == "no_search" and re.search(
+            r"[,;]\s*instead\s+\S", clean_control, re.I,
+        ))
+        if control is not None:
+            reply = apply_conversation_control(control, clean_control, current)
+            if reply is None:
+                return False
+            earlier_fragments = []
+            restored_fragments = []
+            if not conversation_only:
+                log_reply('🤖 CIEL: "%s" [local/conversation]', reply)
+                say(reply)
+                _in_followup[0] = control != "stop"
+                if control == "stop":
+                    ambient_context.reset()
+                return control != "stop"
+        elif control_allowed and fresh_lookup:
+            with controls_lock:
+                if not current():
+                    return False
+                web_paused[0] = False
         if settings.controller.enabled:
             return handle_controlled_turn(user_text, wake_info, current, say,
                                           earlier_fragments, restored_fragments, retained_privacy,
-                                          previous_request.get("persisted_prefix", 0))
+                                          previous_request.get("persisted_prefix", 0),
+                                          conversation_only=conversation_only)
         decision = None
         mark("speech_gate_started")
         if ambient_enabled[0]:
-            if typed:
+            if conversation_only:
+                decision = SpeechDecision(True, explicit=explicit_control,
+                                          reason="conversation_control")
+            elif typed:
                 decision = SpeechDecision(True, explicit=True, reason="keyboard_input")
             elif restored_fragments:
                 decision = SpeechDecision(True, reason="resumed_after_empty_audio")
@@ -999,28 +1014,6 @@ def run_desktop(
             say(reply)
             _in_followup[0] = True
             return True
-
-        # Check if user requested pause / wait
-        if _wait_re.search(cleaned_query):
-            mark("local_intent_resolved", intent="wait")
-            logger.info("⏸️ Pause requested ('%s') — allowing more time.", cleaned_query)
-            say("Take your time.")
-            _in_followup[0] = True
-            return True
-
-        # Check if user requested immediate stop / cancel
-        if _stop_re.search(cleaned_query):
-            persona_change_pending[0] = False
-            memory_service.cancel_proposal()
-            actions.cancel_pending()
-            mark("local_intent_resolved", intent="stop")
-            pending_speech.clear()
-            unfinished_request[0] = {}
-            logger.info("🛑 Stop requested ('%s') — returning to standby.", cleaned_query)
-            say("Got it, quiet now.")
-            ambient_context.deadline = 0.0
-            _in_followup[0] = False
-            return False
 
         # Guessed follow-up intent or uncertain recognition must not write facts.
         if is_farewell(cleaned_query):
@@ -1283,7 +1276,7 @@ def run_desktop(
         try:
             internet_result = InternetResult()
             internet_private = ModelRouter.requires_local(context_messages)
-            if not internet_private:
+            if not internet_private and not web_paused[0]:
                 mark("internet_retrieval_started")
                 internet_result = internet.prepare(
                     context_messages[-1].content,
@@ -1328,6 +1321,12 @@ def run_desktop(
                 internet_status = (
                     "Public internet retrieval is disabled in the current configuration. "
                     "Explain that setting if a live lookup is requested. "
+                )
+            elif web_paused[0]:
+                internet_status = (
+                    "The user paused online lookups. Answer conversationally using the "
+                    "current context. No lookup was performed; do not announce a search. "
+                    "A fresh affirmative user lookup request is needed to resume browsing. "
                 )
             elif internet_result.attempted:
                 internet_status += (
@@ -1513,6 +1512,17 @@ def run_desktop(
         explicit = bool(info.get("wake_verified")) or not ambient_enabled[0] or (
             ambient_context.is_explicit(text)
         )
+        fragment = strip_wake_phrase(text, settings.audio.wake_word)
+        control = conversation_control(fragment)
+        if control is not None and (
+            explicit or active_control_turn(info, earlier_fragments)
+        ):
+            apply_conversation_control(control, fragment)
+            if control == "stop":
+                ambient_context.reset()
+            # The next queued utterance can add a new request. Never merge a
+            # cancellation into the task it canceled or ask a model to classify it.
+            return
         if not explicit:
             from ciel.controller import _clearly_other_listener
 
@@ -1530,7 +1540,6 @@ def run_desktop(
             if (not earlier_fragments and not active_candidate) or _clearly_other_listener(text):
                 logger.info("Superseded speech without a verified address wasn't merged.")
                 return
-        fragment = strip_wake_phrase(text, settings.audio.wake_word)
         if ambient_enabled[0] and explicit:
             # The ambient gate can replay this RAM-only transcript even after
             # its pending chain is abandoned. Keep its original routing prefix

@@ -19,6 +19,7 @@ class ScriptedUI:
     def __init__(
         self, choices, prompts=(), *, names=(), cities=(), memory_choices=(), persona_choices=(),
         provider_choices=(), more_provider_choices=(),
+        chat_choices=(), autostart_choices=(),
     ):
         self.choices = iter(choices)
         self.prompts = iter(prompts)
@@ -28,6 +29,8 @@ class ScriptedUI:
         self.persona_choices = iter(persona_choices)
         self.provider_choices = iter(provider_choices)
         self.more_provider_choices = iter(more_provider_choices)
+        self.chat_choices = iter(chat_choices)
+        self.autostart_choices = iter(autostart_choices)
         self.provider_menus = []
         self.summaries = []
         self.questions = []
@@ -57,6 +60,10 @@ class ScriptedUI:
             answer = next(self.provider_choices, None)
         elif title == "Add another provider?":
             answer = next(self.more_provider_choices, None)
+        elif title == "Chat service":
+            answer = next(self.chat_choices, None)
+        elif title == "Chat at login":
+            answer = next(self.autostart_choices, None)
         else:
             answer = next(self.choices)
         if isinstance(answer, BaseException):
@@ -85,11 +92,13 @@ def wizard_factory(tmp_path, monkeypatch):
     def create(
         choices, *, secrets=(), prompts=(), devices=(), names=(), cities=(), memory_choices=(),
         persona_choices=(), provider_choices=(), more_provider_choices=(),
+        chat_choices=(), autostart_choices=(),
     ):
         ui = ScriptedUI(
             choices, prompts, names=names, cities=cities, memory_choices=memory_choices,
             persona_choices=persona_choices, provider_choices=provider_choices,
             more_provider_choices=more_provider_choices,
+            chat_choices=chat_choices, autostart_choices=autostart_choices,
         )
         secret_answers = iter(secrets)
         secret_prompts = []
@@ -104,6 +113,8 @@ def wizard_factory(tmp_path, monkeypatch):
 
         monkeypatch.setattr(setup_wizard, "ConsoleUI", lambda: ui)
         monkeypatch.setattr(setup_wizard, "getpass", secret_input)
+        monkeypatch.setattr("ciel.chat.setup.getpass", secret_input)
+        monkeypatch.setattr(setup_wizard, "apply_chat_autostart", MagicMock(return_value=True))
         backend = MagicMock()
         backend.list_devices.return_value = list(devices)
         monkeypatch.setattr(setup_wizard, "get_audio_backend", lambda: backend)
@@ -378,8 +389,8 @@ def test_review_can_return_to_customize(tmp_path, wizard_factory):
 def test_numbered_terminal_menu_completes_customize_flow(tmp_path, wizard_factory, monkeypatch):
     harness = wizard_factory([], secrets=["", "", ""])
     output = StringIO()
-    # Customize, keep personal defaults, skip keys, keep personality, Amy, save and confirm.
-    terminal_input = StringIO("2\n\n\n\n4\n\n3\n1\n1\n1\n1\n1\n1\n")
+    # Customize, keep personal defaults, skip keys/chat, keep personality, Amy, save and confirm.
+    terminal_input = StringIO("2\n\n\n\n4\n\n\n3\n1\n1\n1\n1\n1\n1\n")
     monkeypatch.setattr(
         setup_wizard, "ConsoleUI", lambda: ConsoleUI(stream=output, input_stream=terminal_input),
     )
