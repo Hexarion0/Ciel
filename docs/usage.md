@@ -6,12 +6,14 @@ older benchmark reports describe the settings used for their recorded runs.
 
 ## Providers and routing
 
-The current default NIM model is `nvidia/nemotron-3-super-120b-a12b` for both
+The current default NIM model is `nvidia/nemotron-3.5-lightning-30b-a3b` for both
 conversation and complex tasks. `NIM_MODEL` and `NIM_COMPLEX_MODEL` override those
-choices. The later [latency comparison](conversation-latency.md) selected Super
-after the earlier Lightning change; historical release notes record those earlier runs.
+choices. The [availability and latency report](conversation-latency.md) records the
+earlier Super comparison and the later endpoint failure that prompted this change.
 Nemotron 3 and 3.5 requests disable thinking by default for conversational replies.
-Missing or retired models (HTTP 404/410) immediately try the configured NIM backup.
+Missing or retired models (HTTP 404/410) immediately try a different configured NIM backup.
+`NIM_FALLBACK_MODEL` defaults to the same model, so an unavailable endpoint is not
+retried through an implicit larger backup. Explicit backup choices remain supported.
 Empty or reasoning-only responses also try that backup once; reasoning is never
 used as the spoken answer. Fallback never splices a new answer into partial speech.
 Standalone time and date questions are answered from the local clock without an

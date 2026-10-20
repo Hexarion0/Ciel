@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from ciel.config import DEFAULT_NIM_MODEL, ProviderConfig
 from ciel.providers.base import ChatMessage, LLMProvider, LLMResponse, LLMStreamChunk
 from ciel.providers.groq import GroqProvider
 from ciel.providers.manager import ProviderManager
@@ -516,3 +517,49 @@ def test_controller_nim_never_falls_back_to_heavy_model(monkeypatch, streaming):
     assert requests[0]["model"] == provider.default_model
     assert "allow_model_fallback" not in requests[0]
     assert requests[0]["chat_template_kwargs"]["enable_thinking"] is False
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("status", [404, 410])
+def test_nim_default_primary_and_backup_do_not_repeat_missing_model(
+    monkeypatch, streaming, status,
+):
+    """One available default must not become an implicit heavy or duplicate retry."""
+    import httpx
+
+    requests = []
+    provider = NimProvider(api_key="test", config=ProviderConfig())
+
+    def handle(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(status)
+
+    client_class = httpx.Client
+    monkeypatch.setattr("httpx.Client", lambda **kw: client_class(
+        transport=httpx.MockTransport(handle), **kw,
+    ))
+    with pytest.raises(httpx.HTTPStatusError):
+        if streaming:
+            list(provider.stream("Hello"))
+        else:
+            provider.send("Hello")
+    assert provider.default_model == provider.complex_model == provider.fallback_model == (
+        DEFAULT_NIM_MODEL
+    )
+    assert [request["model"] for request in requests] == [DEFAULT_NIM_MODEL]
+
+
+def test_nim_provider_preserves_custom_model_overrides():
+    """Provider construction must retain all selected routes and explicit model override."""
+    provider = NimProvider(api_key="test", model="explicit-primary", config=ProviderConfig(
+        nim_model="configured-primary", nim_complex_model="configured-complex",
+        nim_fallback_model="configured-backup",
+    ))
+    assert provider.default_model == "explicit-primary"
+    assert provider.complex_model == "configured-complex"
+    assert provider.fallback_model == "configured-backup"
+
+
+def test_nim_blank_backup_uses_the_available_default():
+    provider = NimProvider(api_key="test", config=ProviderConfig(nim_fallback_model=""))
+    assert provider.fallback_model == DEFAULT_NIM_MODEL

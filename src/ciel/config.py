@@ -7,6 +7,8 @@ from dotenv.main import resolve_variables
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+DEFAULT_NIM_MODEL = "nvidia/nemotron-3.5-lightning-30b-a3b"
+
 
 def resolve_setup_values(configuration: dict[str, str]) -> dict[str, str]:
     """Expand pending dotenv references without changing their saved literal values."""
@@ -81,7 +83,7 @@ class ControllerConfig(BaseModel):
     """Lightweight AI decisions and bounded public-tool loops."""
 
     enabled: bool = True
-    model: str = "nvidia/nemotron-3-super-120b-a12b"
+    model: str = DEFAULT_NIM_MODEL
     timeout_seconds: float = Field(default=8.0, ge=0.1, le=30)
     max_tool_steps: int = Field(default=3, ge=1, le=5)
 
@@ -116,15 +118,15 @@ class ProviderConfig(BaseModel):
         description="NVIDIA NIM API key",
     )
     nim_model: str = Field(
-        default="nvidia/nemotron-3-super-120b-a12b",
+        default=DEFAULT_NIM_MODEL,
         description="Default NVIDIA NIM model name",
     )
     nim_complex_model: str = Field(
-        default="nvidia/nemotron-3-super-120b-a12b",
+        default=DEFAULT_NIM_MODEL,
         description="NVIDIA NIM model for complex reasoning and coding tasks",
     )
     nim_fallback_model: str = Field(
-        default="meta/llama-3.2-90b-vision-instruct",
+        default=DEFAULT_NIM_MODEL,
         description="NVIDIA NIM fallback model for failover / rate-limiting",
     )
     openrouter_api_key: SecretStr | None = Field(
@@ -283,9 +285,9 @@ class Settings(BaseSettings):
 
     # Provider settings
     nim_api_key: SecretStr | None = Field(default=None)
-    nim_model: str = Field(default="nvidia/nemotron-3-super-120b-a12b")
-    nim_complex_model: str = Field(default="nvidia/nemotron-3-super-120b-a12b")
-    nim_fallback_model: str = Field(default="meta/llama-3.2-90b-vision-instruct")
+    nim_model: str = Field(default=DEFAULT_NIM_MODEL)
+    nim_complex_model: str = Field(default=DEFAULT_NIM_MODEL)
+    nim_fallback_model: str = Field(default=DEFAULT_NIM_MODEL)
     openrouter_api_key: SecretStr | None = Field(default=None)
     groq_api_key: SecretStr | None = Field(default=None)
     ollama_host: str = Field(default="http://localhost:11434")
@@ -306,7 +308,7 @@ class Settings(BaseSettings):
 
     # AI controller settings; private conversations still require the local provider.
     controller_enabled: bool = Field(default=True)
-    controller_model: str = Field(default="nvidia/nemotron-3-super-120b-a12b")
+    controller_model: str = Field(default=DEFAULT_NIM_MODEL)
     controller_timeout_seconds: float = Field(default=8.0, ge=0.1, le=30)
     controller_max_tool_steps: int = Field(default=3, ge=1, le=5)
 

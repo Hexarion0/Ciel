@@ -25,11 +25,30 @@ endpoint; they cannot distinguish its internal queueing from model execution.
 The corrected checker then passed all 21 checks: 20 valid controller decisions in
 1.08–3.09 seconds each and one report validated against a synthetic page.
 
-Fresh controller configuration now selects `nvidia/nemotron-3-super-120b-a12b`,
-matching the measured conversation route. The eight-second decision deadline,
-private routing, and explicit custom model overrides remain. Restart CIEL to load
-the setting. These synthetic checks do not establish microphone or speaker quality
-or guarantee future hosted-service latency.
+In that run, fresh controller configuration was changed to
+`nvidia/nemotron-3-super-120b-a12b`, matching the measured conversation route. These
+synthetic checks do not establish microphone or speaker quality or guarantee
+future hosted-service latency.
+
+## Endpoint availability follow-up — 2026-10-20
+
+The configured Super model returned HTTP 404 during an actual greeting. The same
+account's authenticated catalogue still listed it, so catalogue presence alone did
+not establish inference availability. A direct synthetic request reproduced 404;
+the old 90B vision backup exceeded a ten-second read timeout. This evidence does
+not establish that either model is retired globally.
+
+Lightning answered a tiny non-thinking JSON request in 0.45 seconds. Through the
+actual CIEL controller, greeting, search selection, and contextual follow-up cases
+returned the expected decisions in 1.34, 1.20, and 1.41 seconds. A normal streamed
+greeting reply completed in 0.98 seconds. Only synthetic prompts were used.
+
+Defaults now use `nvidia/nemotron-3.5-lightning-30b-a3b` for controller, ordinary and
+complex replies, and the conversation backup. A matching primary/backup avoids a
+redundant retry. Explicit model overrides remain available. The controller retains
+its existing eight-second deadline and does not implicitly fall back to a large
+model. These few successful checks repair this account's observed availability
+problem; they do not replace the earlier benchmark or guarantee future latency.
 
 ## Result
 

@@ -7,7 +7,14 @@ from unittest.mock import patch
 import pytest
 from pydantic import ValidationError
 
-from ciel.config import AudioConfig, ControllerConfig, InternetConfig, Settings
+from ciel.config import (
+    DEFAULT_NIM_MODEL,
+    AudioConfig,
+    ControllerConfig,
+    InternetConfig,
+    ProviderConfig,
+    Settings,
+)
 
 
 def test_default_settings():
@@ -113,17 +120,40 @@ def test_example_configuration_starts_with_cpu_pocket():
     assert audio.stt_retry_model == "medium.en"
 
 
-def test_fresh_controller_uses_the_validated_nim_model_consistently():
-    """Fresh and example configuration must retain the measured working route."""
+def test_fresh_nim_configuration_uses_the_available_model_consistently():
+    """Every default route must use the model verified by real inference requests."""
     example = Path(__file__).resolve().parents[1] / ".env.example"
     with patch.dict(os.environ, {}, clear=True):
+        fresh = Settings(_env_file=None)
+        documented = Settings(_env_file=example)
         controllers = (
-            ControllerConfig(), Settings(_env_file=None).controller,
-            Settings(_env_file=example).controller,
+            ControllerConfig(), fresh.controller, documented.controller,
         )
+        providers = (ProviderConfig(), fresh.providers, documented.providers)
+    assert DEFAULT_NIM_MODEL == "nvidia/nemotron-3.5-lightning-30b-a3b"
     for controller in controllers:
-        assert controller.model == "nvidia/nemotron-3-super-120b-a12b"
+        assert controller.model == DEFAULT_NIM_MODEL
         assert controller.timeout_seconds == 8.0
+    for provider in providers:
+        assert provider.nim_model == DEFAULT_NIM_MODEL
+        assert provider.nim_complex_model == DEFAULT_NIM_MODEL
+        assert provider.nim_fallback_model == DEFAULT_NIM_MODEL
+
+
+def test_saved_nim_model_overrides_are_preserved(tmp_path):
+    """Changing defaults must preserve intentional account-specific model choices."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "NIM_MODEL=custom-conversation\nNIM_COMPLEX_MODEL=custom-reasoning\n"
+        "NIM_FALLBACK_MODEL=custom-backup\nCONTROLLER_MODEL=custom-controller\n",
+        encoding="utf-8",
+    )
+    with patch.dict(os.environ, {}, clear=True):
+        settings = Settings(_env_file=env_file)
+    assert settings.providers.nim_model == "custom-conversation"
+    assert settings.providers.nim_complex_model == "custom-reasoning"
+    assert settings.providers.nim_fallback_model == "custom-backup"
+    assert settings.controller.model == "custom-controller"
 
 
 def test_environment_override():

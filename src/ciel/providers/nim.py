@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 
-from ciel.config import ProviderConfig, get_settings
+from ciel.config import DEFAULT_NIM_MODEL, ProviderConfig, get_settings
 from ciel.latency import http_extensions, mark
 from ciel.logging import get_logger
 from ciel.providers.base import ChatMessage, LLMProvider, LLMResponse, LLMStreamChunk
@@ -42,9 +42,7 @@ class NimProvider(LLMProvider):
 
         self.default_model = model or providers.nim_model or self.default_model
         self.complex_model = providers.nim_complex_model
-        self.fallback_model = (
-            providers.nim_fallback_model or "meta/llama-3.2-90b-vision-instruct"
-        )
+        self.fallback_model = providers.nim_fallback_model or DEFAULT_NIM_MODEL
         self.timeout = timeout
 
     def is_configured(self) -> bool:
@@ -72,7 +70,7 @@ class NimProvider(LLMProvider):
             logger.debug("NIM health check failed: %s", err)
             return False
 
-    RELIABLE_BACKUP_MODEL: str = "meta/llama-3.2-90b-vision-instruct"
+    RELIABLE_BACKUP_MODEL: str = DEFAULT_NIM_MODEL
 
     @staticmethod
     def _model_payload(payload: dict[str, Any], model: str) -> dict[str, Any]:

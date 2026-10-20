@@ -151,10 +151,13 @@ a missing fallback does not trigger an automatic download during a voice reply.
 
 The wizard accepts NIM, Groq, and OpenRouter API keys. Keep them in `.env`.
 The current NIM default for both ordinary and complex requests is
-`nvidia/nemotron-3-super-120b-a12b`, selected in the recorded
-[latency comparison](docs/conversation-latency.md). Override it with `NIM_MODEL`
-and `NIM_COMPLEX_MODEL`; availability and latency depend on your provider account.
-The model's official API example is available from [NVIDIA](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b/build).
+`nvidia/nemotron-3.5-lightning-30b-a3b`, verified through the controller and
+conversation stream after the configured Super endpoint returned 404. See the
+[availability and latency findings](docs/conversation-latency.md). Override it with
+`NIM_MODEL` and `NIM_COMPLEX_MODEL`; availability and latency depend on your provider
+account. `NIM_FALLBACK_MODEL` selects a different conversation backup when needed;
+the default matches the primary model and avoids a duplicate attempt. The official
+API example is available from [NVIDIA](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b).
 
 Ollama is an optional local fallback, not bundled with CIEL. It must be running
 at `OLLAMA_HOST` with the requested model installed (currently `llama3.2` by default).
@@ -259,10 +262,10 @@ Explicitly addressed, reliably transcribed clock, memory, and supported desktop
 commands run through local handlers without an AI request. Other transcripts and
 typed messages go to an AI controller, which chooses silence, a reply,
 a clarification, web search, page reading, or an existing local tool. By default it uses
-`nvidia/nemotron-3-super-120b-a12b` through your NIM account. Conversation replies
+`nvidia/nemotron-3.5-lightning-30b-a3b` through your NIM account. Conversation replies
 use the normal provider settings. Stop and mute controls remain immediate.
-Existing `CONTROLLER_MODEL` overrides are preserved; update yours if it still
-selects Lightning, then restart CIEL.
+Existing `CONTROLLER_MODEL` overrides are preserved. If your selected endpoint
+returns 404, choose a model verified to answer through your account, then restart CIEL.
 
 For searches, CIEL gives a short spoken acknowledgment, retrieves pages using an
 AI-written query, and reports the supported answer. The controller uses recent user
@@ -294,7 +297,7 @@ Edit `.env` and restart to change these controls:
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `CONTROLLER_ENABLED` | `true` | Use AI decisions; `false` restores the earlier intent handlers |
-| `CONTROLLER_MODEL` | `nvidia/nemotron-3-super-120b-a12b` | Dedicated NIM decision and web report model |
+| `CONTROLLER_MODEL` | `nvidia/nemotron-3.5-lightning-30b-a3b` | Dedicated NIM decision and web report model |
 | `CONTROLLER_TIMEOUT_SECONDS` | `8.0` | Deadline for each action decision |
 | `CONTROLLER_MAX_TOOL_STEPS` | `3` | Maximum sequential web lookups per turn |
 | `INTERNET_ENABLED` | `true` | Enable public search and page reading |
