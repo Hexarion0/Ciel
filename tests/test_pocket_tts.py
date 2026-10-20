@@ -1,5 +1,6 @@
 """Pocket/provider/streaming regressions; ordinary tests never download a model."""
 
+import logging
 import sys
 import threading
 import time
@@ -195,11 +196,18 @@ def test_styles_use_same_bank_and_missing_style_shares_neutral(tmp_path, model, 
     assert "style 'soft' missing" in caplog.text
 
 
-def test_missing_neutral_keeps_one_builtin_identity(tmp_path, model):
+def test_missing_neutral_keeps_one_builtin_identity(tmp_path, model, caplog):
     (tmp_path / "warm.wav").touch()
-    provider = PocketTTS(tmp_path)
-    list(provider.stream(TTSRequest("Hello", "warm"), threading.Event()))
-    model.get_state_for_audio_prompt.assert_called_once_with("alba", truncate=True)
+    provider = PocketTTS(tmp_path, builtin_voice="azelma")
+    with caplog.at_level(logging.INFO, logger="ciel.audio.pocket"):
+        for style in ("warm", "neutral", "soft"):
+            list(provider.stream(TTSRequest("Hello", style), threading.Event()))
+    model.get_state_for_audio_prompt.assert_called_once_with("azelma", truncate=True)
+    preset_logs = [record for record in caplog.records if "built-in" in record.getMessage()]
+    assert len(preset_logs) == 1
+    assert preset_logs[0].levelno == logging.INFO
+    assert "azelma" in preset_logs[0].getMessage()
+    assert not any(record.levelno >= logging.WARNING for record in caplog.records)
 
 
 def test_explicit_missing_reference_fails(tmp_path, model):

@@ -74,11 +74,7 @@ class PocketTTS:
             raise FileNotFoundError(f"Pocket neutral reference is missing: {neutral}")
         if neutral is None:
             if "builtin" not in self._warned:
-                logger.warning(
-                    "No Ciel neutral reference in %s; using provisional Pocket '%s' "
-                    "for every style. Custom identity is not configured.",
-                    self.references, self.builtin_voice,
-                )
+                logger.info("Pocket voice: built-in '%s'.", self.builtin_voice)
                 self._warned.add("builtin")
             return self.builtin_voice
         reference = self._reference_file(style) if style != "neutral" else neutral

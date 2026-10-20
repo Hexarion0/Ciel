@@ -40,6 +40,17 @@ def _terminal_status_rows(
         "piper": "Amy · Piper" if settings.audio.tts_voice == "en_US-amy-medium"
         else f"{settings.audio.tts_voice} · Piper",
     }.get(engine, settings.audio.tts_voice)
+    if engine == "pocket":
+        from ciel.paths import resolve_asset_path
+
+        references = resolve_asset_path(settings.audio.tts_pocket_references)
+        has_custom_reference = settings.audio.tts_pocket_neutral_reference or any(
+            (references / f"neutral{suffix}").is_file()
+            for suffix in (".wav", ".flac", ".ogg", ".safetensors")
+        )
+        if not has_custom_reference:
+            preset = settings.audio.tts_pocket_builtin_voice.replace("_", " ").title()
+            voice = f"{preset} · Pocket"
     if not tts.enabled:
         voice = "Off · text replies"
     elif engine in {"chatterbox_turbo", "pocket"}:

@@ -32,6 +32,45 @@ def test_panel_reflects_live_state_and_cli_choices(prepared, enabled, ready, exp
     assert rows["Recognition"] == "small.en · CPU" + ("" if ready else " · not ready")
 
 
+@pytest.mark.parametrize("preset", ["azelma", "cosette"])
+def test_panel_names_selected_pocket_preset_without_loading_model(tmp_path, preset):
+    settings = Settings(
+        _env_file=None, tts_engine="pocket", tts_pocket_references=str(tmp_path),
+        tts_pocket_builtin_voice=preset, tts_pocket_neutral_reference=None,
+    )
+    # A style recording without neutral does not override the built-in identity.
+    (tmp_path / "warm.wav").touch()
+    stt = SimpleNamespace(is_ready=lambda: True)
+    tts = SimpleNamespace(engine="pocket", enabled=True)
+    rows = dict(_terminal_status_rows(
+        settings, stt, tts, ambient=True, captions=True, voice_prepared=True,
+    ))
+    assert rows["Voice"] == f"{preset.title()} · Pocket"
+
+
+@pytest.mark.parametrize("reference", ["neutral.wav", "neutral.flac", "neutral.ogg",
+                                       "neutral.safetensors", "explicit.wav", "missing.wav"])
+def test_panel_preserves_custom_pocket_identity_and_explicit_reference_precedence(
+    tmp_path, reference,
+):
+    explicit = reference in {"explicit.wav", "missing.wav"}
+    path = tmp_path / reference
+    if reference != "missing.wav":
+        path.touch()
+    settings = Settings(
+        _env_file=None, tts_engine="pocket", tts_pocket_references=str(tmp_path),
+        tts_pocket_builtin_voice="azelma",
+        tts_pocket_neutral_reference=str(path) if explicit else None,
+    )
+    stt = SimpleNamespace(is_ready=lambda: True)
+    tts = SimpleNamespace(engine="pocket", enabled=True)
+    prepared = reference != "missing.wav"
+    rows = dict(_terminal_status_rows(
+        settings, stt, tts, ambient=True, captions=True, voice_prepared=prepared,
+    ))
+    assert rows["Voice"] == "Ciel Pocket" + ("" if prepared else " · fallback pending")
+
+
 @pytest.mark.parametrize("failure", [False, True])
 def test_header_precedes_models_panel_follows_stream_and_precedes_keyboard(
     tmp_path, monkeypatch, failure,
