@@ -6,8 +6,11 @@ import re
 import secrets
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from contextlib import suppress
+from dataclasses import dataclass, field
+from queue import Empty, Full, Queue
 from typing import Any
 
 import httpx
@@ -16,6 +19,42 @@ from ciel.chat.state import ChatState
 
 MAX_MESSAGE_AGE_SECONDS = 300
 PAIR_TTL_SECONDS = 300
+MAX_PENDING_REQUESTS = 16
+REPLY_SHUTDOWN_SECONDS = 2.0
+
+
+class _ReplyCancellation(threading.Event):
+    """Combine direct cancellation with shutdown without cancelling later requests."""
+
+    def __init__(self, shutdown: threading.Event) -> None:
+        super().__init__()
+        self._shutdown = shutdown
+
+    def is_set(self) -> bool:
+        return super().is_set() or self._shutdown.is_set()
+
+    def wait(self, timeout: float | None = None) -> bool:
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while not self.is_set():
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
+                break
+            super().wait(0.05 if remaining is None else min(0.05, remaining))
+        return self.is_set()
+
+
+@dataclass
+class _ReplyTask:
+    """One already claimed, authorized request; only its reply runs off-thread."""
+
+    update_id: int
+    owner: int
+    text: str
+    sent_at: int
+    cancel: threading.Event
+    done: threading.Event = field(default_factory=threading.Event)
+    answer: str = ""
+    progress_sent: bool = False
 
 
 class TelegramError(RuntimeError):
@@ -216,41 +255,54 @@ class TelegramService:
         reply: Callable[[str, threading.Event], str], *,
         stop: threading.Event | None = None, clock: Callable[[], float] = time.time,
         report: Callable[[str], None] = print,
+        progress: Queue[tuple[threading.Event, str]] | None = None,
     ) -> None:
         self.client, self.state, self.bot_id = client, state, bot_id
         self.reply, self.clock, self.report = reply, clock, report
         self.stop = stop or threading.Event()
+        self._reply_worker: threading.Thread | None = None
+        self.progress = progress
 
-    def process(self, update: dict[str, Any]) -> None:
-        """Consume once, then authorize the owner before invoking the conversation."""
+    def _claim_request(self, update: dict[str, Any]) -> _ReplyTask | None:
+        """Claim before any reply work, retaining owner and freshness boundaries."""
         update_id = update.get("update_id")
         if type(update_id) is not int or not self.state.claim(
             self.bot_id, update_id, now=self.clock(),
         ):
-            return
+            return None
         incoming = private_message(update, self.clock())
         owner = self.state.owner(self.bot_id)
         if incoming is None or owner is None or incoming[0] != owner:
             self.state.finish(self.bot_id, update_id, "ignored")
+            return None
+        return _ReplyTask(
+            update_id, owner, incoming[1], update["message"]["date"],
+            _ReplyCancellation(self.stop),
+        )
+
+    def process(self, update: dict[str, Any]) -> None:
+        """Consume once, then authorize the owner before invoking the conversation."""
+        request = self._claim_request(update)
+        if request is None:
             return
         try:
-            answer = self.reply(incoming[1], self.stop)
+            answer = self.reply(request.text, self.stop)
         except Exception:
-            self.state.finish(self.bot_id, update_id, "failed")
+            self.state.finish(self.bot_id, request.update_id, "failed")
             answer = (
                 "I couldn't complete that request. It may have been partly processed; "
                 "ask what I remember before repeating a memory update."
             )
-        if self.stop.is_set() or not answer:
-            self.state.finish(self.bot_id, update_id, "cancelled")
+        if self.stop.is_set() or not answer or self.state.owner(self.bot_id) != request.owner:
+            self.state.finish(self.bot_id, request.update_id, "cancelled")
             return
         try:
-            self.client.send(owner, answer, self.stop)
+            self.client.send(request.owner, answer, self.stop)
         except TelegramError as error:
-            self.state.finish(self.bot_id, update_id, "reply_failed")
+            self.state.finish(self.bot_id, request.update_id, "reply_failed")
             self.report(f"Reply delivery failed: {error} The request will not be run again.")
             return
-        self.state.finish(self.bot_id, update_id, "done")
+        self.state.finish(self.bot_id, request.update_id, "done")
 
     def poll(self, *, timeout: int = 20) -> list[dict[str, Any]]:
         """Retry read-only polls with bounded, interruptible delays."""
@@ -271,14 +323,159 @@ class TelegramService:
         return []
 
     def run(self) -> None:
-        """Poll until stopped; processing stays sequential to preserve confirmations."""
-        if self.state.owner(self.bot_id) is None:
+        """Keep polling for controls while exactly one worker generates replies.
+
+        The polling thread alone owns Telegram's HTTP event loop and ChatState's
+        SQLite handle. A single daemon worker serializes all conversation access.
+        """
+        if self._reply_worker is not None and self._reply_worker.is_alive():
+            raise TelegramError("A previous chat reply is still stopping.")
+        owner = self.state.owner(self.bot_id)
+        if owner is None:
             raise TelegramError("Pair your account locally first: ciel chat pair telegram")
-        while not self.stop.is_set():
-            for update in self.poll():
-                if self.stop.is_set():
-                    break
-                self.process(update)
+        pending: deque[_ReplyTask] = deque()
+        controls: deque[_ReplyTask] = deque()
+        work: Queue[_ReplyTask | None] = Queue(maxsize=1)
+        worker_stop = threading.Event()
+        active: _ReplyTask | None = None
+
+        def generate() -> None:
+            while not worker_stop.is_set():
+                request = work.get()
+                if request is None:
+                    return
+                try:
+                    if not request.cancel.is_set():
+                        request.answer = self.reply(request.text, request.cancel)
+                except Exception:
+                    request.answer = (
+                        "I couldn't complete that request. It may have been partly processed; "
+                        "ask what I remember before repeating a memory update."
+                    )
+                finally:
+                    request.done.set()
+
+        def start_next() -> None:
+            nonlocal active
+            while active is None and (controls or pending) and not self.stop.is_set():
+                request = controls.popleft() if controls else pending.popleft()
+                if (
+                    self.state.owner(self.bot_id) != request.owner or request.owner != owner
+                    or not -30 <= self.clock() - request.sent_at <= MAX_MESSAGE_AGE_SECONDS
+                ):
+                    self.state.finish(self.bot_id, request.update_id, "ignored")
+                    continue
+                active = request
+                work.put_nowait(request)
+
+        def enqueue(update: dict[str, Any]) -> None:
+            request = self._claim_request(update)
+            if request is None:
+                return
+            if request.owner != owner:
+                self.state.finish(self.bot_id, request.update_id, "ignored")
+                return
+            # Keep setup/pairing imports light; classify only authenticated text.
+            from ciel.controller import conversation_control
+
+            text = re.sub(r"^/(?:local|fast|strong|deep)\s+", "", request.text, flags=re.I)
+            if conversation_control(text) is not None:
+                if active is not None:
+                    active.cancel.set()
+                while pending:
+                    dropped = pending.popleft()
+                    dropped.cancel.set()
+                    self.state.finish(self.bot_id, dropped.update_id, "cancelled")
+                if len(pending) + len(controls) >= MAX_PENDING_REQUESTS:
+                    dropped = pending.pop() if pending else controls.popleft()
+                    self.state.finish(self.bot_id, dropped.update_id, "cancelled")
+                controls.append(request)
+            elif len(pending) + len(controls) < MAX_PENDING_REQUESTS:
+                pending.append(request)
+            else:
+                self.state.finish(self.bot_id, request.update_id, "queue_full")
+                if not self.stop.is_set() and self.state.owner(self.bot_id) == request.owner:
+                    try:
+                        self.client.send(
+                            request.owner,
+                            "I'm still working and the waiting queue is full. "
+                            "Please send that again after I reply.",
+                            request.cancel,
+                        )
+                    except TelegramError as error:
+                        self.report(f"Reply delivery failed: {error}")
+
+        def send_progress() -> None:
+            if self.progress is None:
+                return
+            while True:
+                try:
+                    event, message = self.progress.get_nowait()
+                except Empty:
+                    return
+                if (
+                    active is None or event is not active.cancel or active.progress_sent
+                    or active.done.is_set() or active.cancel.is_set()
+                    or self.state.owner(self.bot_id) != active.owner
+                    or not isinstance(message, str) or not message.strip()
+                ):
+                    continue
+                active.progress_sent = True
+                try:
+                    self.client.send(active.owner, message.strip()[:300], active.cancel)
+                except TelegramError as error:
+                    self.report(f"Progress delivery failed: {error}")
+
+        def finish(request: _ReplyTask) -> None:
+            if (
+                request.cancel.is_set() or not request.answer
+                or self.state.owner(self.bot_id) != request.owner
+            ):
+                self.state.finish(self.bot_id, request.update_id, "cancelled")
+                return
+            try:
+                self.client.send(request.owner, request.answer, request.cancel)
+            except TelegramError as error:
+                self.state.finish(self.bot_id, request.update_id, "reply_failed")
+                self.report(f"Reply delivery failed: {error} The request will not be run again.")
+                return
+            self.state.finish(self.bot_id, request.update_id, "done")
+
+        worker = threading.Thread(target=generate, name="ciel-telegram-reply", daemon=True)
+        self._reply_worker = worker
+        worker.start()
+        try:
+            while not self.stop.is_set():
+                if self.state.owner(self.bot_id) != owner:
+                    raise TelegramError(
+                        "Telegram pairing changed. Restarting chat.", transient=True,
+                    )
+                if active is not None and active.done.is_set():
+                    finish(active)
+                    active = None
+                start_next()
+                for update in self.poll(timeout=1 if active is not None else 20):
+                    if self.stop.is_set():
+                        break
+                    enqueue(update)
+                    start_next()
+                send_progress()
+        finally:
+            worker_stop.set()
+            if active is not None:
+                active.cancel.set()
+                self.state.finish(self.bot_id, active.update_id, "cancelled")
+            for request in (*controls, *pending):
+                request.cancel.set()
+                self.state.finish(self.bot_id, request.update_id, "cancelled")
+            with suppress(Full):
+                work.put_nowait(None)
+            worker.join(REPLY_SHUTDOWN_SECONDS)
+            if worker.is_alive() and not self.stop.is_set():
+                # Starting another reply worker in this process could race memory writes.
+                raise TelegramError(
+                    "The current reply did not stop. The chat service must restart.",
+                )
 
     def pair(self, show_code: Callable[[str], None]) -> int | None:
         """Discard queued history, then require a fresh expiring code shown only locally."""

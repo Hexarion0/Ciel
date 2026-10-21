@@ -12,6 +12,7 @@ from typing import Any
 from ciel.logging import get_logger
 from ciel.memory.models import ConversationTurn, MemoryItem, MemoryType, normalize_sources
 from ciel.memory.recall_terms import terms
+from ciel.memory.web_evidence import decode_web_evidence, normalize_web_evidence
 
 logger = get_logger("memory.store")
 
@@ -106,7 +107,8 @@ class MemoryStore:
                         model TEXT NOT NULL DEFAULT '',
                         tokens INTEGER NOT NULL DEFAULT 0,
                         latency REAL NOT NULL DEFAULT 0.0,
-                        sources_json TEXT NOT NULL DEFAULT '[]'
+                        sources_json TEXT NOT NULL DEFAULT '[]',
+                        web_evidence_json TEXT NOT NULL DEFAULT '{}'
                     );
                     """
                 )
@@ -117,6 +119,11 @@ class MemoryStore:
                     conn.execute(
                         "ALTER TABLE conversation_turns "
                         "ADD COLUMN sources_json TEXT NOT NULL DEFAULT '[]';"
+                    )
+                if "web_evidence_json" not in columns:
+                    conn.execute(
+                        "ALTER TABLE conversation_turns "
+                        "ADD COLUMN web_evidence_json TEXT NOT NULL DEFAULT '{}';"
                     )
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(memory_type);"
@@ -140,6 +147,11 @@ class MemoryStore:
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_conv_session_id "
                     "ON conversation_turns(session_id, id);"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_conv_web_evidence "
+                    "ON conversation_turns(session_id, id) "
+                    "WHERE role='assistant' AND web_evidence_json <> '{}';"
                 )
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_memories_updated "
@@ -710,8 +722,8 @@ class MemoryStore:
                     """
                     INSERT INTO conversation_turns (
                         session_id, role, content, timestamp,
-                        provider, model, tokens, latency, sources_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                        provider, model, tokens, latency, sources_json, web_evidence_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """,
                     (
                         turn.session_id,
@@ -725,6 +737,11 @@ class MemoryStore:
                         turn.tokens,
                         turn.latency,
                         json.dumps(normalize_sources(turn.sources)),
+                        json.dumps(
+                            normalize_web_evidence(turn.web_evidence)
+                            if turn.role == "assistant" else {},
+                            ensure_ascii=False,
+                        ),
                     ),
                 )
                 turn.id = cursor.lastrowid
@@ -805,6 +822,24 @@ class MemoryStore:
                 [*session_ids, after_id, *session_ids, keep_recent, limit],
             ).fetchall()
             return [self._row_to_turn(row) for row in rows]
+
+    def get_latest_web_evidence(self, session_ids: list[str]) -> dict[str, Any]:
+        """Read the latest assistant lookup in only the explicitly authorized archives.
+
+        Assistant replies without a lookup do not erase prior evidence. Corruption
+        in the latest evidence fails closed, rather than reviving an older search.
+        """
+        if not session_ids:
+            return {}
+        placeholders = ",".join("?" for _ in session_ids)
+        with self._lock:
+            row = self._get_connection().execute(
+                "SELECT web_evidence_json FROM conversation_turns "
+                f"WHERE session_id IN ({placeholders}) AND role='assistant' "
+                "AND web_evidence_json <> '{}' ORDER BY id DESC LIMIT 1",
+                session_ids,
+            ).fetchone()
+        return decode_web_evidence(row["web_evidence_json"]) if row else {}
 
     def get_session_summary(self, session_id: str) -> MemoryItem | None:
         """Retrieve the latest summary using exact metadata identity."""
@@ -983,6 +1018,7 @@ class MemoryStore:
             tokens=row["tokens"],
             latency=float(row["latency"]),
             sources=normalize_sources(sources),
+            web_evidence=decode_web_evidence(row["web_evidence_json"]),
         )
 
     def close(self) -> None:

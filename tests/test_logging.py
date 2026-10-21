@@ -2,6 +2,8 @@
 
 import logging
 
+import pytest
+
 from ciel.logging import (
     CielFormatter,
     ConciseLogFilter,
@@ -43,6 +45,52 @@ def test_secret_masking_filter():
     assert redactor.filter(record_args) is True
     assert "gsk_1234567890abcdefgh" not in record_args.args[0]
     assert "[REDACTED_SECRET]" in record_args.args[0]
+
+
+@pytest.mark.parametrize("key", [
+    "tvly-synthetic_search_secret_123456789", "TVLY-synthetic_search_secret_123456789",
+])
+def test_tavily_key_is_masked_without_loading_settings(key):
+    assert SecretMaskingFilter._redact(f"Search token {key}") == "Search token [REDACTED_SECRET]"
+
+
+def test_configured_search_key_without_a_known_prefix_is_masked_everywhere(monkeypatch):
+    from ciel.config import InternetConfig, Settings
+    from ciel.internet import _clean
+    from ciel.memory.web_evidence import normalize_web_evidence
+
+    monkeypatch.setattr(SecretMaskingFilter, "_configured_secrets", ())
+    key = "synthetic-arbitrary-search-credential-54321"
+    # Register flat settings early, without loading a real .env or constructing .internet.
+    Settings(_env_file=None, brave_search_api_key=key)
+    assert _clean(f"search docs {key}") == "search docs [REDACTED_SECRET]"
+    assert SecretMaskingFilter._redact(f"token {key}") == "token [REDACTED_SECRET]"
+    payload = {
+        "kind": "web", "query": f"search {key}", "retrieved_at": "2026-10-21",
+        "sources": [{"url": "https://example.com/", "content": key}],
+    }
+    normalized = normalize_web_evidence(payload)
+    assert normalized["query"] == "search [REDACTED_SECRET]"
+    assert normalized["sources"][0]["content"] == "[REDACTED_SECRET]"
+    payload["sources"][0]["url"] += key
+    assert normalize_web_evidence(payload) == {}
+    # Programmatic structured configs use the same registry.
+    other_key = "second-arbitrary-search-credential-12345"
+    InternetConfig(provider="tavily", tavily_api_key=other_key)
+    assert SecretMaskingFilter._redact(other_key) == "[REDACTED_SECRET]"
+
+
+def test_configured_secret_registry_is_bounded_and_refreshes_active_keys(monkeypatch):
+    monkeypatch.setattr(SecretMaskingFilter, "_configured_secrets", ())
+    SecretMaskingFilter.register_secrets("", "key", "x" * 4097)
+    assert SecretMaskingFilter._configured_secrets == ()
+    for index in range(100):
+        SecretMaskingFilter.register_secrets(f"synthetic-secret-{index:04}")
+    assert len(SecretMaskingFilter._configured_secrets) == 64
+    active_key = SecretMaskingFilter._configured_secrets[0]
+    SecretMaskingFilter.register_secrets(active_key, "new-synthetic-secret-12345")
+    assert active_key in SecretMaskingFilter._configured_secrets
+    assert SecretMaskingFilter._redact(active_key) == "[REDACTED_SECRET]"
 
 
 def test_setup_logging():

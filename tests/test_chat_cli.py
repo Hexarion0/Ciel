@@ -115,6 +115,7 @@ def test_run_constructs_session_only_for_paired_owner_and_closes_it(tmp_path, mo
                         chat_state_path=str(path))
     monkeypatch.setattr(cli, "get_settings", lambda: settings)
     calls = []
+    service_stops = []
 
     def event(update_id, owner):
         return {"update_id": update_id, "message": {
@@ -126,6 +127,9 @@ def test_run_constructs_session_only_for_paired_owner_and_closes_it(tmp_path, mo
     class Client:
         def __init__(self, token):
             pass
+
+        def set_stop_event(self, stop):
+            service_stops.append(stop)
 
         def identity(self):
             return {"id": 123}
@@ -151,6 +155,7 @@ def test_run_constructs_session_only_for_paired_owner_and_closes_it(tmp_path, mo
 
         def reply(self, text, cancel_event):
             cancel_event.set()
+            service_stops[0].set()
             calls.append(("reply", text))
             return "hello back"
 

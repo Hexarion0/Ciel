@@ -7,14 +7,20 @@ import platform
 import re
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
 from ciel.config import Settings
-from ciel.controller import conversation_control, is_explicit_web_request
+from ciel.controller import (
+    AIController,
+    ControllerDecision,
+    conversation_control,
+    is_explicit_web_request,
+)
 from ciel.conversation import strip_internal_reply_notes
 from ciel.dialogue import DialogueContext
-from ciel.internet import InternetResult, InternetService
+from ciel.internet import InternetResult, InternetService, _bounded, public_urls
 from ciel.logging import get_logger
 from ciel.memory import ConversationManager, MemoryStore
 from ciel.memory.bridge import conversation_context
@@ -27,7 +33,12 @@ from ciel.persona import (
 from ciel.providers import get_model_router
 from ciel.providers.intents import answer_clock_query
 from ciel.providers.router import ModelRouter
-from ciel.web_answers import verified_web_answer, web_answer_messages
+from ciel.research import (
+    ResearchCancellation,
+    evidence_followup,
+    evidence_payload,
+    previous_observations,
+)
 
 logger = get_logger("chat.session")
 REQUEST_TIMEOUT_SECONDS = 60.0
@@ -115,15 +126,17 @@ class ChatSession:
         )
         self.context = DialogueContext(settings, self.store, self.conversation, self.memory)
         self.internet = InternetService(settings.internet)
+        self.progress: Callable[[str], None] = lambda _: None
         self._search_paused = False
         self._lock = threading.RLock()
 
     def _finish(
         self, text: str, *, provider: str = "local", model: str = "chat",
         sources: list[dict[str, str]] | None = None,
+        web_evidence: dict | None = None,
     ) -> str:
         self.conversation.add_turn("assistant", text, provider=provider, model=model,
-                                   sources=sources)
+                                   sources=sources, web_evidence=web_evidence)
         return text
 
     def reply(self, text: str, cancel_event: threading.Event | None = None) -> str:
@@ -184,13 +197,11 @@ class ChatSession:
                 return self._finish(
                     "Reminders aren't available in chat yet. I haven't scheduled one.",
                 )
-            if _DESKTOP_ACTION.match(local_text):
+            if (_DESKTOP_ACTION.match(local_text) and not public_urls(local_text)
+                    and not evidence_followup(local_text)):
                 return self._finish("Desktop actions aren't available through chat yet.")
 
             canceled = _RequestCancellation(cancel_event)
-            deadline = threading.Timer(REQUEST_TIMEOUT_SECONDS, canceled.set)
-            deadline.daemon = True
-            deadline.start()
             try:
                 return self._generate(query, canceled)
             except Exception as error:
@@ -199,13 +210,12 @@ class ChatSession:
                 logger.warning("Chat reply failed (%s).", type(error).__name__)
                 return self._finish(
                     "That request took too long. Please try again."
-                    if canceled.is_set() else
+                    if canceled.is_set() or isinstance(error, TimeoutError) else
                     "I couldn't finish that request. Please try again."
                 )
-            finally:
-                deadline.cancel()
 
     def _generate(self, query: str, canceled: threading.Event) -> str:
+        scope = self.conversation.context_session_ids()
         self._search_paused = self.context.web_paused()
         recalled = self.context.recall(query)
         prompt = self.context.system_prompt(recalled, generate=_text_prompt)
@@ -217,19 +227,49 @@ class ChatSession:
             "success or promise future work. The latest user message was typed intentionally."
         )
         messages = self.conversation.get_active_messages(system_prompt=prompt)
+        if scope != self.conversation.context_session_ids():
+            return ""
         private = ModelRouter.requires_local(messages)
-        lookup = InternetResult() if self._search_paused else self.internet.prepare(
-            query, recent_messages=messages[1:], memories=recalled,
-            cancel_event=canceled, local_only=private,
+        previous = previous_observations(query, self.conversation)
+        research_cancel = ResearchCancellation(canceled, lambda: (
+            (previous is not None or not self.context.web_paused())
+            and scope == self.conversation.context_session_ids()
+        ))
+        lookup = previous if previous is not None else (
+            InternetResult() if self._search_paused else self.internet.prepare(
+                query, recent_messages=messages[1:], memories=recalled,
+                cancel_event=research_cancel, local_only=private,
+            )
         )
         if canceled.is_set():
             raise TimeoutError("Chat request cancelled")
+        if lookup.attempted and research_cancel.refresh():
+            return ""
         if lookup.reply is not None:
-            return self._finish(lookup.reply, model="internet")
-        if lookup.attempted and not lookup.sources:
-            return self._finish(
-                "I couldn't verify that online. Please try again.", model="internet",
+            return self._finish(lookup.reply, model="internet",
+                                web_evidence=evidence_payload(lookup))
+        if lookup.attempted:
+            addresses = public_urls(lookup.query)
+            initial = ControllerDecision(
+                action="read_page" if addresses else "search", confidence=1,
+                query=addresses[0] if addresses else lookup.query or query,
+                research=True,
             )
+            report = AIController(self.router, self.settings.controller).run_web(
+                initial, query, messages, self.internet, self.progress,
+                lambda: not research_cancel.refresh(), cancel_event=research_cancel,
+                initial_lookup=lookup, channel="text", evidence_only=previous is not None,
+            )
+            if report.canceled or research_cancel.refresh():
+                return ""
+            sources = normalize_sources([source.to_dict() for source in report.sources])
+            self._finish(report.text, provider=report.provider, model=report.model,
+                         sources=sources, web_evidence=evidence_payload(report.lookup))
+            self.conversation.schedule_summary(router_or_provider=self.router)
+            return report.text + ("\n\nSources:\n" + "\n".join(
+                f"{index}. {source['title']}: {source['url']}"
+                for index, source in enumerate(sources, 1)
+            ) if sources else "")
         messages[0].content += (
             "\nApplication internet status for this turn: "
             + ("paused at the user's request. Do not search unless explicitly asked again."
@@ -239,15 +279,20 @@ class ChatSession:
                "retrieved evidence is supplied below." if lookup.attempted else
                "no lookup was performed. Do not claim a search ran.")
         )
-        if lookup.attempted:
-            messages = web_answer_messages(messages, lookup)
-        response = self.router.send(messages, temperature=0.7, max_tokens=800,
-                                    cancel_event=canceled)
+        model_cancel = _RequestCancellation(canceled)
+        try:
+            response = _bounded(
+                lambda: self.router.send(messages, temperature=0.7, max_tokens=800,
+                                         cancel_event=model_cancel),
+                time.monotonic() + REQUEST_TIMEOUT_SECONDS, canceled,
+            )
+        finally:
+            model_cancel.set()
         if canceled.is_set():
             raise TimeoutError("Chat request cancelled")
+        if scope != self.conversation.context_session_ids():
+            return ""
         reply = strip_internal_reply_notes(response.content).strip()
-        if lookup.attempted:
-            reply = verified_web_answer(reply, lookup)
         if not reply:
             raise ValueError("Provider returned no chat text")
         sources = normalize_sources([source.to_dict() for source in lookup.sources])

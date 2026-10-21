@@ -3,12 +3,14 @@
 import logging
 import re
 import sys
+import threading
 
 # Known token/secret patterns to redact automatically
 SENSITIVE_PATTERNS = [
     re.compile(r"(nvapi-[A-Za-z0-9_-]{10,})", re.IGNORECASE),
     re.compile(r"(sk-[A-Za-z0-9_-]{10,})", re.IGNORECASE),
     re.compile(r"(gsk_[A-Za-z0-9_-]{10,})", re.IGNORECASE),
+    re.compile(r"(tvly-[A-Za-z0-9_-]{10,})", re.IGNORECASE),
     re.compile(r"(?<!\w)[0-9]{5,15}:[A-Za-z0-9_-]{20,}(?!\w)"),
     re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/-]+", re.IGNORECASE),
 ]
@@ -16,6 +18,26 @@ SENSITIVE_PATTERNS = [
 
 class SecretMaskingFilter(logging.Filter):
     """Logging filter that masks sensitive API keys and tokens from log records."""
+
+    _configured_secrets: tuple[str, ...] = ()
+    _secret_lock = threading.Lock()
+
+    @classmethod
+    def register_secrets(cls, *values: str) -> None:
+        """Keep a bounded process-local set of configured keys without logging them.
+
+        Search keys have no universal prefix. Retaining recent keys also masks a key
+        after a setup reload rotates it. Ignore short placeholders that could censor
+        ordinary conversation, and cap memory used by malformed configuration values.
+        """
+        accepted = [value.strip() for value in values if isinstance(value, str)
+                    and 8 <= len(value.strip()) <= 4096]
+        if not accepted:
+            return
+        with cls._secret_lock:
+            cls._configured_secrets = tuple(dict.fromkeys(
+                (*(value for value in cls._configured_secrets if value not in accepted), *accepted),
+            ))[-64:]
 
     def filter(self, record: logging.LogRecord) -> bool:
         if isinstance(record.msg, str):
@@ -31,8 +53,12 @@ class SecretMaskingFilter(logging.Filter):
                 )
         return True
 
-    @staticmethod
-    def _redact(text: str) -> str:
+    @classmethod
+    def _redact(cls, text: str) -> str:
+        with cls._secret_lock:
+            secrets = cls._configured_secrets
+        for secret in sorted(secrets, key=len, reverse=True):
+            text = text.replace(secret, "[REDACTED_SECRET]")
         for pattern in SENSITIVE_PATTERNS:
             text = pattern.sub("[REDACTED_SECRET]", text)
         return text

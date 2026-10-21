@@ -6,6 +6,8 @@ from enum import Enum
 from typing import Any
 from urllib.parse import urlsplit
 
+from ciel.memory.web_evidence import normalize_web_evidence
+
 MAX_REPLY_SOURCES = 20
 MAX_SOURCE_URL_CHARS = 2048
 MAX_SOURCE_TITLE_CHARS = 300
@@ -110,10 +112,14 @@ class ConversationTurn:
     tokens: int = 0
     latency: float = 0.0
     sources: list[dict[str, str]] = field(default_factory=list)
+    web_evidence: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Keep citation metadata safe and separate from conversation text."""
         self.sources = normalize_sources(self.sources)
+        self.web_evidence = (
+            normalize_web_evidence(self.web_evidence) if self.role == "assistant" else {}
+        )
 
     def to_dict(self) -> dict[str, Any]:
         """Convert conversation turn to dictionary representation."""
@@ -128,4 +134,5 @@ class ConversationTurn:
             "tokens": self.tokens,
             "latency": self.latency,
             "sources": normalize_sources(self.sources),
+            "web_evidence": normalize_web_evidence(self.web_evidence),
         }

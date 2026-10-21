@@ -19,7 +19,7 @@ class ScriptedUI:
     def __init__(
         self, choices, prompts=(), *, names=(), cities=(), memory_choices=(), persona_choices=(),
         provider_choices=(), more_provider_choices=(),
-        chat_choices=(), autostart_choices=(),
+        chat_choices=(), autostart_choices=(), search_choices=(),
     ):
         self.choices = iter(choices)
         self.prompts = iter(prompts)
@@ -31,6 +31,7 @@ class ScriptedUI:
         self.more_provider_choices = iter(more_provider_choices)
         self.chat_choices = iter(chat_choices)
         self.autostart_choices = iter(autostart_choices)
+        self.search_choices = iter(search_choices)
         self.provider_menus = []
         self.summaries = []
         self.questions = []
@@ -60,6 +61,8 @@ class ScriptedUI:
             answer = next(self.provider_choices, None)
         elif title == "Add another provider?":
             answer = next(self.more_provider_choices, None)
+        elif title == "Search provider":
+            answer = next(self.search_choices, None)
         elif title == "Chat service":
             answer = next(self.chat_choices, None)
         elif title == "Chat at login":
@@ -92,13 +95,14 @@ def wizard_factory(tmp_path, monkeypatch):
     def create(
         choices, *, secrets=(), prompts=(), devices=(), names=(), cities=(), memory_choices=(),
         persona_choices=(), provider_choices=(), more_provider_choices=(),
-        chat_choices=(), autostart_choices=(),
+        chat_choices=(), autostart_choices=(), search_choices=(),
     ):
         ui = ScriptedUI(
             choices, prompts, names=names, cities=cities, memory_choices=memory_choices,
             persona_choices=persona_choices, provider_choices=provider_choices,
             more_provider_choices=more_provider_choices,
             chat_choices=chat_choices, autostart_choices=autostart_choices,
+            search_choices=search_choices,
         )
         secret_answers = iter(secrets)
         secret_prompts = []
@@ -218,6 +222,93 @@ def test_multiple_selected_providers_preserve_existing_key(tmp_path, wizard_fact
     assert len(harness.secret_prompts) == 2
     assert len(harness.ui.provider_menus) == 2
     assert "synthetic-" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("mode", ["quick", "customize"])
+@pytest.mark.parametrize("provider, label, key", [
+    ("brave", "Brave Search", "BRAVE_SEARCH_API_KEY"),
+    ("tavily", "Tavily", "TAVILY_API_KEY"),
+])
+def test_search_provider_is_selected_before_masked_key_without_network_check(
+    tmp_path, wizard_factory, capsys, monkeypatch, mode, provider, label, key,
+):
+    network = MagicMock(side_effect=AssertionError("Setup must not call a search API"))
+    monkeypatch.setattr("ciel.search_providers.search_api", network)
+    choices = [mode]
+    if mode == "customize":
+        choices.extend(["keep", "keep", "keep", None, None])
+    harness = wizard_factory(
+        [*choices, "save", "yes"], provider_choices=["done"],
+        search_choices=[provider], secrets=["synthetic-search-key"],
+    )
+    titles = []
+
+    def on_choose(title):
+        titles.append(title)
+        if title == "Search provider":
+            assert not harness.secret_prompts
+
+    harness.ui.on_choose = on_choose
+    assert setup_wizard.run_setup_wizard()
+
+    saved = dotenv_values(tmp_path / ".env")
+    assert saved["INTERNET_PROVIDER"] == provider
+    assert saved[key] == "synthetic-search-key"
+    assert harness.secret_prompts == [f"{label} API key [required]: "]
+    output = capsys.readouterr().out
+    assert "synthetic-search-key" not in output
+    assert f"{label} · key configured; connection untested" in output
+    assert titles.index("Search provider") < titles.index("Personality")
+    network.assert_not_called()
+
+
+def test_free_search_needs_no_key_and_preserves_unused_keys(tmp_path, wizard_factory):
+    original = (
+        "# Preserve unused keys\nINTERNET_PROVIDER=brave\n"
+        "brave_search_api_key='synthetic-brave-key'\nTAVILY_API_KEY=synthetic-tavily-key\n"
+    )
+    (tmp_path / ".env").write_text(original)
+    harness = wizard_factory(
+        ["quick", "save", "yes"], provider_choices=["done"], search_choices=["ddgs"],
+    )
+
+    assert setup_wizard.run_setup_wizard()
+
+    saved = dotenv_values(tmp_path / ".env")
+    assert saved["INTERNET_PROVIDER"] == "ddgs"
+    assert saved["brave_search_api_key"] == "synthetic-brave-key"
+    assert saved["TAVILY_API_KEY"] == "synthetic-tavily-key"
+    assert not harness.secret_prompts
+
+
+def test_search_setup_keeps_existing_selected_key_when_input_is_blank(tmp_path, wizard_factory):
+    (tmp_path / ".env").write_text("INTERNET_PROVIDER=tavily\nTAVILY_API_KEY=synthetic-old-key\n")
+    harness = wizard_factory(
+        ["quick", "save", "yes"], provider_choices=["done"], secrets=[""],
+    )
+    assert setup_wizard.run_setup_wizard()
+    assert harness.secret_prompts == ["Tavily API key [configured; Enter to keep]: "]
+    assert dotenv_values(tmp_path / ".env")["TAVILY_API_KEY"] == "synthetic-old-key"
+
+
+def test_search_setup_requires_key_or_explicit_free_choice(tmp_path, wizard_factory, capsys):
+    wizard_factory(
+        ["quick", "save", "yes"], provider_choices=["done"],
+        search_choices=["brave", "ddgs"], secrets=[""],
+    )
+    assert setup_wizard.run_setup_wizard()
+    assert dotenv_values(tmp_path / ".env")["INTERNET_PROVIDER"] == "ddgs"
+    assert "Brave Search needs an API key" in capsys.readouterr().out
+
+
+def test_cancel_after_search_selection_does_not_save_key(tmp_path, wizard_factory):
+    harness = wizard_factory(
+        ["quick", "cancel"], provider_choices=["done"],
+        search_choices=["tavily"], secrets=["synthetic-unsaved-key"],
+    )
+    assert not setup_wizard.run_setup_wizard()
+    assert harness.secret_prompts
+    assert not (tmp_path / ".env").exists()
 
 
 @pytest.mark.parametrize("answer", ["", "synthetic-replacement-key"])
@@ -389,8 +480,8 @@ def test_review_can_return_to_customize(tmp_path, wizard_factory):
 def test_numbered_terminal_menu_completes_customize_flow(tmp_path, wizard_factory, monkeypatch):
     harness = wizard_factory([], secrets=["", "", ""])
     output = StringIO()
-    # Customize, keep personal defaults, skip keys/chat, keep personality, Amy, save and confirm.
-    terminal_input = StringIO("2\n\n\n\n4\n\n\n3\n1\n1\n1\n1\n1\n1\n")
+    # Customize, keep personal defaults, skip keys, free search, skip chat, Amy, save and confirm.
+    terminal_input = StringIO("2\n\n\n\n4\n\n\n\n3\n1\n1\n1\n1\n1\n1\n")
     monkeypatch.setattr(
         setup_wizard, "ConsoleUI", lambda: ConsoleUI(stream=output, input_stream=terminal_input),
     )

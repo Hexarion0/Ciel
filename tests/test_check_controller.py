@@ -95,7 +95,7 @@ def test_full_check_still_validates_source_backed_report(monkeypatch, capsys):
         content = (
             json.dumps({"claims": [{"text": "That part ends at light novel volume 11.",
                                     "source": 1, "quote": quote}]})
-            if kwargs.get("max_tokens") == 700 else
+            if "WEB ANSWER FORMAT FOR THIS TURN" in _messages[0].content else
             '{"action":"answer","confidence":0.98}'
         )
         return LLMResponse(content, "synthetic", "nim")
@@ -114,4 +114,5 @@ def test_full_check_still_validates_source_backed_report(monkeypatch, capsys):
     report = json.loads(lines[-2])
     assert report["case"] == "validated report" and report["passed"] is True
     assert "11" in report["text"]
-    assert any(call.kwargs.get("max_tokens") == 700 for call in router.send.call_args_list)
+    assert any("WEB ANSWER FORMAT FOR THIS TURN" in call.args[0][0].content
+               for call in router.send.call_args_list)

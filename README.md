@@ -304,7 +304,10 @@ For searches, CIEL gives a short spoken acknowledgment, retrieves pages using an
 AI-written query, and reports the supported answer. The controller uses recent user
 context and relevant saved memories to keep the subject when you say “try again.”
 “Why can't you search?” asks for an explanation. If sources are insufficient, the
-controller can refine the query or read another page, up to three lookups per turn.
+controller can refine the query or read another page while useful new evidence appears.
+Research has no overall time cutoff. Repeated queries and consecutive attempts that
+add no evidence end the investigation; individual network/model requests still expire.
+Telegram keeps receiving messages during research, so “stop” cancels the active request.
 Local tools keep their existing allowlists and confirmation rules.
 
 Current facts can trigger automatic searches. Say “search” for an explicit lookup;
@@ -315,14 +318,32 @@ Unrelated results are discarded;
 source previews alone do not establish an exact answer.
 Web replies use a short answer with matching source excerpts, which the application
 checks before speech. Invalid output, invented quotes, and unsupported numbers receive
-an uncertainty reply. Exact anime-to-novel reading points require a page excerpt,
+an uncertainty reply or the supported subset with its gaps. News requests aim for 3–5
+recent stories with individual article links and dated source metadata. Mongolia news
+checks English and Mongolian reporting and replies in English. If a fuller summary
+cannot be supported, CIEL can show the dated article headlines she actually retrieved.
+Publication, modification, and provider-reported dates remain distinct. Exact
+anime-to-novel reading points require a page excerpt,
 not only a search preview. Web replies wait for validation before playback; ordinary
 conversation still streams when enabled.
 
-Search uses DuckDuckGo and Brave through the free `ddgs` package and needs no search API key.
+Bare public domains such as `retro.mn` work without typing `https://`. Follow-ups such as
+“tell me what you saw” or “read the second source” use retained source observations
+across the currently paired voice/chat context, including after restart. Observations
+remain separate from personal facts; a failed lookup cannot replay an older topic as
+its evidence. A later unrelated conversation ends implicit research continuation.
+
+Search defaults to the free `ddgs` package and needs no search API key. Setup also offers
+Brave Search and Tavily: choose the service first, then enter its masked API key. Only
+the selected search provider is used; saving another key never enables automatic
+fallback or spending that service's quota. Switching providers preserves saved keys.
+Optional services may charge according to your account plan. Search connections are
+not tested or charged during setup. The integrations use the official
+[Brave web/news APIs](https://api-dashboard.search.brave.com/app/documentation/news-search)
+and [Tavily Search API](https://docs.tavily.com/documentation/api-reference/endpoint/search).
 Public search and sites can block or fail requests. When no useful sources are found, CIEL gives
 a local verification-failure response and offers a retry or general background.
-The first version reads public HTML and plain text. Account actions, purchases,
+The reader supports public HTML, plain text, and news RSS/Atom links. Account actions, purchases,
 file downloads, browser automation, and PDF/media extraction remain future work.
 
 Edit `.env` and restart to change these controls:
@@ -330,10 +351,12 @@ Edit `.env` and restart to change these controls:
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `CONTROLLER_ENABLED` | `true` | Use AI decisions; `false` restores the earlier intent handlers |
-| `CONTROLLER_MODEL` | `nvidia/nemotron-3.5-lightning-30b-a3b` | Dedicated NIM decision and web report model |
+| `CONTROLLER_MODEL` | `nvidia/nemotron-3.5-lightning-30b-a3b` | Dedicated NIM action decision model; reports use normal AI routing |
 | `CONTROLLER_TIMEOUT_SECONDS` | `8.0` | Deadline for each action decision |
-| `CONTROLLER_MAX_TOOL_STEPS` | `3` | Maximum sequential web lookups per turn |
+| `CONTROLLER_MAX_TOOL_STEPS` | `3` | Consecutive lookup attempts without new evidence before stopping |
 | `INTERNET_ENABLED` | `true` | Enable public search and page reading |
+| `INTERNET_PROVIDER` | `ddgs` | Use only this search service: `ddgs`, `brave`, or `tavily` |
+| `BRAVE_SEARCH_API_KEY` / `TAVILY_API_KEY` | Empty | Credentials for the selected optional service |
 | `INTERNET_AUTOMATIC` | `true` | Search current facts without an explicit search command |
 | `INTERNET_HOME_CITY` | Empty | Default city and country for local questions |
 | `INTERNET_TIMEOUT_SECONDS` / `INTERNET_RESEARCH_TIMEOUT_SECONDS` | `8.0` / `20.0` | Budgets for each individual lookup |
@@ -348,8 +371,9 @@ until that session's history is cleared.
 Private-session decisions use Ollama. Local commands remain available without NIM.
 For other requests, an unavailable controller produces a short clarification when
 addressed and silence for background speech. It does not
-silently fall back to a larger cloud model. Each web report has a deadline of at least
-12 seconds; several lookups and speech playback can take longer than one lookup budget.
+silently fall back to a larger cloud model. Research reports use the normal configured
+AI provider routes. Each model request has a 60-second stall limit; the investigation
+can continue across further useful lookups without an overall deadline.
 
 ### Listening and performance settings
 

@@ -316,6 +316,8 @@ def test_internet_defaults_allow_free_automatic_search_without_assuming_a_city()
         internet = Settings(_env_file=None).internet
     assert internet == InternetConfig()
     assert internet.enabled and internet.automatic
+    assert internet.provider == "ddgs"
+    assert internet.brave_api_key is None and internet.tavily_api_key is None
     assert internet.home_city == ""
     assert (internet.timeout_seconds, internet.research_timeout_seconds) == (8.0, 20.0)
     assert (internet.max_results, internet.research_max_results) == (5, 8)
@@ -360,6 +362,31 @@ def test_internet_process_environment_overrides_env_file(tmp_path):
         internet = Settings(_env_file=env_file).internet
     assert not internet.enabled
     assert internet.home_city == "Dublin, Ireland"
+
+
+@pytest.mark.parametrize("provider", ["ddgs", "brave", "tavily"])
+def test_selected_search_provider_and_secret_keys_reach_structured_config(tmp_path, provider):
+    """Saved keys stay masked and do not change the chosen search provider."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        f"INTERNET_PROVIDER={provider}\nBRAVE_SEARCH_API_KEY=synthetic-brave-key\n"
+        "TAVILY_API_KEY=synthetic-tavily-key\n",
+    )
+    with patch.dict(os.environ, {}, clear=True):
+        settings = Settings(_env_file=env_file)
+    assert settings.internet.provider == provider
+    assert settings.internet.brave_api_key.get_secret_value() == "synthetic-brave-key"
+    assert settings.internet.tavily_api_key.get_secret_value() == "synthetic-tavily-key"
+    for configuration in (settings, settings.internet):
+        assert "synthetic-brave-key" not in repr(configuration)
+        assert "synthetic-tavily-key" not in configuration.model_dump_json()
+
+
+def test_unknown_search_provider_is_rejected():
+    with pytest.raises(ValueError):
+        InternetConfig(provider="unknown")
+    with patch.dict(os.environ, {}, clear=True), pytest.raises(ValueError):
+        Settings(_env_file=None, internet_provider="unknown")
 
 
 @pytest.mark.parametrize(

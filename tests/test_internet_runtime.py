@@ -1,11 +1,13 @@
 """Internet evidence reaches the shared runtime without becoming spoken citations."""
 
 import json
+from datetime import datetime, timezone
 from threading import Event
 from unittest.mock import MagicMock
 
 import pytest
 
+from ciel.config import InternetConfig
 from ciel.internet import InternetResult, InternetService, InternetSource
 from ciel.memory import MemoryItem, MemoryStore, MemoryType
 from ciel.providers.base import LLMResponse, LLMStreamChunk
@@ -15,6 +17,7 @@ from tests.test_ambient import run_callbacks
 def stub_internet(monkeypatch, result):
     """Replace retrieval only, keeping the real conversation and SQLite paths."""
     service = MagicMock()
+    service.config = InternetConfig()
     service.prepare.return_value = result
     factory = MagicMock(return_value=service)
     factory._context = InternetService._context
@@ -42,18 +45,19 @@ def test_voice_and_text_use_evidence_and_persist_sources(
     ])
     info = {"input_source": "keyboard"} if typed else {}
     _, tts, _, store, turns = run_callbacks(
-        tmp_path, monkeypatch, [("Ciel, what are today's headlines?", info)],
+        tmp_path, monkeypatch, [("Ciel, what's the current product announcement?", info)],
         router=router, streaming=streaming,
     )
     try:
         router.stream.assert_not_called()  # Web claims must be validated before playback.
         messages = router.send.call_args.args[0]
-        assert any(message.role == "system" and message.content == evidence
+        assert any(message.role == "system" and source.url in message.content
+                   and reply in message.content
                    for message in messages)
         assert "Application completed public internet retrieval" in messages[0].content
         assert "source excerpts do not answer" in messages[0].content
         assert "older assistant claims" in messages[0].content
-        expected_query = "what are today's headlines?"
+        expected_query = "what's the current product announcement?"
         if typed:
             expected_query = "Ciel, " + expected_query
         assert service.prepare.call_args.args[0] == expected_query
@@ -137,10 +141,10 @@ def test_lookup_failure_cannot_generate_a_fabricated_answer(tmp_path, monkeypatc
         tmp_path, monkeypatch, [("Ciel, what's today's news?", {})], router=router,
     )
     try:
-        router.send.assert_not_called()
+        assert all(call.kwargs["purpose"] == "controller" for call in router.send.call_args_list)
         router.stream.assert_not_called()
-        reply = "I couldn't verify that online. I can try again or give you general background."
-        assert tts.speak.call_args.args[0] == reply
+        reply = tts.speak.call_args.args[0]
+        assert "couldn't" in reply and "Made-up current news" not in reply
         assert turns[-1].provider == "local" and turns[-1].content == reply
         assert turns[-1].sources == []
     finally:
@@ -242,11 +246,10 @@ def test_logged_wrong_topic_results_cannot_reach_generation_or_speech(
     )
     try:
         assert "teensura" in search.call_args.args[0].casefold()
-        router.send.assert_not_called()
+        assert all(call.kwargs["purpose"] == "controller" for call in router.send.call_args_list)
         router.stream.assert_not_called()
-        assert tts.speak.call_args.args[0] == (
-            "I couldn't verify that online. I can try again or give you general background."
-        )
+        assert "couldn't" in tts.speak.call_args.args[0]
+        assert "Another unsupported answer" not in tts.speak.call_args.args[0]
         assert turns[-1].provider == "local" and turns[-1].sources == []
         assert "volume 8" not in turns[-1].content
     finally:
@@ -270,7 +273,10 @@ def test_web_sources_are_visible_during_playback_and_survive_interruption(
     from ciel.audio.tts import TextToSpeech
 
     reply = "Here is the news from a public announcement."
-    source = InternetSource("Public announcement", "https://example.com/news", reply)
+    source = InternetSource(
+        "Public announcement", "https://example.com/news", reply,
+        published_at=datetime.now(timezone.utc).isoformat(), date_kind="published",
+    )
     stub_internet(
         monkeypatch,
         InternetResult(attempted=True, sources=[source], context="Verified public evidence."),

@@ -6,6 +6,7 @@ import sqlite3
 import sys
 import threading
 from pathlib import Path
+from queue import Full, Queue
 
 from ciel.chat.state import ChatAlreadyRunning, ChatState, polling_lock
 from ciel.chat.telegram import TelegramClient, TelegramError, TelegramService
@@ -87,6 +88,8 @@ def _serve(settings: Settings, stop: threading.Event, *, pair: bool = False) -> 
             if not pair and state.owner(bot_id) is None:
                 stop.wait(5)
                 return 0
+            owner_id = state.owner(bot_id)
+            progress: Queue[tuple[threading.Event, str]] = Queue(maxsize=8)
 
             def reply(text: str, cancel: threading.Event) -> str:
                 nonlocal session
@@ -94,14 +97,20 @@ def _serve(settings: Settings, stop: threading.Event, *, pair: bool = False) -> 
                     from ciel.chat.session import ChatSession
                     from ciel.memory.bridge import telegram_conversation_id
 
-                    owner = state.owner(bot_id)
-                    if owner is None:
+                    if owner_id is None:
                         return ""
                     session = ChatSession(settings, channel="telegram",
-                                          session_id=telegram_conversation_id(bot_id, owner))
+                                          session_id=telegram_conversation_id(bot_id, owner_id))
+                def report_progress(message: str) -> None:
+                    try:
+                        progress.put_nowait((cancel, message))
+                    except Full:
+                        pass
+
+                session.progress = report_progress
                 return session.reply(text, cancel_event=cancel)
 
-            service = TelegramService(client, state, bot_id, reply, stop=stop)
+            service = TelegramService(client, state, bot_id, reply, stop=stop, progress=progress)
             if pair:
                 def show_code(code: str) -> None:
                     username = identity.get("username", "your bot")

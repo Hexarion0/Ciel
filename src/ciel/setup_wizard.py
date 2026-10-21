@@ -29,6 +29,11 @@ _API_PROVIDERS = (
     ("groq", "Groq", "GROQ_API_KEY"),
     ("openrouter", "OpenRouter", "OPENROUTER_API_KEY"),
 )
+_SEARCH_PROVIDERS = (
+    ("ddgs", "Free search · no account or key", None),
+    ("brave", "Brave Search", "BRAVE_SEARCH_API_KEY"),
+    ("tavily", "Tavily", "TAVILY_API_KEY"),
+)
 
 
 def TextToSpeech(*args, **kwargs):
@@ -94,6 +99,7 @@ def _initial_configuration(current_env: dict[str, str]) -> dict[str, str]:
         "CIEL_LOG_LEVEL": "INFO",
         "CIEL_PREFERRED_NAME": "",
         "INTERNET_HOME_CITY": "",
+        "INTERNET_PROVIDER": "ddgs",
         "MEMORY_LEARNING_MODE": "confirm",
         "NIM_MODEL": ProviderConfig().nim_model,
         "OLLAMA_HOST": "http://localhost:11434",
@@ -209,6 +215,50 @@ def _select_device(ui: ConsoleUI, configuration: dict[str, str], *, output: bool
         configuration[key] = selected.split(":", 1)[1]
 
 
+def _configure_search(ui: ConsoleUI, configuration: dict[str, str]) -> None:
+    """Select one search service before asking for its key; keep other saved keys."""
+    ui.step("Web search")
+    ui.note("Free search needs no account. Optional services use their own API key and quota.")
+    ui.note("Ciel uses only your selected search provider, even if other keys are saved.")
+    while True:
+        current = configuration.get("INTERNET_PROVIDER", "ddgs")
+        choices = [
+            (value, f"{name} · key configured" if key and configuration.get(key) else name)
+            for value, name, key in _SEARCH_PROVIDERS
+        ]
+        selected = ui.choose(
+            "Search provider", choices,
+            default=current if current in {value for value, _label in choices} else "ddgs",
+        )
+        _value, name, key = next(row for row in _SEARCH_PROVIDERS if row[0] == selected)
+        if key is None:
+            configuration["INTERNET_PROVIDER"] = selected
+            return
+        status = "configured; Enter to keep" if configuration.get(key, "").strip() else "required"
+        answer = getpass(f"{name} API key [{status}]: ").strip()
+        if answer:
+            configuration[key] = answer
+        if configuration.get(key, "").strip():
+            configuration["INTERNET_PROVIDER"] = selected
+            return
+        ui.note(f"{name} needs an API key. Enter a key or choose Free search.")
+
+
+def _search_label(configuration: dict[str, str]) -> str:
+    """Describe the selected search service without exposing credentials."""
+    selected = configuration.get("INTERNET_PROVIDER", "ddgs")
+    row = next((row for row in _SEARCH_PROVIDERS if row[0] == selected), None)
+    if row is None:
+        return f"{selected} · unsupported; choose a provider in setup"
+    _value, name, key = row
+    if key is None:
+        return name
+    return f"{name} · " + (
+        "key configured; connection untested" if configuration.get(key, "").strip()
+        else "key needed"
+    )
+
+
 def _enabled(configuration: dict[str, str], key: str) -> bool:
     """Interpret the boolean spellings accepted by environment configuration."""
     return configuration.get(key, "").strip().lower() in {"1", "true", "yes", "on", "y", "t"}
@@ -302,6 +352,7 @@ def _customize(
     """Walk through one decision at a time while retaining existing choices on Enter."""
     _personalize(ui, configuration)
     _configure_keys(ui, configuration)
+    _configure_search(ui, configuration)
     configure_chat(ui, configuration)
     pending_persona = _configure_persona(ui, configuration, pending_persona, original_names)
     ui.step("Voice")
@@ -350,6 +401,7 @@ def _review_configuration(
          else "Keep current personality"),
         ("AI connection", f"{', '.join(providers)} · key configured" if providers
          else "No cloud key; local tools available"),
+        ("Web search", _search_label(configuration)),
         ("Voice", _voice_label(configuration) if _enabled(configuration, "TTS_ENABLED")
          else "Voice output off"),
         ("Recognition", f"{configuration['STT_MODEL']} · {configuration['STT_DEVICE'].upper()}"),
@@ -459,6 +511,7 @@ def run_setup_wizard(*, install_components: bool = False) -> bool:
         else:
             _personalize(ui, configuration)
             _configure_keys(ui, configuration)
+            _configure_search(ui, configuration)
             configure_chat(ui, configuration)
             pending_persona = _configure_persona(ui, configuration, pending_persona, original_names)
         if install_components:

@@ -131,6 +131,7 @@ class ConversationManager:
         latency: float = 0.0,
         tokens: int = 0,
         sources: list[dict[str, str]] | None = None,
+        web_evidence: dict[str, Any] | None = None,
     ) -> int:
         """Persist a conversation turn to SQLite and return the turn ID."""
         turn = ConversationTurn(
@@ -142,6 +143,7 @@ class ConversationManager:
             latency=latency,
             tokens=tokens,
             sources=sources or [],
+            web_evidence=web_evidence or {},
         )
         turn_id = self.store.save_turn(turn)
         logger.debug(
@@ -152,6 +154,12 @@ class ConversationManager:
             len(content),
         )
         return turn_id
+
+    def latest_web_evidence(self) -> dict[str, Any]:
+        """Read source material freshly, discarding it if the owner scope changes."""
+        session_ids = self.context_session_ids()
+        evidence = self.store.get_latest_web_evidence(session_ids)
+        return evidence if session_ids == self.context_session_ids() else {}
 
     def get_recent_turns(self, limit: int | None = None) -> list[ConversationTurn]:
         """Retrieve the current owner's recent turns across channels in chronological order."""

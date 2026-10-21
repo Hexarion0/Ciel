@@ -10,6 +10,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 DEFAULT_NIM_MODEL = "nvidia/nemotron-3.5-lightning-30b-a3b"
 
 
+def _register_search_secret(value: SecretStr | None) -> SecretStr | None:
+    """Mask configured search credentials in shared logs, retrieval, and saved evidence."""
+    if value is not None:
+        from ciel.logging import SecretMaskingFilter
+
+        SecretMaskingFilter.register_secrets(value.get_secret_value())
+    return value
+
+
 def resolve_setup_values(configuration: dict[str, str]) -> dict[str, str]:
     """Expand pending dotenv references without changing their saved literal values."""
     return {
@@ -89,10 +98,13 @@ class ControllerConfig(BaseModel):
 
 
 class InternetConfig(BaseModel):
-    """Free public web search and page-reading limits."""
+    """Selected public search provider, credentials, and page-reading limits."""
 
     enabled: bool = Field(default=True, description="Enable public web retrieval")
     automatic: bool = Field(default=True, description="Search requests needing current facts")
+    provider: Literal["ddgs", "brave", "tavily"] = Field(default="ddgs")
+    brave_api_key: SecretStr | None = Field(default=None)
+    tavily_api_key: SecretStr | None = Field(default=None)
     home_city: str = Field(
         default="", max_length=200, description="Optional default city and country",
     )
@@ -102,6 +114,12 @@ class InternetConfig(BaseModel):
     research_max_results: int = Field(default=8, ge=1, le=20)
     max_pages: int = Field(default=2, ge=0, le=5)
     research_max_pages: int = Field(default=4, ge=0, le=10)
+
+    @field_validator("brave_api_key", "tavily_api_key")
+    @classmethod
+    def register_search_key(cls, value: SecretStr | None) -> SecretStr | None:
+        """Register validated keys without reading any configuration file again."""
+        return _register_search_secret(value)
 
     @field_validator("home_city", mode="before")
     @classmethod
@@ -328,6 +346,9 @@ class Settings(BaseSettings):
     # Public internet retrieval settings
     internet_enabled: bool = Field(default=True)
     internet_automatic: bool = Field(default=True)
+    internet_provider: Literal["ddgs", "brave", "tavily"] = Field(default="ddgs")
+    brave_search_api_key: SecretStr | None = Field(default=None)
+    tavily_api_key: SecretStr | None = Field(default=None)
     internet_home_city: str = Field(default="", max_length=200)
     internet_timeout_seconds: float = Field(default=8.0, ge=0.1, le=60)
     internet_research_timeout_seconds: float = Field(default=20.0, ge=0.1, le=120)
@@ -404,6 +425,12 @@ class Settings(BaseSettings):
         """Trim the configured default location before validation."""
         return value.strip() if isinstance(value, str) else value
 
+    @field_validator("brave_search_api_key", "tavily_api_key")
+    @classmethod
+    def register_search_key(cls, value: SecretStr | None) -> SecretStr | None:
+        """Mask flat environment credentials before structured configuration is accessed."""
+        return _register_search_secret(value)
+
     @field_validator("audio_input_device", "audio_output_device", mode="before")
     @classmethod
     def parse_device(cls, value: int | str | None) -> int | str | None:
@@ -465,6 +492,9 @@ class Settings(BaseSettings):
         return InternetConfig(
             enabled=self.internet_enabled,
             automatic=self.internet_automatic,
+            provider=self.internet_provider,
+            brave_api_key=self.brave_search_api_key,
+            tavily_api_key=self.tavily_api_key,
             home_city=self.internet_home_city,
             timeout_seconds=self.internet_timeout_seconds,
             research_timeout_seconds=self.internet_research_timeout_seconds,

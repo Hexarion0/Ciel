@@ -152,7 +152,7 @@ def run_desktop(
         voice_delivery_instruction,
     )
     from ciel.dialogue import DialogueContext
-    from ciel.internet import InternetResult, InternetService
+    from ciel.internet import InternetResult, InternetService, public_urls
     from ciel.latency import active_trace, latency_phase, mark
     from ciel.memory import ConversationManager, MemoryStore
     from ciel.memory.models import normalize_sources
@@ -167,6 +167,7 @@ def run_desktop(
     from ciel.providers.base import ChatMessage
     from ciel.providers.intents import answer_clock_query
     from ciel.providers.router import ModelRouter
+    from ciel.research import ResearchCancellation, evidence_payload, previous_observations
 
     logger.info("Initializing wake-word, TTS, and STT engines (STT loads in background)...")
     detector = WakeWordDetector(
@@ -505,7 +506,10 @@ def run_desktop(
             unfinished_request[0] = request
         if explicit:
             logger.info('%s You: "%s"', "⌨️" if typed else "🗣️", user_text)
+        turn_scope = conv_manager.context_session_ids()
         dialogue = private_gate_dialogue(conv_manager.get_gate_messages(limit=8), request)
+        if turn_scope != conv_manager.context_session_ids():
+            return False
         from ciel.controller import ControllerDecision
 
         reliable = wake_info.get("stt_confidence", 1.0) >= settings.audio.stt_retry_confidence
@@ -527,11 +531,20 @@ def run_desktop(
         recalled = [] if local_preflight else (
             recalled_context(query) if explicit or active else []
         )
+        prior_lookup = previous_observations(query, conv_manager) if explicit or active else None
+        if turn_scope != conv_manager.context_session_ids():
+            return False
+        addresses = public_urls(clean) if authorized and is_explicit_web_request(clean) else []
         if conversation_only:
             selected = ControllerDecision(intent="request", action="answer", confidence=1)
         elif local_preflight:
             selected = ControllerDecision(intent="request", action="local", confidence=1)
             logger.info("[system]: Matched an explicitly addressed local command.")
+        elif prior_lookup is not None:
+            selected = ControllerDecision(intent="follow_up", action="answer", confidence=1)
+        elif addresses and settings.internet.enabled:
+            selected = ControllerDecision(intent="request", action="read_page", confidence=1,
+                                          query=addresses[0])
         else:
             selected = controller.decide(
                 query, dialogue, addressed=explicit, active=active,
@@ -594,14 +607,21 @@ def run_desktop(
         request["persisted_prefix"] = len(fragments)
         pending_speech.clear()
 
-        def finish(text: str, provider="local", model="controller", sources=None) -> bool:
-            if not current():
+        def finish(text: str, provider="local", model="controller", sources=None,
+                   lookup=None, research_scope=None) -> bool:
+            if not current() or turn_scope != conv_manager.context_session_ids():
+                return False
+            if lookup is not None and research_scope is not None and (
+                research_scope != conv_manager.context_session_ids()
+                or (prior_lookup is None and dialogue_context.web_paused())
+            ):
                 return False
             metadata = normalize_sources([source.to_dict() for source in sources or []])
             if web_ui is not None:
                 web_ui.set_provider(provider, model)
             conv_manager.add_turn("assistant", strip_speech_events(text),
-                                  provider=provider, model=model, sources=metadata)
+                                  provider=provider, model=model, sources=metadata,
+                                  web_evidence=evidence_payload(lookup))
             log_reply('🤖 CIEL: "%s" [%s/%s]', text, provider, model)
 
             def started() -> None:
@@ -758,16 +778,32 @@ def run_desktop(
                 "Actual previous lookup status: " + json.dumps(controller.last_lookup)
             )
             messages = conv_manager.get_active_messages(system_prompt=prompt)
-            if selected.action in {"search", "read_page"}:
+            if turn_scope != conv_manager.context_session_ids():
+                return False
+            if selected.action in {"search", "read_page"} or prior_lookup is not None:
                 def acknowledge(text: str) -> None:
                     log_reply('🤖 CIEL: "%s" [local/progress]', text)
                     say(text, on_start=lambda: request.update(reply_started=True))
 
-                report = controller.run_web(selected, query, messages, internet, acknowledge,
-                                            current, cancel_event=cancel_event)
-                if report.canceled:
+                if prior_lookup is not None:
+                    if prior_lookup.reply is not None:
+                        return finish(prior_lookup.reply, lookup=prior_lookup)
+                    selected = ControllerDecision(action="search", confidence=1,
+                                                  query=prior_lookup.query or query)
+                scope = turn_scope
+                research_cancel = ResearchCancellation(cancel_event, lambda: (
+                    current() and (prior_lookup is not None or not dialogue_context.web_paused())
+                    and scope == conv_manager.context_session_ids()
+                ))
+                report = controller.run_web(
+                    selected, query, messages, internet, acknowledge,
+                    lambda: not research_cancel.refresh(), cancel_event=research_cancel,
+                    initial_lookup=prior_lookup, evidence_only=prior_lookup is not None,
+                )
+                if report.canceled or research_cancel.refresh():
                     return False
-                return finish(report.text, report.provider, report.model, report.sources)
+                return finish(report.text, report.provider, report.model, report.sources,
+                              lookup=report.lookup, research_scope=scope)
             if settings.audio.tts_streaming:
                 from ciel.audio.streaming import stream_reply
 
@@ -1201,6 +1237,7 @@ def run_desktop(
 
         # Build sliding context window messages with system persona & recalled memories
         mark("context_build_started")
+        legacy_scope = conv_manager.context_session_ids()
         recalled_memories = recalled_context(cleaned_query)
         system_prompt = build_system_prompt(
             cleaned_query, recalled_memories=recalled_memories,
@@ -1259,6 +1296,8 @@ def run_desktop(
             "saved. The recognized transcript remains the record."
         )
         context_messages = conv_manager.get_active_messages(system_prompt=system_prompt)
+        if not current() or legacy_scope != conv_manager.context_session_ids():
+            return False
         mark("context_build_finished", messages=len(context_messages),
              chars=sum(len(m.content) for m in context_messages))
         if earlier_fragments or added_speech or restored_fragments:
@@ -1282,9 +1321,18 @@ def run_desktop(
 
         try:
             internet_result = InternetResult()
+            retained_lookup = previous_observations(context_messages[-1].content, conv_manager)
+            if retained_lookup is not None:
+                internet_result = retained_lookup
             web_paused[0] = dialogue_context.web_paused()
             internet_private = ModelRouter.requires_local(context_messages)
-            if not internet_private and not web_paused[0]:
+            research_cancel = ResearchCancellation(cancel_event, lambda: (
+                current() and legacy_scope == conv_manager.context_session_ids()
+                and (retained_lookup is not None or not dialogue_context.web_paused())
+            ))
+            if retained_lookup is None and not internet_private and not web_paused[0]:
+                if research_cancel.refresh():
+                    return False
                 mark("internet_retrieval_started")
                 internet_result = internet.prepare(
                     context_messages[-1].content,
@@ -1293,32 +1341,17 @@ def run_desktop(
                         if message.role in {"user", "assistant"}
                     ],
                     memories=recalled_memories,
-                    cancel_event=cancel_event,
+                    cancel_event=research_cancel,
                 )
                 mark("internet_retrieval_finished", attempted=internet_result.attempted,
                      sources=len(internet_result.sources))
-            if not current():
+            research_turn = internet_result.attempted or retained_lookup is not None
+            if (
+                not current() or legacy_scope != conv_manager.context_session_ids()
+                or (research_turn and research_cancel.refresh())
+            ):
                 logger.info("Discarded an old internet lookup because speech resumed.")
                 return False
-            if (
-                internet_result.attempted and not internet_result.sources
-                and internet_result.reply is None
-            ):
-                internet_result.reply = (
-                    "I couldn't verify that online. "
-                    "I can try again or give you general background."
-                )
-            if internet_result.reply is not None:
-                conv_manager.add_turn(
-                    role="assistant", content=internet_result.reply,
-                    provider="local", model="internet",
-                )
-                log_reply('🤖 CIEL: "%s" [local/internet]', internet_result.reply)
-                say(internet_result.reply)
-                if current() and unfinished_request[0] is request:
-                    unfinished_request[0] = {}
-                _in_followup[0] = True
-                return True
             internet_status = "Public internet retrieval is enabled. "
             if internet_private:
                 internet_status = (
@@ -1368,7 +1401,10 @@ def run_desktop(
             ])
 
             def attach_reply_sources() -> None:
-                if current() and web_ui is not None and reply_sources:
+                if (
+                    current() and (not research_turn or not research_cancel.refresh())
+                    and web_ui is not None and reply_sources
+                ):
                     web_ui.set_reply_sources(
                         reply_sources, user_message_id=web_user_message_id,
                     )
@@ -1379,16 +1415,35 @@ def run_desktop(
                     attach_reply_sources()
 
             streamed = None
-            if internet_result.attempted and internet_result.sources:
-                from ciel.web_answers import verified_web_answer, web_answer_messages
+            if research_turn or internet_result.reply is not None:
+                from ciel.controller import ControllerDecision
+                from ciel.providers.base import LLMResponse
 
-                # Validate the complete evidence answer before playback, so a
-                # fabricated claim cannot already have been streamed aloud.
-                response = router.send(
-                    web_answer_messages(context_messages, internet_result),
-                    temperature=0.2, max_tokens=700,
+                addresses = public_urls(internet_result.query)
+                initial = ControllerDecision(
+                    action="read_page" if addresses else "search", confidence=1,
+                    query=addresses[0] if addresses else (
+                        internet_result.query or context_messages[-1].content
+                    ),
+                    research=True,
                 )
-                response.content = verified_web_answer(response.content, internet_result)
+                report = controller.run_web(
+                    initial, context_messages[-1].content, context_messages, internet,
+                    lambda _: None, lambda: not research_cancel.refresh(),
+                    cancel_event=research_cancel, initial_lookup=internet_result,
+                    evidence_only=retained_lookup is not None,
+                )
+                if report.canceled or research_cancel.refresh():
+                    return False
+                internet_result = report.lookup or internet_result
+                reply_sources = normalize_sources([
+                    source.to_dict() for source in report.sources
+                ])
+                response = LLMResponse(
+                    report.text,
+                    "internet" if internet_result.reply is not None else report.model or "internet",
+                    report.provider or "local",
+                )
             elif settings.audio.tts_streaming:
                 from ciel.audio.streaming import stream_reply
 
@@ -1407,7 +1462,10 @@ def run_desktop(
                 request["reply_started"] = streamed.first_audio_seconds is not None
             else:
                 response = router.send(context_messages, temperature=0.7, max_tokens=400)
-            if not current():
+            if (
+                not current() or legacy_scope != conv_manager.context_session_ids()
+                or (research_turn and research_cancel.refresh())
+            ):
                 if streamed is not None and streamed.first_audio_seconds is not None:
                     # Preserve what was generated once some of it reached playback.
                     conv_manager.add_turn(
@@ -1433,6 +1491,8 @@ def run_desktop(
             )
 
             # Record assistant turn in persistent SQLite session
+            if research_turn and research_cancel.refresh():
+                return False
             conv_manager.add_turn(
                 role="assistant",
                 content=(
@@ -1443,9 +1503,10 @@ def run_desktop(
                 model=response.model,
                 latency=response.latency,
                 sources=reply_sources,
+                web_evidence=evidence_payload(internet_result),
             )
 
-            if not loop.is_running:
+            if not loop.is_running or (research_turn and research_cancel.refresh()):
                 return False
             # Summaries run separately so the next reply never waits for an extra LLM call.
             conv_manager.schedule_summary(router_or_provider=router)

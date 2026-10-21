@@ -15,10 +15,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
+from email.utils import parsedate_to_datetime
 from html import unescape
 from html.parser import HTMLParser
 from typing import TypeVar
 from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlsplit, urlunsplit
+from xml.etree import ElementTree
 
 import httpx
 
@@ -31,8 +33,13 @@ logger = get_logger("internet")
 _T = TypeVar("_T")
 _WORKERS = threading.BoundedSemaphore(2)
 _MAX_BYTES = 262_144
-_MAX_TEXT = 4500
+_MAX_TEXT = 9000
 _URL = re.compile(r"https?://[^\s<>\"']+", re.I)
+_BARE_URL = re.compile(
+    r"(?<![\w@/:.\\-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+    r"[a-z]{2,63}(?::\d+)?(?:/[^\s<>\"']*)?(?:\?[^\s<>\"']*)?", re.I,
+)
+_NEWS = re.compile(r"\b(?:news|headlines|briefing)\b|мэдээ", re.I)
 _EXPLICIT = re.compile(
     r"\b(?:search(?:\s+(?:for|online|the web|the internet))?|look\s+up|"
     r"research|compare|double[- ]check|fact[- ]check|find\b.+\bonline)\b", re.I,
@@ -149,6 +156,11 @@ class InternetSource:
     url: str
     snippet: str = ""
     content: str = ""
+    published_at: str = ""
+    fetched_at: str = ""
+    publisher: str = ""
+    date_kind: str = ""
+    discovered_links: list[tuple[str, str, str]] = field(default_factory=list, repr=False)
 
     def to_dict(self) -> dict[str, str]:
         """Return lightweight metadata for terminal and desktop source links."""
@@ -164,6 +176,50 @@ class InternetResult:
     context: str = ""
     reply: str | None = None
     query: str = ""
+    kind: str = "web"
+    retrieved_at: str = ""
+
+
+def is_news_query(query: str) -> bool:
+    """Identify a request for news without interpreting page text as intent."""
+    return bool(_NEWS.search(query))
+
+
+def public_urls(text: str) -> list[str]:
+    """Recognize explicit links and bare public domains without contacting DNS.
+
+    Every accepted URL is still revalidated and DNS-pinned by the public reader.
+    File-like names, email addresses, credentials, and local endpoints are excluded.
+    """
+    explicit = list(_URL.finditer(text))
+    matches = [(match.start(), match.end(), match.group()) for match in explicit]
+    blocked_suffixes = {
+        "py", "pyc", "sh", "bash", "zsh", "md", "txt", "json", "toml", "yaml", "yml",
+        "ini", "cfg", "conf", "env", "log", "db", "sqlite", "zip", "tar", "gz", "jpg",
+        "jpeg", "png", "mp3", "mp4", "pdf", "exe", "dll", "csv", "docx", "xlsx",
+    }
+    for match in _BARE_URL.finditer(text):
+        if any(start <= match.start() < end for start, end, _value in matches):
+            continue
+        candidate = match.group().rstrip(".,!?:;)]}")
+        host = (urlsplit("https://" + candidate).hostname or "").casefold()
+        if host.rsplit(".", 1)[-1] in blocked_suffixes:
+            continue
+        # Do not salvage a domain from file:// paths or a credentialed expression.
+        prefix = text[max(0, match.start() - 128):match.start()]
+        if re.search(r"(?:\S*://\S*|\S*@|[/\\][^\s]*)$", prefix):
+            continue
+        matches.append((match.start(), match.end(), "https://" + candidate))
+    urls: dict[str, str] = {}
+    for _start, _end, candidate in sorted(matches):
+        try:
+            url = _public_url(unescape(candidate.rstrip(".,!?:;)]}")))
+        except ValueError:
+            continue
+        urls.setdefault(source_identity(url), url)
+        if len(urls) == 4:
+            break
+    return list(urls.values())
 
 
 def _clean(text: str, limit: int = 500) -> str:
@@ -272,7 +328,7 @@ def _topic_terms(text: str) -> set[str]:
 
 def _compact(text: str) -> str:
     """Remove spoken request scaffolding without repairing names, numbers, or spellings."""
-    if _URL.search(text):
+    if public_urls(text):
         return _clean(text)
     text = re.sub(r"^/(?:fast|strong|deep)\s+", "", text.strip(), flags=re.I)
     text = re.sub(r"^(?:(?:yo|hey|please|okay|ok)[, ]+)+", "", text, flags=re.I)
@@ -432,6 +488,84 @@ def _source_score(query: str, source: InternetSource) -> tuple[int, int]:
     title = _topic_terms(source.title)
     preview = _topic_terms(source.snippet)
     return len(expected & title), len(expected & (title | preview))
+
+
+def _date_score(value: str) -> float:
+    """Rank a supplied date without replacing missing dates with retrieval time."""
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        try:
+            parsed = parsedate_to_datetime(value)
+        except (ValueError, TypeError, OverflowError):
+            return 0.0
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    try:
+        return parsed.timestamp()
+    except (ValueError, OverflowError):
+        return 0.0
+
+
+def _article_url(url: str) -> bool:
+    """Distinguish likely story paths from language roots and news category indexes."""
+    path = urlsplit(url).path.casefold()
+    if re.search(r"(?:^|/)(?:feeds?|rss|atom)(?:[/.]|$)|\.(?:rss|xml)$", path):
+        return False
+    parts = [part for part in path.split("/") if part]
+    generic = {"en", "mn", "eng", "english", "news", "latest", "world", "mongolia",
+               "home", "index", "index.html", "politics", "business", "sports", "feed",
+               "rss", "rss.xml", "atom.xml", "category", "categories"}
+    return bool(parts and (parts[-1] not in generic) and (
+        len(parts) > 1 or len(parts[-1]) >= 12 or any(char.isdigit() for char in parts[-1])
+    ))
+
+
+def _news_relevant(query: str, source: InternetSource) -> bool:
+    """Let English news requests use Mongolian reporting while retaining topical checks."""
+    topic = _NEWS.sub(" ", query)
+    topic = re.sub(r"\bsite:\S+", " ", topic, flags=re.I)
+    topic = re.sub(r"\b(?:today|latest|recent|current|brief|stories|story)\b", " ", topic,
+                   flags=re.I)
+    topic = re.sub(r"\b(?:сүүлийн|үеийн|өнөөдрийн|өнөөдөр|хамгийн|саяхны)\b", " ", topic,
+                   flags=re.I)
+    topic = re.sub(r"\bмонгол(?:ын)?(?:\s+улс(?:ын)?)?\b", "Mongolia", topic, flags=re.I)
+    # Inner Mongolia is a region of China, not the requested country. Keep a
+    # cross-border story only when it also refers to Mongolia independently.
+    if re.search(r"\bmongolia(?:n)?\b", topic, re.I) and not re.search(
+        r"\binner\b|Өвөр", topic, re.I,
+    ):
+        text = source.title + " " + source.snippet + " " + source.content
+        inner = re.compile(r"\bInner\s+Mongolia(?:n)?\b|\bӨвөр\s+Монгол\w*", re.I)
+        if inner.search(text) and not re.search(
+            r"\bMongolia(?:n)?\b|\bМонгол\w*", inner.sub(" ", text), re.I,
+        ):
+            return False
+    if not _topic_terms(topic):
+        return True
+    if _relevant(topic, source):
+        return True
+    words = _topic_terms(topic)
+    if words <= {"mongolia", "mongolian", "монгол", "монголын"}:
+        return bool(re.search(r"монгол|улаанбаатар|Mongolia", source.title + " "
+                              + source.snippet + " " + source.content, re.I))
+    return False
+
+
+def _excerpt(content: str, query: str, limit: int = _MAX_TEXT) -> str:
+    """Keep the introduction and query-bearing passage instead of blindly slicing a page."""
+    content = _clean(content, _MAX_BYTES)
+    if len(content) <= limit:
+        return content
+    terms = _topic_terms(query) - {"news", "headlines"}
+    if not terms:
+        return content[:limit]
+    windows = [(start, content[start:start + limit - 1500])
+               for start in range(0, len(content), 1000)]
+    start, passage = max(windows, key=lambda item: len(terms & _topic_terms(item[1])))
+    if start < 1500:
+        return content[:limit]
+    return content[:1400] + " […] " + passage
 
 
 def _relevant(query: str, source: InternetSource) -> bool:
@@ -662,9 +796,34 @@ class _PageText(HTMLParser):
         self._hidden: list[str] = []
         self._preferred: list[str] = []
         self._title = False
+        self.published_at = ""
+        self.date_kind = ""
+        self.publisher = ""
+        self.links: list[tuple[str, str, str]] = []
+        self._link: tuple[str, list[str]] | None = None
+        self._jsonld: list[str] | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attributes = dict(attrs)
+        if tag == "meta":
+            key = (attributes.get("property") or attributes.get("name") or "").casefold()
+            value = _clean(attributes.get("content") or "", 160)
+            if key in {"article:published_time", "datepublished", "date", "pubdate",
+                       "publication_date", "dc.date.issued", "parsely-pub-date"}:
+                if not self.published_at or (key != "date" and self.date_kind != "published"):
+                    self.published_at = value
+                    self.date_kind = "reported" if key == "date" else "published"
+            if key in {"article:modified_time", "datemodified", "last-modified"}:
+                if not self.published_at:
+                    self.published_at, self.date_kind = value, "modified"
+            if key in {"og:site_name", "application-name", "publisher"}:
+                self.publisher = self.publisher or value
+        if tag == "script" and attributes.get("type", "").casefold() == "application/ld+json":
+            self._jsonld = []
+        if tag == "link" and (attributes.get("type") or "").casefold() in {
+            "application/rss+xml", "application/atom+xml",
+        }:
+            self.links.append((attributes.get("href") or "", "News feed", ""))
         hidden = (
             tag in self._IGNORED or "hidden" in attributes
             or attributes.get("aria-hidden") == "true"
@@ -679,8 +838,21 @@ class _PageText(HTMLParser):
             self._title = True
         if tag in {"main", "article"}:
             self._preferred.append(tag)
+        if tag == "time" and attributes.get("datetime"):
+            if not self.published_at:
+                self.published_at = _clean(attributes["datetime"], 100)
+                self.date_kind = (
+                    "published" if attributes.get("itemprop") == "datePublished"
+                    else "modified" if attributes.get("itemprop") == "dateModified"
+                    else "reported"
+                )
+        if tag == "a" and attributes.get("href"):
+            self._link = (attributes["href"], [])
 
     def handle_endtag(self, tag: str) -> None:
+        if tag == "script" and self._jsonld is not None:
+            self._metadata("".join(self._jsonld))
+            self._jsonld = None
         if self._hidden:
             if tag in self._hidden:
                 self._hidden = self._hidden[:len(self._hidden) - self._hidden[::-1].index(tag) - 1]
@@ -689,16 +861,79 @@ class _PageText(HTMLParser):
             self._title = False
         if tag in self._preferred:
             self._preferred.remove(tag)
+        if tag == "a" and self._link is not None:
+            href, label = self._link
+            self.links.append((href, _clean(" ".join(label), 200), ""))
+            self._link = None
 
     def handle_data(self, data: str) -> None:
+        if self._jsonld is not None:
+            self._jsonld.append(data)
         if self._hidden:
             return
         if self._title:
             self.title.append(data)
             return
         self.text.append(data)
+        if self._link is not None:
+            self._link[1].append(data)
         if self._preferred:
             self.article.append(data)
+
+    def _metadata(self, text: str) -> None:
+        """Read publication metadata only; JSON-LD article bodies remain untrusted scripts."""
+        try:
+            value = json.loads(text)
+        except (ValueError, RecursionError):
+            return
+        pending = value[:20] if isinstance(value, list) else [value]
+        index = 0
+        while index < min(len(pending), 40):
+            item = pending[index]
+            index += 1
+            if not isinstance(item, dict):
+                continue
+            graph = item.get("@graph")
+            if isinstance(graph, list):
+                pending.extend(graph[:20])
+            if self.date_kind != "published" and isinstance(item.get("datePublished"), str):
+                self.published_at = _clean(item["datePublished"], 100)
+                self.date_kind = "published"
+            if not self.published_at and isinstance(item.get("dateModified"), str):
+                self.published_at = _clean(item["dateModified"], 100)
+                self.date_kind = "modified"
+            publisher = item.get("publisher")
+            if isinstance(publisher, dict):
+                publisher = publisher.get("name")
+            if not self.publisher and isinstance(publisher, str):
+                self.publisher = _clean(publisher, 160)
+
+
+def _feed_text(text: str) -> tuple[str, str, list[tuple[str, str, str]]]:
+    """Read bounded RSS/Atom entries as leads without promoting summaries to articles."""
+    root = ElementTree.fromstring(text)
+    entries = [node for node in root.iter()
+               if node.tag.rsplit("}", 1)[-1] in {"item", "entry"}][:30]
+    links: list[tuple[str, str, str]] = []
+    titles = []
+    for entry in entries:
+        fields = {node.tag.rsplit("}", 1)[-1]: node for node in entry}
+        title = _clean("".join(fields["title"].itertext()), 200) if "title" in fields else ""
+        link = next((node for node in entry if node.tag.rsplit("}", 1)[-1] == "link"
+                     and node.get("rel", "alternate") == "alternate"
+                     and node.get("type", "text/html") in {"text/html", "application/xhtml+xml"}),
+                    None)
+        href = (link.get("href") or link.text or "").strip() if link is not None else ""
+        date = next((fields[key].text or "" for key in ("published", "pubDate", "updated")
+                     if key in fields), "")
+        if href and title:
+            links.append((href, title, _clean(date, 100)))
+            titles.append(title)
+    if not links:
+        raise ValueError("The public feed contained no article links")
+    title = next((node.text or "" for node in root.iter()
+                  if node.tag.rsplit("}", 1)[-1] == "title"), "News feed")
+    return _clean(title, 160), " | ".join(titles), links
 
 
 class InternetService:
@@ -759,7 +994,11 @@ class InternetService:
                 explicit = explicit or bool(_EXPLICIT.search(previous))
             elif _LOCATION_NEEDED.search(previous) and not _request_city(previous) and _city(clean):
                 clean = _clean(f"{previous} in {_city(clean)}")
-        urls = [match.group().rstrip(".,!?:;)]}") for match in _URL.finditer(clean)][:4]
+        urls = public_urls(clean)
+        if not urls and _URL.search(clean):
+            return InternetResult(
+                attempted=True, query=clean, context=self._context([], failed=True, query=clean),
+            )
         if not urls and not explicit and not (
             self.config.automatic and (automatic or correction or _needs_current(clean))
         ):
@@ -804,7 +1043,9 @@ class InternetService:
         if not clean:
             return InternetResult(reply="What should I look up?")
         if urls is None:
-            urls = [clean] if read_page else []
+            urls = public_urls(clean)
+            if read_page and not urls:
+                urls = [clean]
         logger.info("[system]: %s: %s", "Reading public pages" if urls else "Searching", clean)
         budget = (
             self.config.research_timeout_seconds if research else self.config.timeout_seconds
@@ -824,7 +1065,9 @@ class InternetService:
                 ),
                 deadline, cancel_event,
             )
-        except Exception:
+        except Exception as error:
+            from ciel.search_providers import SearchProviderError
+
             if cancel_event is not None and cancel_event.is_set():
                 return InternetResult(attempted=True, query=clean)
             with progress_lock:
@@ -837,17 +1080,41 @@ class InternetService:
             return InternetResult(
                 attempted=True, query=clean, sources=sources,
                 context=self._context(sources, failed=not sources, query=clean),
+                kind="news" if is_news_query(clean) else "web",
+                reply=(str(error) if not sources and isinstance(error, SearchProviderError)
+                       else None),
             )
 
     def _search(
         self, query: str, maximum: int, deadline: float, canceled: threading.Event | None,
     ) -> list[dict]:
-        from ddgs import DDGS
-
         remaining = _remaining(deadline, canceled)
         # The outer daemon enforces the total budget even if DDGS exceeds its own timeout.
         timeout = max(1, math.ceil(min(remaining * 0.6, 8.0)))
-        results = DDGS(timeout=timeout).text(
+        if getattr(self.config, "provider", "ddgs") != "ddgs":
+            from ciel.search_providers import search_api
+
+            return search_api(self.config, query, news=is_news_query(query), timeout=timeout,
+                              maximum=min(maximum * 2, 20))
+        from ddgs import DDGS
+
+        client = DDGS(timeout=timeout)
+        if is_news_query(query):
+            subject = re.fullmatch(r"(?:news|headlines)\s+(.+)", query, re.I)
+            news_query = f"{subject.group(1)} news" if subject else query
+            freshness = "d" if re.search(r"\b(?:today|tonight)\b", query, re.I) else "w"
+            if re.search(r"\bmonth\b", query, re.I):
+                freshness = "m"
+            try:
+                news = client.news(news_query, timelimit=freshness,
+                                   max_results=min(maximum * 2, 20))
+                _remaining(deadline, canceled)
+                if isinstance(news, (list, tuple)) and any(isinstance(item, dict) for item in news):
+                    return list(news)[:min(maximum * 2, 20)]
+            except Exception:
+                _remaining(deadline, canceled)
+                logger.debug("Free news search unavailable; trying the selected free web backend")
+        results = client.text(
             query, backend="duckduckgo,brave", max_results=min(maximum * 2, 20),
         )
         _remaining(deadline, canceled)
@@ -861,16 +1128,20 @@ class InternetService:
         _remaining(deadline, canceled)
         maximum = self.config.research_max_results if research else self.config.max_results
         pages = self.config.research_max_pages if research else self.config.max_pages
+        news = is_news_query(query)
+        relevant = _news_relevant if news else _relevant
         sources: list[InternetSource] = []
         if urls:
             read_deadline = deadline - min(0.15, _remaining(deadline, canceled) * 0.1)
             unique_urls = list({source_identity(url): url for url in urls}.values())
             for url in unique_urls[:pages]:
                 try:
-                    sources.append(self._read_page(
-                        url, min(read_deadline, time.monotonic() + (4.0 if research else 2.0)),
+                    page = self._read_page(
+                        url, min(read_deadline, time.monotonic() + (12.0 if research else 8.0)),
                         canceled,
-                    ))
+                    )
+                    page.content = _excerpt(page.content, query)
+                    sources.append(page)
                     remember_sources(sources)
                 except (ValueError, OSError, httpx.HTTPError, TimeoutError):
                     _remaining(deadline, canceled)
@@ -894,35 +1165,80 @@ class InternetService:
                     # Aggregate answer pages provide no attributable original source.
                     continue
                 snippet = _clean(str(result.get("body") or result.get("snippet") or ""), 800)
-                if not snippet:
+                if not snippet and not (news and pages and result.get("title")):
                     continue
                 source = InternetSource(
                     _clean(str(result.get("title") or urlsplit(url).hostname), 160), url, snippet,
+                    published_at=_clean(str(result.get("date") or result.get("published") or ""),
+                                        100),
+                    fetched_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    publisher=_clean(str(result.get("publisher") or result.get("source") or ""),
+                                     160),
+                    date_kind=_clean(str(result.get("date_kind") or "reported"), 32)
+                              if result.get("date") or result.get("published") else "",
                 )
-                if _relevant(query, source):
+                if relevant(query, source):
                     identity = source_identity(url)
                     previous = candidates.get(identity)
                     if previous is None or _source_score(query, source) > _source_score(
                         query, previous,
                     ):
                         candidates[identity] = source
-            sources = sorted(candidates.values(), key=lambda item: _source_score(query, item),
-                             reverse=True)[:maximum]
+            def score(source: InternetSource) -> tuple:
+                if news:
+                    return (_article_url(source.url), _date_score(source.published_at),
+                            _source_score(query, source))
+                return _source_score(query, source)
+
+            sources = sorted(candidates.values(), key=score, reverse=True)[:maximum]
             remember_sources(sources)
             read_deadline = deadline - min(0.15, _remaining(deadline, canceled) * 0.1)
-            for index, source in enumerate(sources[:pages]):
+            pending = list(sources)
+            visited: set[str] = set()
+            for _read in range(pages):
+                if not pending:
+                    break
+                source = pending.pop(0)
+                identity = source_identity(source.url)
+                if identity in visited:
+                    continue
+                visited.add(identity)
                 try:
                     page = self._read_page(
                         source.url,
-                        min(read_deadline, time.monotonic() + (4.0 if research else 2.0)),
+                        min(read_deadline, time.monotonic() + (12.0 if research else 8.0)),
                         canceled,
                     )
                     # Redirects and generic landing pages can differ from the search
                     # preview. Check the page alone before promoting it to read evidence.
-                    if not _relevant(query, page):
+                    if not relevant(query, page):
                         continue
                     page.snippet = source.snippet
-                    sources[index] = page
+                    page.published_at = page.published_at or source.published_at
+                    page.date_kind = page.date_kind or source.date_kind
+                    page.publisher = page.publisher or source.publisher
+                    page.content = _excerpt(page.content, query)
+                    sources[sources.index(source)] = page
+                    if news and not _article_url(page.url):
+                        additions = []
+                        known = {source_identity(item.url) for item in sources}
+                        for link, title, published_at in page.discovered_links:
+                            candidate = InternetSource(title or link, link,
+                                                       published_at=published_at,
+                                                       date_kind="reported" if published_at else "")
+                            if source_identity(link) in known or source_identity(link) in visited:
+                                continue
+                            if _article_url(link) and not relevant(query, candidate):
+                                continue
+                            if not _article_url(link) and title != "News feed":
+                                continue
+                            additions.append(candidate)
+                            known.add(source_identity(link))
+                        additions.sort(key=score, reverse=True)
+                        # A homepage is a lead, not the story. Read discovered articles
+                        # before spending the remaining request allowance on other indexes.
+                        pending[:0] = additions[:maximum]
+                        sources.extend(additions[:maximum])
                     remember_sources(sources)
                 except (ValueError, OSError, httpx.HTTPError, TimeoutError):
                     if canceled is not None and canceled.is_set():
@@ -938,6 +1254,11 @@ class InternetService:
             if previous is None or (source.content and not previous.content):
                 unique[identity] = source
         sources = list(unique.values())
+        if news:
+            sources.sort(key=lambda item: (bool(item.content) and _article_url(item.url),
+                                          _article_url(item.url), _date_score(item.published_at)),
+                         reverse=True)
+        sources = sources[:maximum]
         remember_sources(sources)
         _remaining(deadline, canceled)
         if not sources:
@@ -945,6 +1266,7 @@ class InternetService:
         return InternetResult(
             attempted=True, sources=sources, query=query,
             context=self._context(sources, failed=not sources, query=query),
+            kind="news" if news else "web",
         )
 
     def _read_page(
@@ -963,13 +1285,14 @@ class InternetService:
                 raise ValueError("The page does not resolve to public addresses")
             address = addresses[0][4][0]
             pinned = httpx.URL(url).copy_with(host=address)
-            timeout = min(_remaining(deadline, canceled), 4.0)
+            timeout = min(_remaining(deadline, canceled), 12.0)
             # A new client per hop drops cookies; trust_env=False disables ambient proxies/auth.
             with httpx.Client(timeout=timeout, follow_redirects=False, trust_env=False) as client:
                 with client.stream(
                     "GET", pinned,
                     headers={"Host": parsed.netloc, "User-Agent": "CIEL/0.3 public-page reader",
-                             "Accept": "text/html,application/xhtml+xml,text/plain",
+                             "Accept": "text/html,application/xhtml+xml,text/plain,"
+                                       "application/rss+xml,application/atom+xml",
                              "Accept-Encoding": "identity"},
                     extensions={"sni_hostname": host},
                 ) as response:
@@ -982,7 +1305,9 @@ class InternetService:
                         continue
                     response.raise_for_status()
                     media_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
-                    if media_type not in {"text/html", "application/xhtml+xml", "text/plain"}:
+                    if media_type not in {"text/html", "application/xhtml+xml", "text/plain",
+                                          "application/rss+xml", "application/atom+xml",
+                                          "application/xml", "text/xml"}:
                         raise ValueError("The page is not supported public text")
                     if "attachment" in response.headers.get("content-disposition", "").lower():
                         raise ValueError("File downloads are not supported")
@@ -993,19 +1318,44 @@ class InternetService:
                     except LookupError:
                         decoded = body.decode("utf-8", errors="replace")
             title = host
-            if media_type != "text/plain":
+            published_at = publisher = date_kind = ""
+            links: list[tuple[str, str, str]] = []
+            if media_type in {"application/rss+xml", "application/atom+xml",
+                              "application/xml", "text/xml"}:
+                try:
+                    title, decoded, links = _feed_text(decoded)
+                except ElementTree.ParseError as error:
+                    raise ValueError("Invalid public news feed") from error
+            elif media_type != "text/plain":
                 parser = _PageText()
                 parser.feed(decoded)
                 decoded = " ".join(parser.article or parser.text)
                 title = " ".join(parser.title) or host
-            content = _clean(decoded, _MAX_TEXT)
+                published_at, publisher, links = parser.published_at, parser.publisher, parser.links
+                date_kind = parser.date_kind
+            content = _clean(decoded, 48_000)
             if not content or re.search(
                 r"(?:just a moment|verify you are human|access denied|captcha)",
                 title + " " + content[:300], re.I,
             ):
                 raise ValueError("The public page did not provide readable text")
             _remaining(deadline, canceled)
-            return InternetSource(_clean(title, 160), url, content=content)
+            discovered = []
+            origin = urlsplit(url)
+            for href, label, date in links[:200]:
+                try:
+                    linked = _public_url(urljoin(url, href))
+                except ValueError:
+                    continue
+                target = urlsplit(linked)
+                if target.scheme == origin.scheme and target.netloc == origin.netloc:
+                    discovered.append((linked, label, date))
+            return InternetSource(
+                _clean(title, 160), url, content=content, published_at=published_at,
+                fetched_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                publisher=publisher, date_kind=date_kind,
+                discovered_links=discovered,
+            )
         raise ValueError("Too many public-page redirects")
 
     @staticmethod
@@ -1042,7 +1392,9 @@ class InternetService:
         records = [
             {"source": index + 1, "title": source.title, "url": source.url,
              "kind": "page_excerpt" if source.content else "search_snippet_only",
-             "search_snippet": source.snippet, "page_excerpt": source.content}
+             "search_snippet": source.snippet, "page_excerpt": source.content,
+             "published_at": source.published_at or "unknown", "fetched_at": source.fetched_at,
+             "publisher": source.publisher, "date_kind": source.date_kind}
             for index, source in enumerate(sources)
         ]
         outcome = "failed" if failed else "read" if any(s.content for s in sources) else "searched"
