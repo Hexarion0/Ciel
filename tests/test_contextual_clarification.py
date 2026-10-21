@@ -92,17 +92,17 @@ def test_application_or_failure_clarifications_never_gain_context_resolution(
     assert choice.resolve_with_context is False
 
 
-@pytest.mark.parametrize("rechecked,expected", [
-    (_decision(), True),
-    (LLMResponse("invalid JSON", "test", "test"), False),
-    (TimeoutError("synthetic recheck timeout"), False),
-    (_decision("silent", intent="other_listener"), False),
+@pytest.mark.parametrize("repaired,action,expected", [
+    (_decision(), "clarify", True),
+    (LLMResponse("invalid JSON", "test", "test"), "clarify", False),
+    (TimeoutError("synthetic repair timeout"), "clarify", False),
+    (_decision("silent", intent="other_listener"), "answer", False),
 ])
-def test_only_valid_model_recheck_clarification_can_use_context(rechecked, expected):
-    """A second model decision has the same context path and failure guards as the first."""
+def test_only_valid_repaired_model_clarification_can_use_context(repaired, action, expected):
+    """Only validated repair output can delegate an admitted follow-up to the reply stage."""
     router = MagicMock()
     router.send.side_effect = [
-        _decision("silent", intent="other_listener"), rechecked,
+        LLMResponse("invalid JSON", "test", "test"), repaired,
     ]
 
     choice = AIController(router, ControllerConfig()).decide(
@@ -111,8 +111,9 @@ def test_only_valid_model_recheck_clarification_can_use_context(rechecked, expec
     )
 
     assert router.send.call_count == 2
-    assert choice.action == "clarify"
+    assert choice.action == action
     assert choice.resolve_with_context is expected
+    assert not choice.query
 
 
 def test_strict_unaddressed_followup_cannot_use_contextual_resolution():

@@ -73,11 +73,12 @@ reminders remain future work.
 
 ## Public internet retrieval
 
-The lightweight NIM controller selects search or public HTML/text page reading,
+The AI controller uses configured providers to select search or public HTML/text page reading,
 speaks a short acknowledgment, then retrieves evidence before reporting an answer.
-It can refine a query or read a page when evidence is insufficient, within
-`CONTROLLER_MAX_TOOL_STEPS`. This path runs separately from the trusted action
-registry. It retrieves evidence and source links; it does not execute website
+It can refine a query or read a page when evidence is insufficient, stopping after
+`CONTROLLER_MAX_TOOL_STEPS` consecutive attempts add no evidence. This path runs
+separately from the trusted action registry. It retrieves evidence and source links;
+it does not execute website
 account actions, downloads, purchases, or browser automation. Tool output cannot
 authorize a local action.
 

@@ -192,6 +192,9 @@ account. `NIM_FALLBACK_MODEL` selects a different conversation backup when neede
 the default matches the primary model and avoids a duplicate attempt. The official
 API example is available from [NVIDIA](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b).
 
+OpenRouter defaults to its official [Free Models Router](https://openrouter.ai/docs/guides/routing/routers/free-router),
+`openrouter/free`. Its available underlying model and response speed can vary.
+
 Ollama is an optional local fallback, not bundled with CIEL. It must be running
 at `OLLAMA_HOST` with the requested model installed (currently `llama3.2` by default).
 No provider setup is needed for local clock, memory, or supported desktop actions.
@@ -293,12 +296,19 @@ available and the old personality file is preserved.
 
 Explicitly addressed, reliably transcribed clock, memory, and supported desktop
 commands run through local handlers without an AI request. Other transcripts and
-typed messages go to an AI controller, which chooses silence, a reply,
-a clarification, web search, page reading, or an existing local tool. By default it uses
-`nvidia/nemotron-3.5-lightning-30b-a3b` through your NIM account. Conversation replies
-use the normal provider settings. Stop and mute controls remain immediate.
-Existing `CONTROLLER_MODEL` overrides are preserved. If your selected endpoint
-returns 404, choose a model verified to answer through your account, then restart CIEL.
+typed messages admitted to the conversation go to an AI controller, which chooses
+a reply, clarification, web search, page reading, or an existing local tool.
+The model cannot discard an admitted turn as “stay silent.” Inactive room speech
+and clear speech to another person are filtered before this decision; stop and
+mute controls remain immediate.
+
+Decisions use configured providers in order: NIM, Groq, OpenRouter, then Ollama.
+`CONTROLLER_MODEL` selects the NIM decision model, currently
+`nvidia/nemotron-3.5-lightning-30b-a3b`; other providers use their own default model.
+A failed provider can fall back to another configured provider within the same
+decision deadline. Malformed decision JSON gets one format retry within that
+deadline. Existing model overrides are preserved. Conversation replies and
+research reports use normal provider routing.
 
 For searches, CIEL gives a short spoken acknowledgment, retrieves pages using an
 AI-written query, and reports the supported answer. The controller uses recent user
@@ -333,7 +343,8 @@ across the currently paired voice/chat context, including after restart. Observa
 remain separate from personal facts; a failed lookup cannot replay an older topic as
 its evidence. A later unrelated conversation ends implicit research continuation.
 
-Search defaults to the free `ddgs` package and needs no search API key. Setup also offers
+Search defaults to the free `ddgs` package, using DuckDuckGo and public Brave web
+search backends without a search API key. Setup also offers
 Brave Search and Tavily: choose the service first, then enter its masked API key. Only
 the selected search provider is used; saving another key never enables automatic
 fallback or spending that service's quota. Switching providers preserves saved keys.
@@ -351,7 +362,7 @@ Edit `.env` and restart to change these controls:
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `CONTROLLER_ENABLED` | `true` | Use AI decisions; `false` restores the earlier intent handlers |
-| `CONTROLLER_MODEL` | `nvidia/nemotron-3.5-lightning-30b-a3b` | Dedicated NIM action decision model; reports use normal AI routing |
+| `CONTROLLER_MODEL` | `nvidia/nemotron-3.5-lightning-30b-a3b` | NIM action decision model; other AI providers use their own defaults |
 | `CONTROLLER_TIMEOUT_SECONDS` | `8.0` | Deadline for each action decision |
 | `CONTROLLER_MAX_TOOL_STEPS` | `3` | Consecutive lookup attempts without new evidence before stopping |
 | `INTERNET_ENABLED` | `true` | Enable public search and page reading |
@@ -368,12 +379,11 @@ to your city and country, or tell CIEL the location when asked; a timezone does
 not establish your home city. `/local` keeps the conversation session private:
 internet retrieval stays disabled for follow-ups and after restarting CIEL,
 until that session's history is cleared.
-Private-session decisions use Ollama. Local commands remain available without NIM.
-For other requests, an unavailable controller produces a short clarification when
-addressed and silence for background speech. It does not
-silently fall back to a larger cloud model. Research reports use the normal configured
-AI provider routes. Each model request has a 60-second stall limit; the investigation
-can continue across further useful lookups without an overall deadline.
+Private-session decisions use only Ollama. Local commands remain available without
+a cloud provider. If every eligible controller provider fails, an admitted request
+receives a short clarification. Background speech stays outside the conversation.
+Research model requests have a 60-second stall limit; the investigation can continue
+across further useful lookups without an overall deadline.
 
 ### Listening and performance settings
 
@@ -418,9 +428,10 @@ send conversation context and relevant saved facts to the selected provider.
 Web searches send query terms and relevant user context to public search services,
 and page reads contact the requested public sites. Use `/local` to keep the session
 private or set `INTERNET_ENABLED=false` to disable retrieval.
-In ambient mode, short background excerpts stay temporarily in RAM and are sent to
-the lightweight NIM controller with bounded dialogue context to judge who is being
-addressed. `/local` keeps those decisions local too. There is no speaker
+In ambient mode, short background excerpts stay temporarily in RAM. Ambiguous
+follow-ups can go to the configured AI provider with bounded dialogue context to
+choose a response or action. Clear inactive or third-party speech is filtered
+before the action decision. `/local` keeps these decisions local too. There is no speaker
 identification or acoustic echo cancellation. Diagnostic transcript logging can
 expose nearby speech, so enable it deliberately.
 

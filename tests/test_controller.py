@@ -38,7 +38,6 @@ def test_controller_keeps_retry_context_without_keyword_query_stripping():
 
 @pytest.mark.parametrize("text,action", [
     ("Why can't you search it on the internet?", "answer"),
-    ("Mom, what's for dinner?", "silent"),
     ("Hey Ciel, what is the time?", "local"),
     ("Which one?", "clarify"),
 ])
@@ -49,7 +48,7 @@ def test_controller_uses_ai_selected_action(text, action):
     router = MagicMock()
     router.send.return_value = _response(
         action, speech="Which season did you finish?",
-        intent="other_listener" if action == "silent" else "request",
+        intent="request",
     )
     decision = AIController(router, ControllerConfig()).decide(
         text, [], addressed=True, active=True, internet_enabled=True,
@@ -339,7 +338,7 @@ def test_unaddressed_room_speech_cannot_trigger_tools_from_model_choice():
     assert decision.action == "silent"
 
 
-def test_active_followup_gets_a_second_listener_check_before_silence():
+def test_active_followup_ignores_legacy_model_silence_without_another_listener_check():
     from ciel.config import ControllerConfig
     from ciel.controller import AIController
 
@@ -355,12 +354,12 @@ def test_active_followup_gets_a_second_listener_check_before_silence():
             ChatMessage("assistant", "I couldn't verify it."),
         ], addressed=False, active=True, internet_enabled=True,
     )
-    assert decision.action == "search" and "Amber Works" in decision.query
-    assert router.send.call_count == 2
+    assert decision.action == "answer" and not decision.query and not decision.speech
+    router.send.assert_called_once()
 
 
-@pytest.mark.parametrize("intent", ["other_listener", "request"])
-def test_uncertain_active_followup_asks_instead_of_disappearing(intent):
+@pytest.mark.parametrize("intent", ["other_listener", "quiet", "request"])
+def test_active_followup_is_answered_despite_legacy_model_silence(intent):
     from ciel.config import ControllerConfig
     from ciel.controller import AIController
 
@@ -370,8 +369,8 @@ def test_uncertain_active_followup_asks_instead_of_disappearing(intent):
         "I don't know.", [ChatMessage("assistant", "What would you like to do?")],
         addressed=False, active=True, internet_enabled=True,
     )
-    assert decision.action == "clarify" and "asking me" in decision.speech
-    assert router.send.call_count == 2
+    assert decision.action == "answer" and not decision.speech and not decision.query
+    router.send.assert_called_once()
 
 
 def test_explicit_other_person_stays_silent_during_active_chat():
@@ -384,7 +383,8 @@ def test_explicit_other_person_stays_silent_during_active_chat():
         "Mom what's for dinner?", [ChatMessage("assistant", "How can I help?")],
         addressed=False, active=True, internet_enabled=True,
     )
-    assert decision.action == "silent" and router.send.call_count == 1
+    assert decision.action == "silent"
+    router.send.assert_not_called()
 
 
 def test_automatic_search_off_requires_an_explicit_lookup_request():
@@ -408,10 +408,10 @@ def test_automatic_search_off_requires_an_explicit_lookup_request():
 
 @pytest.mark.parametrize('intent,action,expected', [
     ('greeting', 'search', 'answer'),
-    ('request', 'silent', 'clarify'),
+    ('request', 'silent', 'answer'),
     ('unclear', 'search', 'clarify'),
-    ('quiet', 'silent', 'silent'),
-    ('other_listener', 'silent', 'silent'),
+    ('quiet', 'silent', 'answer'),
+    ('other_listener', 'silent', 'answer'),
 ])
 def test_intent_and_action_must_agree_before_tools(intent, action, expected):
     from ciel.config import ControllerConfig
@@ -455,7 +455,7 @@ def test_uncertain_addressed_query_asks_for_subject_before_searching():
     assert 'name or topic' in decision.speech
 
 
-def test_active_recheck_shares_total_controller_deadline():
+def test_schema_repair_shares_total_controller_deadline():
     import time
 
     from ciel.config import ControllerConfig
@@ -467,7 +467,7 @@ def test_active_recheck_shares_total_controller_deadline():
     def decide_or_stall(_messages, **kwargs):
         if router.send.call_count == 1:
             time.sleep(0.3)
-            return _response("silent", intent="other_listener")
+            return LLMResponse("not JSON", "test", "nim")
         kwargs["cancel_event"].wait(1)
         closed.set()
         return _response("answer")

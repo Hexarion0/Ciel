@@ -19,7 +19,7 @@ class OpenRouterProvider(LLMProvider):
     """Client for OpenRouter API (unified multi-model gateway)."""
 
     name: str = "openrouter"
-    default_model: str = "meta-llama/llama-3.1-8b-instruct:free"
+    default_model: str = "openrouter/free"
     base_url: str = "https://openrouter.ai/api/v1"
 
     def __init__(
@@ -102,7 +102,7 @@ class OpenRouterProvider(LLMProvider):
 
         return LLMResponse(
             content=content,
-            model=target_model,
+            model=data.get("model") or target_model,
             provider=self.name,
             usage=usage,
             latency=latency,
@@ -132,6 +132,7 @@ class OpenRouterProvider(LLMProvider):
             **kwargs,
         }
 
+        response_model = target_model
         with streaming_client(self.timeout, cancel_event) as client:
             with client.stream(
                 "POST",
@@ -150,18 +151,26 @@ class OpenRouterProvider(LLMProvider):
                     if data_str == "[DONE]":
                         yield LLMStreamChunk(
                             delta="",
-                            model=target_model,
+                            model=response_model,
                             provider=self.name,
                             is_final=True,
                         )
                         break
                     try:
                         chunk_json = json.loads(data_str)
-                        delta = chunk_json["choices"][0]["delta"].get("content", "")
+                        if chunk_json.get("error") is not None:
+                            raise RuntimeError("OpenRouter stream reported an error")
+                        response_model = chunk_json.get("model") or response_model
+                        choices = chunk_json.get("choices") or []
+                        if not choices:
+                            continue  # Usage-only events contain no reply text.
+                        if choices[0].get("finish_reason") == "error":
+                            raise RuntimeError("OpenRouter stream reported an error")
+                        delta = (choices[0].get("delta") or {}).get("content", "")
                         if delta:
                             yield LLMStreamChunk(
                                 delta=delta,
-                                model=target_model,
+                                model=response_model,
                                 provider=self.name,
                                 is_final=False,
                             )

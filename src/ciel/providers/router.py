@@ -128,104 +128,41 @@ class ModelRouter:
         else:
             raise ValueError(f"Unknown routing purpose: {purpose}")
 
-        # Route by complexity and provider availability
+        # Choose an available provider first; its model names are provider-specific.
+        # Private context never enters the configured cloud fallback chain.
         if override == "local" or local_only:
-            decision = RoutingDecision(
-                complexity=complexity,
-                provider_name="ollama",
-                model_name="llama3.2",
-                reason=f"{reason} → Local context requires Ollama" if local_only else reason,
-                override_applied=override,
-            )
-        elif purpose == "controller":
-            decision = RoutingDecision(
-                complexity=complexity, provider_name="nim",
-                model_name=get_settings().controller.model, reason=reason,
-            )
-        elif complexity == ComplexityLevel.SIMPLE:
-            # Prefer ultra-fast inference (Groq) if available, otherwise NIM default
-            if self.manager.groq.is_configured():
-                decision = RoutingDecision(
-                    complexity=complexity,
-                    provider_name="groq",
-                    model_name="llama-3.1-8b-instant",
-                    reason=f"{reason} → Ultra-low latency via Groq",
-                    override_applied=override,
-                )
-            else:
-                nim_model = get_settings().providers.nim_model
-                decision = RoutingDecision(
-                    complexity=complexity,
-                    provider_name="nim",
-                    model_name=nim_model,
-                    reason=f"{reason} → Default NIM provider ({nim_model})",
-                    override_applied=override,
-                )
-        elif complexity == ComplexityLevel.COMPLEX:
-            # Complex reasoning, coding, architecture -> Ultra model
-            if self.manager.nim.is_configured():
-                nim_complex_model = get_settings().providers.nim_complex_model
-                decision = RoutingDecision(
-                    complexity=complexity,
-                    provider_name="nim",
-                    model_name=nim_complex_model,
-                    reason=f"{reason} → Deep reasoning/coding via NIM ({nim_complex_model})",
-                    override_applied=override,
-                )
-            elif self.manager.openrouter.is_configured():
-                decision = RoutingDecision(
-                    complexity=complexity,
-                    provider_name="openrouter",
-                    model_name="meta-llama/llama-3.1-70b-instruct",
-                    reason=f"{reason} → OpenRouter gateway",
-                    override_applied=override,
-                )
-            else:
-                decision = RoutingDecision(
-                    complexity=complexity,
-                    provider_name="groq",
-                    model_name="llama-3.1-8b-instant",
-                    reason=f"{reason} → Groq fallback",
-                    override_applied=override,
-                )
+            provider_name = "ollama"
+            reason += " → Local context requires Ollama"
         else:
-            # Medium: Standard explanatory / conversation -> Default super model
-            if self.manager.nim.is_configured():
-                nim_model = get_settings().providers.nim_model
-                decision = RoutingDecision(
-                    complexity=complexity,
-                    provider_name="nim",
-                    model_name=nim_model,
-                    reason=f"{reason} → High-capacity conversational model via NIM ({nim_model})",
-                    override_applied=override,
-                )
-            elif self.manager.openrouter.is_configured():
-                decision = RoutingDecision(
-                    complexity=complexity,
-                    provider_name="openrouter",
-                    model_name="meta-llama/llama-3.1-70b-instruct",
-                    reason=f"{reason} → OpenRouter gateway",
-                    override_applied=override,
-                )
+            if purpose == "controller":
+                order = ("nim", "groq", "openrouter", "ollama")
+            elif complexity == ComplexityLevel.SIMPLE:
+                order = ("groq", "nim", "openrouter", "ollama")
             else:
-                decision = RoutingDecision(
-                    complexity=complexity,
-                    provider_name="groq",
-                    model_name="llama-3.1-8b-instant",
-                    reason=f"{reason} → Groq fallback",
-                    override_applied=override,
-                )
+                order = ("nim", "openrouter", "groq", "ollama")
+            provider_name = next(
+                (name for name in order if getattr(self.manager, name).is_configured()),
+                order[0],
+            )
+            reason += f" → Configured {provider_name} route"
 
-        if (
-            purpose != "controller" and not local_only and override != "local"
-            and not getattr(self.manager, decision.provider_name).is_configured()
-        ):
-            for candidate in ("nim", "groq", "openrouter", "ollama"):
-                if getattr(self.manager, candidate).is_configured():
-                    decision.provider_name = candidate
-                    decision.model_name = None
-                    decision.reason += f" → Configured fallback: {candidate}"
-                    break
+        if provider_name == "nim":
+            settings = get_settings()
+            if purpose == "controller":
+                model_name = settings.controller.model
+            elif complexity == ComplexityLevel.COMPLEX:
+                model_name = settings.providers.nim_complex_model
+            else:
+                model_name = settings.providers.nim_model
+        else:
+            model_name = getattr(self.manager, provider_name).default_model
+        decision = RoutingDecision(
+            complexity=complexity,
+            provider_name=provider_name,
+            model_name=model_name,
+            reason=reason,
+            override_applied=override,
+        )
         logger.info(
             "🔀 Routed %s [%s] to provider '%s' (Model: %s) — %s",
             purpose,
@@ -269,7 +206,8 @@ class ModelRouter:
         if local_only:
             options["allowed_providers"] = ("ollama",)
         elif purpose == "controller":
-            options["allowed_providers"] = ("nim",)
+            # Keep NIM's dedicated decision model lightweight, while still allowing
+            # another configured provider to recover within the caller's deadline.
             options["allow_model_fallback"] = False
 
         def collect(canceled: threading.Event | None) -> LLMResponse:
@@ -333,15 +271,30 @@ class ModelRouter:
 
     @staticmethod
     def _routing_text(messages: list[ChatMessage]) -> str:
-        """Continue the last substantive user request through repeated follow-ups."""
+        """Carry recent task context only across explicit or referring continuations."""
         users = [message.content for message in messages if message.role == "user"]
-        for text in reversed(users):
-            if not re.fullmatch(
+        followups: list[str] = []
+        for text in reversed(users[-8:]):
+            if re.fullmatch(
                 r"(?:continue|go on|keep going|explain more)[.!?]*",
                 text.strip(),
                 re.I,
             ):
+                continue
+            if re.fullmatch(
+                r"(?:(?:(?:can|could|would) you|please)\s+)?"
+                r"(?:fix|debug|refactor|optimize|review|rewrite|improve|simplify|test|implement)"
+                r"\s+(?:it|that|this)(?:\s+(?:please|too|again))?[.!?]*",
+                text.strip(),
+                re.I,
+            ):
+                followups.append(text[:4096])
+                continue
+            # The current standalone request (and any current /fast or /strong)
+            # wins immediately; old topics never contribute to its complexity.
+            if not followups:
                 return text
+            return "\n".join([text[-4096:], *reversed(followups)])
         return users[-1] if users else ""
 
     @staticmethod

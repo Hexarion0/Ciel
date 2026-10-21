@@ -107,12 +107,23 @@ def test_reported_negation_and_other_commands_are_not_conversation_controls(text
     assert not is_explicit_web_request(text)
 
 
+@pytest.mark.parametrize("text", [
+    "Can u search the news in Mongolia?", "Could you look that up?", "Look it up, please.",
+])
+def test_affirmative_lookups_include_casual_wording(text):
+    assert is_explicit_web_request(text)
+
+
 @pytest.mark.parametrize("controller", [False, True])
+@pytest.mark.parametrize("text", [
+    "Don't search for anti-cheat programs, instead explain the tradeoffs.",
+    "Don't search, just explain it from what you know.",
+    "Do not search; tell me what you think.",
+])
 def test_do_not_search_instead_explain_keeps_new_question_and_blocks_network(
-    tmp_path, monkeypatch, controller,
+    tmp_path, monkeypatch, controller, text,
 ):
     internet, router = _services(monkeypatch)
-    text = "Don't search for anti-cheat programs, instead explain the tradeoffs."
     _, _, _, store, turns = run_callbacks(tmp_path, monkeypatch, [
         (text, {"input_source": "keyboard"}),
     ], router=router, controller=controller)

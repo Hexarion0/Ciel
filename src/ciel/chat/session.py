@@ -16,6 +16,7 @@ from ciel.controller import (
     AIController,
     ControllerDecision,
     conversation_control,
+    conversation_only_request,
     is_explicit_web_request,
 )
 from ciel.conversation import strip_internal_reply_notes
@@ -179,7 +180,7 @@ class ChatSession:
                 self._search_paused = True
                 self.context.pause_web(True)
                 self.memory.cancel_proposal()
-                if control != "no_search" or not re.search(r"[,;]\s*instead\b", local_text, re.I):
+                if not conversation_only_request(local_text):
                     return self._finish({
                         "wait": "Take your time.", "stop": "Got it, quiet now.",
                         "no_search": "Okay, I won't search.",

@@ -92,13 +92,15 @@ def test_project_memory_reads_cannot_be_routed_to_web_even_after_invalid_decisio
         assert result.action == "local" and not result.query
 
 
-@pytest.mark.parametrize("text,active,strict,expected", [
-    ("Could you explain that?", True, False, "clarify"),
-    ("Could you explain that?", True, True, "silent"),
-    ("Could you explain that?", False, False, "silent"),
-    ("Mom, could you explain that?", True, False, "silent"),
+@pytest.mark.parametrize("text,active,strict,expected,calls", [
+    ("Could you explain that?", True, False, "clarify", 2),
+    ("Could you explain that?", True, True, "clarify", 2),
+    ("Could you explain that?", False, False, "silent", 0),
+    ("Mom, could you explain that?", True, False, "silent", 0),
 ])
-def test_malformed_controller_reply_asks_active_listener_to_repeat(text, active, strict, expected):
+def test_malformed_controller_reply_asks_active_listener_after_one_repair(
+    text, active, strict, expected, calls,
+):
     router = MagicMock()
     router.send.return_value = LLMResponse('not JSON', "test", "test")
     result = AIController(router, ControllerConfig()).decide(
@@ -107,7 +109,8 @@ def test_malformed_controller_reply_asks_active_listener_to_repeat(text, active,
     )
     assert result.action == expected
     assert not result.query
-    router.send.assert_called_once()
+    assert result.resolve_with_context is False
+    assert router.send.call_count == calls
     if expected == "clarify":
         assert "repeat" in result.speech.lower() or "again" in result.speech.lower()
 

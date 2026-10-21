@@ -146,8 +146,10 @@ def test_spoken_development_date_and_memory_correction_never_search_online(
         }), "light", "nim",
     )
     router = MagicMock()
-    router.send.side_effect = [decision("answer"), LLMResponse("Hello.", "chat", "nim"),
-                               wrong, wrong]
+    router.send.side_effect = [
+        decision("answer"), LLMResponse("Hello.", "chat", "nim"),
+        *([wrong] * (4 if invalid_decision else 2)),
+    ]
     _, _, _, store, turns = run_callbacks(tmp_path, monkeypatch, [
         ("Hey Ciel.", {"wake_verified": True}),
         ("Development date.", {}),
@@ -161,7 +163,7 @@ def test_spoken_development_date_and_memory_correction_never_search_online(
         assert all("September 28, 2026" in turn.content for turn in replies[-2:])
         assert all(turn.provider == "local" for turn in replies[-2:])
         assert store.count_memories() == 1
-        assert router.send.call_count == 4
+        assert router.send.call_count == (6 if invalid_decision else 4)
     finally:
         store.close()
 
@@ -175,6 +177,7 @@ def test_memory_correction_supersedes_garbled_interrupted_request(tmp_path, monk
     router = MagicMock()
     router.send.side_effect = [
         decision("answer"), LLMResponse("Hello.", "chat", "nim"),
+        LLMResponse("not JSON", "light", "nim"),
         LLMResponse("not JSON", "light", "nim"),
         LLMResponse('{"action":"search","confidence":0.95,"query":"development date"}',
                     "light", "nim"),

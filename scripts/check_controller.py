@@ -1,7 +1,7 @@
-"""Check hosted NIM controller choices with synthetic inputs; never load conversation data.
+"""Check configured controller choices with synthetic inputs, never conversation data.
 
 Run from the repository root: .venv/bin/python scripts/check_controller.py
-This makes short API requests using the configured NIM key and controller model.
+This makes short model requests through the configured AI providers (or local Ollama).
 It does not use the microphone, execute local actions, or search the public web.
 """
 
@@ -26,48 +26,67 @@ class _DecisionProbe:
     def __init__(self, router: ModelRouter, timeout: float) -> None:
         self.router = router
         self.deadline = time.monotonic() + timeout
-        self._checks: list[tuple[bool, str | None]] = []
+        self._checks: list[dict] = []
         self._lock = threading.Lock()
 
     def send(self, *args, **kwargs):
-        """Preserve routing while validating each actual controller model response."""
+        """Observe each response without blocking the controller's format repair."""
+        started = time.monotonic()
         with self._lock:
             index = len(self._checks)
-            self._checks.append((False, "Model decision did not complete"))
+            self._checks.append({
+                "valid": False, "schema_valid": None, "completed": False,
+                "error": "Model decision did not complete", "provider": None, "model": None,
+                "seconds": None,
+            })
         try:
             response = self.router.send(*args, **kwargs)
+        except Exception as failure:
+            with self._lock:
+                self._checks[index].update(
+                    error=type(failure).__name__, completed=True,
+                    seconds=round(time.monotonic() - started, 3),
+                )
+            raise
+        try:
             content = response.content.strip()
             fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", content, re.I | re.S)
             decision = ControllerDecision.model_validate_json(
                 fenced.group(1) if fenced else content,
             )
+            schema_valid = True
             error = None if decision.confidence >= 0.5 else "Model confidence is below 0.5"
-            if time.monotonic() >= self.deadline:
-                error = "Model decision exceeded the controller deadline"
         except Exception as failure:
-            with self._lock:
-                self._checks[index] = (False, type(failure).__name__)
-            raise
+            schema_valid = False
+            error = type(failure).__name__
+        if time.monotonic() >= self.deadline:
+            error = "Model decision exceeded the controller deadline"
         with self._lock:
-            self._checks[index] = (error is None, error)
+            self._checks[index].update(
+                valid=error is None, schema_valid=schema_valid, error=error, completed=True,
+                provider=response.provider, model=response.model,
+                seconds=round(time.monotonic() - started, 3),
+            )
         return response
 
-    def result(self) -> tuple[bool, str | None]:
-        """Fail closed for unfinished, invalid, low-confidence, or failed model calls."""
+    def attempts(self) -> list[dict]:
+        """Snapshot every controller request's outcome without exposing model text."""
         with self._lock:
-            checks = self._checks[:]
+            return [check.copy() for check in self._checks]
+
+    def result(self) -> tuple[bool, str | None]:
+        """Require a completed, valid final response, allowing a successful repair."""
+        checks = self.attempts()
         if not checks:
             return False, "No model decision was requested"
-        errors = [error for valid, error in checks if not valid]
-        return not errors, "; ".join(error for error in errors if error) or None
+        if not all(check["completed"] for check in checks):
+            return False, "Model decision did not complete"
+        return checks[-1]["valid"], checks[-1]["error"]
 
 
 def main() -> int:
     """Print measured choices and exit nonzero if a routing or evidence check fails."""
     settings = get_settings()
-    if not settings.providers.nim_api_key:
-        print("NIM_API_KEY is required for this live check.")
-        return 1
     router = ModelRouter()
     anime = "Where does Amber Works season 4 part 2 continue in the light novel?"
     # Expected action and query terms test behavior, not exact model wording.
@@ -113,10 +132,10 @@ def main() -> int:
          "clarify", [], {"previous_reply": "You could take bus 5 or bus 12.",
                            "addressed": False, "transcribed": True}),
         ("background", "Mom, what's for dinner?", "", "silent", [],
-         {"addressed": False, "active": False}),
+         {"addressed": False, "active": False, "deterministic": True,
+          "expected_intent": "other_listener"}),
         ("other listener", "Dad, can you turn on the TV?", anime, "silent", [],
-         {"addressed": False}),
-        ("quiet", "Don't answer this, stay silent.", "", "silent", [], {}),
+         {"addressed": False, "deterministic": True, "expected_intent": "other_listener"}),
         ("clock", "What time is it?", "", "local", [], {}),
         ("correction", "Research again, finished season 4 part 2 btw", anime,
          "search", ["amber", "4", "2"], {}),
@@ -144,6 +163,7 @@ def main() -> int:
         options = dict(overrides)
         previous_reply = options.pop("previous_reply", "I couldn't verify that online.")
         expected_intent = options.pop("expected_intent", None)
+        deterministic = options.pop("deterministic", False)
         allow_context_resolution = options.pop("allow_context_resolution", False)
         history = options.pop("history", None)
         messages = [ChatMessage("user", previous)] if previous else []
@@ -158,8 +178,17 @@ def main() -> int:
             "addressed": True, "active": True, "internet_enabled": True, **options,
         })
         model_decision_valid, model_error = probe.result()
+        attempts = probe.attempts()
+        deterministic_pass = deterministic and not attempts and choice.action == "silent"
+        if not attempts:
+            model_decision_valid = None
+            if deterministic_pass:
+                model_error = None
+        repaired = bool(model_decision_valid and any(
+            attempt["schema_valid"] is False for attempt in attempts[:-1]
+        ))
         passed = (
-            model_decision_valid and choice.confidence >= 0.5
+            (model_decision_valid is True or deterministic_pass) and choice.confidence >= 0.5
             and (choice.action == action or
                  (allow_context_resolution and choice.resolve_with_context))
             and all(term in choice.query.casefold() for term in query_terms)
@@ -170,6 +199,8 @@ def main() -> int:
                           "resolve_with_context": choice.resolve_with_context,
                           "model_decision_valid": model_decision_valid,
                           "model_error": model_error,
+                          "model_attempts": attempts, "model_repaired": repaired,
+                          "decision_method": "model" if attempts else "deterministic",
                           "seconds": round(time.monotonic() - started, 2),
                           **choice.model_dump()}), flush=True)
 

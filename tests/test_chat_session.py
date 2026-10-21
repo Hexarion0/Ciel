@@ -150,6 +150,9 @@ def test_no_search_preference_survives_opinion_followup_until_explicit_lookup(se
     assert session.reply("Do not search.") == "Okay, I won't search."
     session.reply("What do you think?")
     session.reply("Don't search for that, instead explain the tradeoffs.")
+    assert session.reply("Don't search, just explain it from what you know.") != (
+        "Okay, I won't search."
+    )
     assert calls == []
     assert "paused at the user's request" in session.router.messages[-1][0].content
     session.reply("Search for the official project page")

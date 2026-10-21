@@ -164,24 +164,37 @@ def test_replacement_does_not_persist_or_inherit_abandoned_private_fragments(
 
 
 @pytest.mark.parametrize("address_final", [False, True])
-def test_rejected_private_chain_does_not_revive_or_persist_on_later_speech(
+def test_stopped_private_chain_does_not_revive_or_persist_on_later_speech(
     tmp_path, monkeypatch, address_final,
 ):
     observed, final = _long_private_chain()
     if address_final:
         final = ("Ciel, " + final[0], final[1])
     rejected = final[1]["cancel_event"]
+    stopped = Event()
     router = MagicMock()
-    router.send.side_effect = [
-        _decision("silent", intent="quiet"),
+    replies = iter([
         _decision("answer"), LLMResponse("A new answer.", "chat", "nim"),
-    ]
+    ])
+
+    def send(*_args, **_kwargs):
+        if router.send.call_count == 1:
+            # Cancel while the pending private request is still being classified;
+            # the following app-owned stop must discard it before the next topic.
+            rejected.set()
+            return _decision("answer")
+        return next(replies)
+
+    router.send.side_effect = send
 
     def utterances():
         yield final
-        rejected.set()
+        yield "Stop.", {
+            "cancel_event": stopped, "supersedes_cancel_event": rejected,
+        }
+        stopped.set()
         yield "Ciel, describe another sample.", {
-            "cancel_event": Event(), "supersedes_cancel_event": rejected,
+            "cancel_event": Event(), "supersedes_cancel_event": stopped,
         }
 
     _, _, _, store, turns = run_callbacks(

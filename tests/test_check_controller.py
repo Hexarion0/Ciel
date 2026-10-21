@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from ciel.config import ControllerConfig
+from ciel.controller import ControllerDecision
 from ciel.providers.base import LLMResponse
 from scripts import check_controller
 
@@ -38,7 +39,8 @@ def test_local_override_cannot_hide_model_failure(case, failure, monkeypatch, ca
     assert report["model_decision_valid"] is False
     assert report["model_error"]
     assert "0/1 checks passed" in lines[-1]
-    router.send.assert_called_once()
+    expected_calls = 2 if isinstance(failure, LLMResponse) and failure.content == "not json" else 1
+    assert router.send.call_count == expected_calls
 
 
 @pytest.mark.parametrize("case,action", [("ambiguous acceptance", "clarify"), ("memory", "local")])
@@ -116,3 +118,93 @@ def test_full_check_still_validates_source_backed_report(monkeypatch, capsys):
     assert "11" in report["text"]
     assert any("WEB ANSWER FORMAT FOR THIS TURN" in call.args[0][0].content
                for call in router.send.call_args_list)
+
+
+def test_probe_does_not_prevent_controller_repair():
+    response = LLMResponse("not json", "synthetic", "groq")
+    router = MagicMock()
+    router.send.return_value = response
+    probe = check_controller._DecisionProbe(router, timeout=1)
+
+    assert probe.send([]) is response
+    assert probe.result()[0] is False
+    assert probe.attempts()[0]["provider"] == "groq"
+    assert probe.attempts()[0]["model"] == "synthetic"
+    assert probe.attempts()[0]["valid"] is False
+
+
+def test_successful_repair_keeps_failed_attempt_visible(monkeypatch, capsys):
+    router = MagicMock()
+    router.send.side_effect = [
+        LLMResponse("not json", "first", "groq"),
+        LLMResponse('{"action":"clarify","confidence":0.98}', "second", "openrouter"),
+    ]
+
+    monkeypatch.setattr(check_controller, "ModelRouter", lambda: router)
+    monkeypatch.setattr(check_controller, "get_settings", lambda: SimpleNamespace(
+        providers=SimpleNamespace(nim_api_key=None, groq_api_key=object()),
+        controller=ControllerConfig(model="synthetic", timeout_seconds=1),
+    ))
+    monkeypatch.setattr("sys.argv", ["check_controller.py", "ambiguous acceptance"])
+
+    assert check_controller.main() == 0
+
+    report = json.loads(capsys.readouterr().out.splitlines()[0])
+    assert report["model_decision_valid"] is True
+    assert report["model_repaired"] is True
+    assert report["decision_method"] == "model"
+    assert [attempt["valid"] for attempt in report["model_attempts"]] == [False, True]
+    assert [attempt["provider"] for attempt in report["model_attempts"]] == [
+        "groq", "openrouter",
+    ]
+    assert report["model_attempts"][0]["error"]
+    assert report["model_error"] is None
+
+
+@pytest.mark.parametrize("case,allowed", [("background", True), ("ambiguous acceptance", False)])
+def test_no_model_success_requires_an_intentionally_deterministic_case(
+    case, allowed, monkeypatch, capsys,
+):
+    router = MagicMock()
+
+    class DeterministicController:
+        def __init__(self, _probe, _config):
+            pass
+
+        def decide(self, *_args, **_kwargs):
+            return ControllerDecision(
+                intent="other_listener", action="silent", confidence=1,
+            )
+
+    monkeypatch.setattr(check_controller, "AIController", DeterministicController)
+    monkeypatch.setattr(check_controller, "ModelRouter", lambda: router)
+    monkeypatch.setattr(check_controller, "get_settings", lambda: SimpleNamespace(
+        providers=SimpleNamespace(nim_api_key=None),
+        controller=ControllerConfig(model="synthetic", timeout_seconds=1),
+    ))
+    monkeypatch.setattr("sys.argv", ["check_controller.py", case])
+
+    assert check_controller.main() == (0 if allowed else 1)
+
+    report = json.loads(capsys.readouterr().out.splitlines()[0])
+    assert report["passed"] is allowed
+    assert report["model_decision_valid"] is None
+    assert report["model_repaired"] is False
+    assert report["decision_method"] == "deterministic"
+    assert report["model_attempts"] == []
+    router.send.assert_not_called()
+
+
+def test_unfinished_final_attempt_cannot_use_earlier_valid_response():
+    router = MagicMock()
+    router.send.side_effect = [
+        LLMResponse('{"action":"answer","confidence":0.98}', "synthetic", "nim"),
+        TimeoutError("synthetic timeout"),
+    ]
+    probe = check_controller._DecisionProbe(router, timeout=1)
+    probe.send([])
+    with pytest.raises(TimeoutError):
+        probe.send([])
+
+    assert probe.result() == (False, "TimeoutError")
+    assert [attempt["valid"] for attempt in probe.attempts()] == [True, False]

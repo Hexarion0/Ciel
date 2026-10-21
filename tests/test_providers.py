@@ -563,3 +563,99 @@ def test_nim_provider_preserves_custom_model_overrides():
 def test_nim_blank_backup_uses_the_available_default():
     provider = NimProvider(api_key="test", config=ProviderConfig(nim_fallback_model=""))
     assert provider.fallback_model == DEFAULT_NIM_MODEL
+
+
+@pytest.mark.parametrize("content", ["", "   ", None])
+def test_blank_synchronous_reply_uses_provider_fallback(content):
+    manager = ProviderManager(fallback_chain=["nim", "groq"])
+    primary, backup = MagicMock(), MagicMock()
+    primary.is_configured.return_value = backup.is_configured.return_value = True
+    primary.send.return_value = LLMResponse(content, "missing-reply", "nim")
+    backup.send.return_value = LLMResponse("A visible reply.", "backup-model", "groq")
+    manager.register_provider("nim", primary)
+    manager.register_provider("groq", backup)
+    response = manager.send_with_fallback("Hi", preferred_provider="nim")
+    assert response.content == "A visible reply."
+    assert response.provider == "groq"
+
+
+@pytest.mark.parametrize("mode", ["send", "stream", "router"])
+def test_controller_fallback_uses_provider_default_without_nim_options(monkeypatch, mode):
+    import httpx
+
+    requests = []
+    decision = json.dumps({"action": "answer", "intent": "chat", "confidence": 1.0})
+
+    def handle(request):
+        payload = json.loads(request.content)
+        requests.append(payload)
+        if payload["stream"]:
+            event = json.dumps({"choices": [{"delta": {"content": decision}}]})
+            return httpx.Response(200, text=f"data: {event}\n\ndata: [DONE]\n\n")
+        return httpx.Response(200, json={"choices": [{"message": {"content": decision}}]})
+
+    client_class = httpx.Client
+    monkeypatch.setattr("httpx.Client", lambda **kw: client_class(
+        transport=httpx.MockTransport(handle), **kw,
+    ))
+    manager = ProviderManager(fallback_chain=["nim", "groq"])
+    primary = MagicMock()
+    primary.is_configured.return_value = True
+    primary.send.side_effect = primary.stream.side_effect = RuntimeError("Unavailable")
+    manager.register_provider("nim", primary)
+    backup = GroqProvider(api_key="test")
+    backup.default_model = "selected-groq-model"
+    manager.register_provider("groq", backup)
+    if mode == "router":
+        from threading import Event
+
+        from ciel.providers.router import ModelRouter
+
+        response = ModelRouter(manager).send(
+            [ChatMessage("user", "Choose an action")],
+            purpose="controller", cancel_event=Event(),
+        )
+        assert response.provider == "groq"
+        assert response.model == "selected-groq-model"
+        assert primary.stream.call_args.kwargs["allow_model_fallback"] is False
+    else:
+        request = manager.stream_with_fallback if mode == "stream" else manager.send_with_fallback
+        response = request(
+            "Choose an action", preferred_provider="nim", model="nim-controller-model",
+            allow_model_fallback=False,
+        )
+    if mode == "stream":
+        assert json.loads("".join(part.delta for part in response))["action"] == "answer"
+    else:
+        assert json.loads(response.content)["action"] == "answer"
+    assert requests[0]["model"] == "selected-groq-model"
+    assert "allow_model_fallback" not in requests[0]
+
+
+def test_whitespace_only_stream_uses_visible_fallback():
+    manager = ProviderManager(fallback_chain=["nim", "groq"])
+    primary, backup = MagicMock(), MagicMock()
+    primary.is_configured.return_value = backup.is_configured.return_value = True
+    primary.stream.return_value = iter([LLMStreamChunk("  \n", "blank", "nim")])
+    backup.stream.return_value = iter([LLMStreamChunk("Backup.", "visible", "groq")])
+    manager.register_provider("nim", primary)
+    manager.register_provider("groq", backup)
+    chunks = list(manager.stream_with_fallback("Hi"))
+    assert "".join(chunk.delta for chunk in chunks).strip() == "Backup."
+    assert chunks[-1].provider == "groq"
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_case_insensitive_provider_preference_preserves_explicit_model(streaming):
+    manager = ProviderManager(fallback_chain=["groq"])
+    provider = MagicMock()
+    provider.is_configured.return_value = True
+    provider.send.return_value = LLMResponse("Reply", "explicit-model", "groq")
+    provider.stream.return_value = iter([LLMStreamChunk("Reply", "explicit-model", "groq")])
+    manager.register_provider("groq", provider)
+    if streaming:
+        list(manager.stream_with_fallback("Hi", preferred_provider="GROQ", model="explicit-model"))
+        assert provider.stream.call_args.kwargs["model"] == "explicit-model"
+    else:
+        manager.send_with_fallback("Hi", preferred_provider="GROQ", model="explicit-model")
+        assert provider.send.call_args.kwargs["model"] == "explicit-model"

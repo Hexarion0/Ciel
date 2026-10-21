@@ -168,7 +168,7 @@ def test_repeated_continuations_and_stream_keep_original_route(mock_manager):
 
 
 @pytest.mark.parametrize("private", [False, True])
-def test_controller_uses_only_dedicated_nim_or_private_local_model(
+def test_controller_keeps_dedicated_nim_model_or_private_local_route(
     mock_manager, monkeypatch, private,
 ):
     from threading import Event
@@ -189,5 +189,89 @@ def test_controller_uses_only_dedicated_nim_or_private_local_model(
     else:
         assert options["preferred_provider"] == "nim"
         assert options["model"] == "configured-light-model"
-        assert options["allowed_providers"] == ("nim",)
+        assert "allowed_providers" not in options
         assert options["allow_model_fallback"] is False
+
+
+@pytest.mark.parametrize("provider", ["groq", "openrouter", "ollama"])
+def test_controller_routes_to_available_provider_without_nim(mock_manager, provider):
+    for name in ("nim", "groq", "openrouter", "ollama"):
+        candidate = getattr(mock_manager, name)
+        candidate.is_configured.return_value = name == provider
+        candidate.default_model = f"configured-{name}"
+    router = ModelRouter(mock_manager)
+    decision = router.route("Choose an action", purpose="controller")
+    assert decision.provider_name == provider
+    assert decision.model_name == f"configured-{provider}"
+
+
+@pytest.mark.parametrize("provider", ["groq", "openrouter", "ollama"])
+@pytest.mark.parametrize(
+    "prompt", ["Hello", "Tell me about the ocean", "Refactor this Python code"],
+)
+def test_routes_respect_provider_default_models(mock_manager, provider, prompt):
+    for name in ("nim", "groq", "openrouter", "ollama"):
+        candidate = getattr(mock_manager, name)
+        candidate.is_configured.return_value = name == provider
+        candidate.default_model = f"selected-{name}-model"
+    decision = ModelRouter(mock_manager).route(prompt)
+    assert decision.provider_name == provider
+    assert decision.model_name == f"selected-{provider}-model"
+
+
+def test_local_context_uses_local_provider_selected_model(mock_manager):
+    mock_manager.ollama.default_model = "installed-local-model"
+    decision = ModelRouter(mock_manager).route("Continue", local_only=True)
+    assert decision.provider_name == "ollama"
+    assert decision.model_name == "installed-local-model"
+
+
+@pytest.mark.parametrize("followup", ["Can you fix it?", "Optimize that.", "Please review this."])
+def test_referring_work_followup_preserves_recent_code_route(mock_manager, followup):
+    router = ModelRouter(mock_manager)
+    messages = [
+        ChatMessage("user", "Refactor this Python function"),
+        ChatMessage("assistant", "Here is the implementation."),
+        ChatMessage("user", followup),
+    ]
+    assert router.classify_complexity(router._routing_text(messages))[0] == ComplexityLevel.COMPLEX
+
+
+@pytest.mark.parametrize("latest", ["What is Python?", "Hey", "/fast Can you fix it?"])
+def test_new_topic_and_current_override_do_not_inherit_old_complexity(mock_manager, latest):
+    router = ModelRouter(mock_manager)
+    messages = [
+        ChatMessage("user", "Refactor this Python function"),
+        ChatMessage("assistant", "Here is the implementation."),
+        ChatMessage("user", latest),
+    ]
+    expected = ComplexityLevel.MEDIUM if latest == "What is Python?" else ComplexityLevel.SIMPLE
+    assert router.classify_complexity(router._routing_text(messages))[0] == expected
+
+
+def test_continuation_route_does_not_scan_unbounded_history(mock_manager):
+    router = ModelRouter(mock_manager)
+    messages = [ChatMessage("user", "Refactor this Python function")]
+    messages.extend(ChatMessage("user", "Continue.") for _ in range(8))
+    assert router.classify_complexity(router._routing_text(messages))[0] == ComplexityLevel.MEDIUM
+
+
+@pytest.mark.parametrize("purpose", ["controller", "conversation"])
+def test_private_provider_failure_never_reaches_cloud(purpose):
+    from threading import Event
+
+    manager = ProviderManager()
+    for name in ("nim", "groq", "openrouter", "ollama"):
+        provider = MagicMock()
+        provider.is_configured.return_value = True
+        provider.default_model = f"selected-{name}"
+        provider.stream.side_effect = RuntimeError("Unavailable")
+        manager.register_provider(name, provider)
+    with pytest.raises(RuntimeError, match="All streaming providers"):
+        ModelRouter(manager).send(
+            [ChatMessage("user", "A private question", local_only=True)],
+            purpose=purpose, cancel_event=Event(),
+        )
+    manager.ollama.stream.assert_called_once()
+    for name in ("nim", "groq", "openrouter"):
+        getattr(manager, name).stream.assert_not_called()

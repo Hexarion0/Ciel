@@ -25,6 +25,17 @@ words or long messages alone do not select the complex model; implementation,
 debugging, architecture, and explicit `/strong` requests do. `/fast` and `/local`
 remain available, and continuation requests retain the preceding task's routing.
 
+Action decisions use configured providers in this order: NIM, Groq, OpenRouter,
+then Ollama. `CONTROLLER_MODEL` applies to NIM; other providers use their own default
+model. Provider fallback and one malformed-JSON retry share
+`CONTROLLER_TIMEOUT_SECONDS`. Once a turn is admitted, the action model chooses a
+reply, clarification, search, page read, or local tool; it cannot choose silence.
+Explicit stop/mute controls and filtering of room speech remain application decisions.
+The synthetic checker, `scripts/check_controller.py`, records every decision-model
+request and any successful format repair without loading personal conversation data.
+OpenRouter defaults to its [Free Models Router](https://openrouter.ai/docs/guides/routing/routers/free-router),
+`openrouter/free`; the underlying model, availability, and latency can vary.
+
 `/local` requires Ollama and never falls back to cloud providers. After a local
 request, follow-up replies, summaries, and ambient intent classification for that
 persisted conversation also require Ollama, even after context trimming or restart.
@@ -241,14 +252,19 @@ Ambient listening is the default for `ciel`, `ciel start`, and the GPU launcher.
 Existing explicit `.env` choices still apply; set `AMBIENT_LISTENING=true` to
 enable it in an older configuration. No additional launch flags are needed.
 `--no-ambient` selects wake-word mode for one run. Local Silero VAD captures
-speech without a wake phrase at 16 kHz. Direct addresses are handled locally;
-possible follow-ups within `AMBIENT_FOLLOWUP_SECONDS` (300 seconds by default)
-use an economical `speech_gate` request before a reply.
+speech without a wake phrase at 16 kHz. Direct addresses are handled locally.
+With the action controller enabled, admitted follow-ups get a reply or clarification;
+the model cannot choose silence. Explicit stop/mute and clearly unrelated room speech
+remain application controls.
+
+The earlier intent path (`CONTROLLER_ENABLED=false`) uses an economical `speech_gate`
+request for possible follow-ups within `AMBIENT_FOLLOWUP_SECONDS` (300 seconds by default).
 `AMBIENT_FOLLOWUP_POLICY=conversation` (the default) treats recent dialogue as
 continuing: ordinary questions, answers and topic changes can receive replies
 without repeating the wake phrase. The classifier distinguishes the assistant,
 other listeners and uncertainty. During an active window, valid uncertainty favors
-continuation; clear evidence of another listener closes the window. Fresh sessions, malformed judgments and provider failures stay silent. After the
+continuation; clear evidence of another listener closes the window. Fresh sessions
+and failed ambient classifications do not admit room speech. After the
 active window, recent dialogue can still support a high-confidence contextual
 follow-up for up to 30 minutes after interaction. Clear speech to another listener
 closes both windows; ordinary room speech is not automatically authorized.

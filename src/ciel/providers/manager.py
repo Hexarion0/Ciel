@@ -85,12 +85,14 @@ class ProviderManager:
         temperature: float = 0.7,
         max_tokens: int = 1024,
         allowed_providers: tuple[str, ...] | None = None,
+        allow_model_fallback: bool = True,
         **kwargs: Any,
     ) -> LLMResponse:
         """Send prompt attempting preferred provider first with automatic fallback."""
+        preferred = preferred_provider.lower() if preferred_provider else None
         order: list[str] = []
-        if preferred_provider and preferred_provider.lower() in self.providers:
-            order.append(preferred_provider.lower())
+        if preferred in self.providers:
+            order.append(preferred)
         for name in self.fallback_chain:
             if name not in order and name in self.providers:
                 order.append(name)
@@ -109,11 +111,15 @@ class ProviderManager:
                 logger.debug("Attempting inference with provider '%s'...", provider_name)
                 response = provider.send(
                     messages=messages,
-                    model=model if (preferred_provider == provider_name) else None,
+                    model=model if preferred == provider_name else None,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    **({"allow_model_fallback": False}
+                       if provider_name == "nim" and not allow_model_fallback else {}),
                     **kwargs,
                 )
+                if not isinstance(response.content, str) or not response.content.strip():
+                    raise RuntimeError("Provider returned no reply text")
                 logger.info(
                     "Successfully generated response via '%s' (model: %s, latency: %.2fs)",
                     provider_name,
@@ -142,12 +148,14 @@ class ProviderManager:
         max_tokens: int = 1024,
         cancel_event: Event | None = None,
         allowed_providers: tuple[str, ...] | None = None,
+        allow_model_fallback: bool = True,
         **kwargs: Any,
     ) -> Iterator[LLMStreamChunk]:
         """Stream response from the first functioning provider."""
+        preferred = preferred_provider.lower() if preferred_provider else None
         order: list[str] = []
-        if preferred_provider and preferred_provider.lower() in self.providers:
-            order.append(preferred_provider.lower())
+        if preferred in self.providers:
+            order.append(preferred)
         for name in self.fallback_chain:
             if name not in order and name in self.providers:
                 order.append(name)
@@ -166,15 +174,17 @@ class ProviderManager:
                 logger.debug("Attempting stream with provider '%s'...", provider_name)
                 for chunk in provider.stream(
                     messages=messages,
-                    model=model if (preferred_provider == provider_name) else None,
+                    model=model if preferred == provider_name else None,
                     temperature=temperature,
                     max_tokens=max_tokens,
                     cancel_event=cancel_event,
+                    **({"allow_model_fallback": False}
+                       if provider_name == "nim" and not allow_model_fallback else {}),
                     **kwargs,
                 ):
                     if cancel_event is not None and cancel_event.is_set():
                         return
-                    emitted |= bool(chunk.delta)
+                    emitted |= bool(chunk.delta.strip())
                     yield chunk
                 if emitted or (cancel_event is not None and cancel_event.is_set()):
                     return

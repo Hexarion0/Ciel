@@ -81,7 +81,7 @@ def test_ai_query_and_acknowledgment_precede_search_and_only_final_reply_is_save
         store.close()
 
 
-def test_ai_silence_for_background_does_not_save_speak_or_execute_tools(tmp_path, monkeypatch):
+def test_background_is_rejected_before_models_speech_persistence_or_tools(tmp_path, monkeypatch):
     service = _internet(monkeypatch, [])
     router = MagicMock()
     router.send.return_value = _decision("silent")
@@ -90,8 +90,7 @@ def test_ai_silence_for_background_does_not_save_speak_or_execute_tools(tmp_path
         router=router, controller=True,
     )
     try:
-        router.send.assert_called_once()
-        assert router.send.call_args.kwargs["purpose"] == "controller"
+        router.send.assert_not_called()
         assert turns == []
         tts.speak.assert_not_called()
         service.lookup.assert_not_called()
@@ -105,7 +104,6 @@ def test_active_spoken_followup_recovers_from_false_other_listener(tmp_path, mon
         _decision("answer", intent="greeting"),
         LLMResponse("Hi. What's on your mind?", "chat", "nim"),
         _decision("silent", intent="other_listener"),
-        _decision("answer", intent="follow_up"),
         LLMResponse("Tell me what you want to check.", "chat", "nim"),
     ]
     _, tts, _, store, turns = run_callbacks(tmp_path, monkeypatch, [
@@ -119,7 +117,11 @@ def test_active_spoken_followup_recovers_from_false_other_listener(tmp_path, mon
         assert [turn.content for turn in turns if turn.role == "assistant"] == [
             "Hi. What's on your mind?", "Tell me what you want to check.",
         ]
-        assert router.send.call_count == 5
+        assert router.send.call_count == 4
+        assert [call.kwargs.get("purpose", "conversation")
+                for call in router.send.call_args_list] == [
+            "controller", "conversation", "controller", "conversation",
+        ]
         assert tts.speak.call_count == 2
     finally:
         store.close()
@@ -446,19 +448,18 @@ def test_retained_nameless_followup_does_not_authorize_saving_memory(tmp_path, m
         store.close()
 
 
-def test_rejected_followup_fragments_cannot_be_revived_by_later_speech(tmp_path, monkeypatch):
+def test_stopped_followup_fragments_cannot_be_revived_by_later_speech(tmp_path, monkeypatch):
     canceled, rejected = Event(), Event()
     canceled.set()
     router = MagicMock()
     router.send.side_effect = [
         _decision("answer", intent="greeting"), LLMResponse("Hello.", "chat", "nim"),
-        _decision("silent", intent="quiet"),
         _decision("answer"), LLMResponse("A separate answer.", "chat", "nim"),
     ]
 
     def utterances():
         yield "Ciel, hello.", {}
-        yield "And keep it brief.", {
+        yield "Stop.", {
             "cancel_event": rejected, "supersedes_cancel_event": canceled,
         }
         rejected.set()
@@ -474,10 +475,8 @@ def test_rejected_followup_fragments_cannot_be_revived_by_later_speech(tmp_path,
         router=router, controller=True,
     )
     try:
-        assert router.send.call_args_list[2].args[0][-1].content == (
-            "Explain this setting. And keep it brief."
-        )
-        assert router.send.call_args_list[3].args[0][-1].content == "explain something else."
+        assert router.send.call_args_list[2].args[0][-1].content == "explain something else."
+        assert router.send.call_count == 4
         assert [turn.content for turn in turns if turn.role == "user"] == [
             "hello.", "explain something else.",
         ]
@@ -538,10 +537,11 @@ def test_logged_garbled_request_then_greeting_never_executes_old_search(
     service = _internet(monkeypatch, [])
     router = MagicMock()
     router.send.side_effect = [
-        _decision('silent', intent='request'),
+        _decision('clarify', intent='unclear', speech='Could you repeat the exact title?'),
         _decision('search', intent='greeting', query='Tensor Anime Assistant'),
         LLMResponse('Hello! What can I help with?', 'chat', 'nim'),
         _decision('clarify', intent='unclear', speech='Should I retry, or explain the background?'),
+        LLMResponse('Should I retry, or explain the background?', 'chat', 'nim'),
     ]
     _, _, _, store, turns = run_callbacks(tmp_path, monkeypatch, [
         (garbled, {'wake_verified': True}),
@@ -639,7 +639,7 @@ def test_local_preflight_preserves_address_confidence_and_cancellation(
     )
     try:
         execute.assert_not_called()
-        if "cancel_event" in info:
+        if "cancel_event" in info or not info:
             router.send.assert_not_called()
         else:
             router.send.assert_called_once()

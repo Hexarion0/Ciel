@@ -206,7 +206,12 @@ def run_desktop(
         **({"include_alignments": True} if track_speech else {}),
     )
     router = get_model_router()
-    from ciel.controller import AIController, conversation_control, is_explicit_web_request
+    from ciel.controller import (
+        AIController,
+        conversation_control,
+        conversation_only_request,
+        is_explicit_web_request,
+    )
 
     controller = AIController(router, settings.controller)
     from ciel.audio.ambient import AmbientConversation, SpeechDecision
@@ -935,9 +940,7 @@ def run_desktop(
         control = control_candidate if control_allowed and not (
             wake_info.get("stt_needs_repeat")
         ) else None
-        conversation_only = bool(control == "no_search" and re.search(
-            r"[,;]\s*instead\s+\S", clean_control, re.I,
-        ))
+        conversation_only = control is not None and conversation_only_request(clean_control)
         if control is not None:
             reply = apply_conversation_control(control, clean_control, current)
             if reply is None:
