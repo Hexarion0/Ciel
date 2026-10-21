@@ -2,8 +2,8 @@
 
 Last reviewed: **2026-10-21**. Package version: **0.3.6 development**.
 
-The goal is a reliable personal desktop assistant with natural voice conversation,
-persistent memory, useful actions, and eventually remote messaging and presence.
+The goal is a personal companion with natural voice conversation, persistent memory,
+shared context across voice and chat, and useful awareness of what the user is doing.
 Linux is the current target. Build one feature at a time and verify its behavior
 before treating it as ready for everyday use.
 
@@ -11,17 +11,18 @@ before treating it as ready for everyday use.
 
 | Area | Implemented | Still pending |
 | --- | --- | --- |
-| Voice loop | Wake recognition, local STT, provider streaming, sentence playback, interruptions, captions | Live microphone/speaker acceptance of the current combined changes |
+| Voice loop | Wake recognition, local STT, provider streaming, sentence playback, interruptions, captions, actionable microphone startup errors | Sustained microphone/speaker acceptance of the current combined changes |
 | Voices | Default CPU Pocket streaming; local Piper fallback; optional custom Turbo HQ; bundled worker and manifest | Reproducible custom-voice installation and private asset import |
-| Providers | NIM, Groq, OpenRouter, Ollama, routing, retries/fallback, latency tracing | Usage totals, budget controls, broader live fallback verification |
-| Controller | Local handlers for explicit commands without NIM; lightweight AI decisions for other turns; bounded retries and cancellation | Live microphone acceptance and broader decision-quality evaluation |
+| Providers | NIM, Groq, OpenRouter, Ollama, provider-specific models, contextual routing, empty-reply failover, latency tracing | Usage totals, budget controls, broader live fallback verification |
+| Controller | Local handlers for explicit commands; configured-provider fallback; one JSON repair within the decision deadline; admitted turns cannot select silence | Broader real-conversation decision-quality evaluation |
 | Memory | SQLite conversations, shared voice/chat context, indexed older user dialogue, structured state, current facts/revisions, optional local semantic recall, forgetting | Live cross-channel and voice-based restart acceptance, summary quality evaluation |
 | Actions | Trusted module discovery, validation, local telemetry, allowlisted Linux app launching | Model-selected calls, reminders, live desktop launch acceptance |
-| Internet | Free automatic search, public HTML/text reading, bounded retrieval, relevant user context, source links | Live voice/text retrieval acceptance, broader site compatibility, PDF/media extraction |
+| Internet | Free DDGS search; optional selected Brave/Tavily APIs; article/news/feed reading, dates, supported partial answers, shared source observations | Broader live news quality, site compatibility, PDF/media extraction |
 | Personality | Modular persona prompt, continuity rules, opinions/initiative, editable preferences, voice-requested style updates/reset | Continued evaluation during real conversations |
 | Setup | Configure/review/save before selected package/model installation; CPU recognition choice by default; preserved existing settings; missing-asset reporting | Automatic Turbo setup, managed desktop runtime, clean-machine validation |
 | Desktop web interface | PC-local voice/text chat, live captions, status, and controls | Same-Wi-Fi phone access and desktop acceptance |
 | Messaging | Owner-paired Telegram text, automatic startup, shared conversation with separate archives | Live Telegram acceptance, reminders, additional services |
+| Screen awareness | Proposed next feature | On-request captures, screenshot questions, image-capable model routing, voice/chat image continuity |
 | Tone, Windows, presence | Planned | Implementation |
 
 A checked item below means the implementation exists. It does not establish
@@ -30,42 +31,51 @@ is in [release checks](release-checks.md), [latency findings](conversation-laten
 and the [changelog](../CHANGELOG.md). The repository has a `v0.2` tag; no stable
 `v0.3` tag is recorded yet.
 
-## Next work, in order
+## Proposed feature order
 
-The next feature priority is Telegram chat before reminders, alongside acceptance
-of the current v0.3 desktop build.
+This is the proposed direction after the conversation, memory, search, and routing
+upgrades. Screen awareness has been suggested; its implementation has not started.
+The version headings below group existing work and backlog, rather than promise dates.
 
-1. **Accept Telegram text chat on the target PC.** Configure it through the chat
-   service selector, pair the owner, check ordinary replies and confirmed memory
-   changes, continue a voice conversation through chat, and test automatic startup,
-   network recovery, unpairing, and restart. Keep Discord
-   and Signal as later adapters. See [chat behavior and limits](telegram-chat.md).
-2. **Validate the combined build on the target desktop.** Run wake, Pocket
-   playback, barge-in, confirmed memory across restart, and Discord launch checks.
-   Include provider and network outages, PC noise, and a sustained conversation.
-   Repeat interrupted long turns and personal corrections: stale fragments must
-   not delay typed input, and memory replies must accurately report whether a
-   change was saved or still needs direct address and confirmation.
-   Confirm the 0.9-second endpoint preserves normal pauses. Exercise web retrieval
-   and source display through voice and text using [release checks](release-checks.md).
-3. **Prove clean installation with real voice assets.** Test core installation,
-   configure-first CPU/Piper and optional Pocket/CUDA selections, cancellation,
-   failed-download retry, and restart outside the checkout. Import
-   the private Turbo reference, install its separate environment and model, and
-   verify missing-model and missing-GPU recovery. Keep Turbo optional.
-4. **Add persistent reminders after chat acceptance.** Reuse the paired Telegram
-   channel for delivery and shared memory/conversation components for confirmation.
-   Start with relative times, list/cancel, and restart recovery before recurrence.
+| Order | Feature | First useful outcome |
+| --- | --- | --- |
+| 1 | Screen awareness | Ask “What does this error mean?” or “Explain this page” using an on-request screen or window capture |
+| 2 | Image and document conversations | Send a screenshot through Telegram, discuss it by voice, then add text/PDF attachments |
+| 3 | Useful action workflows | Connect requested research, explanations, and supported desktop actions through the existing validated action registry |
+| 4 | Reminders and optional initiative | Persistent reminders with Telegram delivery, followed by quiet-hours-aware check-ins tied to user-approved topics |
+| 5 | More chat services | Add Discord text using the same owner, conversation, and memory rules; assess Signal separately |
+| 6 | Everyday desktop app | Managed installation, launcher, updates, recovery, and useful dashboard controls; Windows follows Linux acceptance |
 
-The current code handles explicit local commands without NIM, aligns Pocket
-defaults across configuration and setup, bundles the Turbo worker and manifest,
-and shares terminal/web session handling in `ciel.runtime`. Automated regressions
-also cover canceled streams, nonblocking superseded speech, guarded memory
-corrections, and one shared controller decision deadline. Microphone and speaker
-acceptance remains open; these changes do not establish hosted-provider availability.
+Tone and camera presence remain later experiments. They are separate from screen
+awareness and are not needed for the first screenshot feature.
 
-The broader milestones below remain the plan. New priority choices should update
-this section rather than silently marking later milestones complete.
+For every feature, keep voice/chat continuity, immediate cancellation, and local
+privacy working. Run the relevant [release checks](release-checks.md) alongside
+development: real conversations, owner pairing/startup, restart recovery, provider
+outages, and clean installation still need broader desktop acceptance. Existing
+automated checks and small live probes do not complete that release acceptance.
+
+## Screen awareness — proposed next feature
+
+Start with one explicit capture or an image supplied by the user. Continuous screen
+watching and autonomous clicking are later decisions.
+
+- [ ] Capture the requested screen/window and make the image available for review.
+- [ ] Route image requests only to a configured provider/model that supports images;
+      explain when no compatible model is available. `/local` still requires a
+      compatible local model and never sends the image to a cloud fallback.
+- [ ] Answer questions about visible errors, pages, code, or game menus; distinguish
+      visible details from guesses and ask when the screenshot is insufficient.
+- [ ] Keep follow-ups such as “What about that button?” attached to the same image
+      until a new image or topic replaces it.
+- [ ] Reuse image observations across the paired voice/chat conversation; define
+      retention and deletion before storing screenshots durably.
+- [ ] Accept Telegram image messages through that shared image path.
+- [ ] Preserve stop/cancel and owner boundaries. Text inside an image is context,
+      never permission to run a command or save a personal fact.
+
+The first milestone is complete when CIEL can explain an actual screenshot and
+answer a follow-up through voice or chat without inventing unseen screen contents.
 
 ## Foundation and core voice — v0.1 / v0.2
 
@@ -80,6 +90,8 @@ this section rather than silently marking later milestones complete.
 - [x] Ambient listening and live AI captions by default; setup offers CPU recognition
       and explicit CUDA while preserving saved recognition settings.
 - [x] Provider fallback before visible output; no splicing after a partial answer.
+- [x] Use provider-specific model defaults and bounded recent context for referring
+      work follow-ups; reject empty replies and preserve actual returned model metadata.
 - [x] Piper speech, persistent Turbo worker, bounded sentence queues and interruption.
 - [x] Contextual vocal cues, inline placement, giggle/moan aliases, and adjustable cue
       frequency; plain captions/history and Piper fallback, with regression coverage.
@@ -117,13 +129,14 @@ to be available just because the client is configured.
 - [x] Shared character budgets and atomic summary commits across independent managers.
 - [x] Editable personality file and managed style updates/reset by voice.
 - [x] Modular personality and continuity prompt with bounded initiative and reasoned opinions.
-- [x] Optional ambient follow-ups with intended-listener classification.
+- [x] Ambient follow-ups with application admission; accepted turns receive a reply
+      or clarification instead of a model-selected silent response.
 - [x] Linked interruption fragments and estimated playback context for continuation.
 - [x] Keep internal interruption status out of spoken dialogue and provider reply examples.
 - [ ] Teach a fact by voice, confirm it, restart, and recall it on the target desktop.
 - [ ] Verify rejection and forgetting behavior through the actual microphone.
-- [ ] Test the five-minute active ambient window and later context-gated follow-ups
-      against speech addressed to other people.
+- [ ] Test active follow-ups and filtering of speech addressed to other people after
+      removing model-selected silence; check the earlier optional intent path separately.
 - [ ] Finish [release acceptance](release-checks.md) before tagging stable v0.3.
 
 Memory recall uses words and aliases by default. Optional semantic recall uses a
@@ -196,9 +209,17 @@ setup but does not remove the storage required for dependencies and models.
 - [x] Search current facts by default, use relevant user memory/context, and support
       larger research/compare/double-check budgets with session privacy through `/local`.
 - [x] Configure an optional home city; explicit request locations take priority.
+- [x] Free DuckDuckGo/public Brave retrieval through DDGS, with optional Brave/Tavily
+      API selection before credentials; use only the selected search provider.
+- [x] News/article discovery, source date provenance, supported partial findings,
+      and research that stops when useful leads are exhausted, without an overall timer.
+- [x] Retain bounded source observations across paired voice/chat sessions and restart,
+      separately from personal facts; failed lookups cannot revive an older result.
 - [ ] Validate live search, page reading, location questions, and voice/text source display.
-- [x] Put an AI decision before normal voice/text handlers, with spoken search
-      acknowledgment, AI-written queries, bounded retries, and validated reports.
+- [x] AI decisions for voice actions and a shared voice/text research path, with
+      spoken acknowledgment, AI-written queries, bounded requests, and validated reports.
+- [x] Configured-provider decision fallback and one malformed-JSON repair within the
+      original deadline; the action model cannot silence an admitted user turn.
 - [x] Keep private-session routing, immediate stop/mute, action allowlists, and
       explicit memory confirmation enforced outside the model.
 - [ ] Add PDF/media extraction and broader public-site compatibility.
@@ -258,7 +279,8 @@ to judge the sound and timing of effects in real conversations.
 
 ## Desktop integration and Windows — v0.8
 
-- [ ] Linux user service and optional autostart.
+- [x] Automatic Linux login service for configured owner-paired Telegram chat.
+- [ ] Managed startup and recovery for the full desktop voice runtime.
 - [ ] Desktop notifications through a platform abstraction.
 - [ ] Manual activation hotkey for noisy rooms or missed wake phrases.
 - [ ] Windows audio, notifications, startup, launching, and hotkeys.
