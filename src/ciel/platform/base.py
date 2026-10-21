@@ -9,6 +9,10 @@ from typing import Any
 import numpy as np
 
 
+class AudioInputError(RuntimeError):
+    """The selected microphone could not be opened for capture."""
+
+
 @dataclass
 class AudioDeviceInfo:
     """Represents a discovered hardware or virtual audio device."""

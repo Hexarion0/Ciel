@@ -279,6 +279,7 @@ def test_failed_stream_start_closes_device_and_allows_retry(monkeypatch):
     monkeypatch.setattr(backend, "resolve_device", lambda *args, **kwargs: 0)
     monkeypatch.setattr("ciel.platform.linux.sd", SimpleNamespace(
         InputStream=MagicMock(side_effect=[failed, replacement]),
+        PortAudioError=OSError,
     ))
     with pytest.raises(RuntimeError, match="device disappeared"):
         backend.start_stream(lambda *args: None)

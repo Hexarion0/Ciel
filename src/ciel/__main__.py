@@ -169,6 +169,7 @@ def main(argv: list[str] | None = None) -> int:
         print(chat_startup.message)
 
     from ciel.platform import get_audio_backend
+    from ciel.platform.base import AudioInputError
 
     dev_mode = args.mode == "dev"
     logger = setup_logging("DEBUG" if dev_mode else "INFO", concise=not dev_mode)
@@ -223,7 +224,17 @@ def main(argv: list[str] | None = None) -> int:
 
     from ciel.runtime import run_desktop
 
-    return run_desktop(args, settings, logger, audio_backend, clock=time)
+    try:
+        return run_desktop(args, settings, logger, audio_backend, clock=time)
+    except AudioInputError:
+        logger.debug("Microphone startup failed", exc_info=True)
+        print(
+            "Ciel couldn't open the microphone. Connect or enable an input device in your "
+            "system sound settings, then try again.\n"
+            "Use 'ciel devices --input' to list microphones or 'ciel setup' to select one.",
+            file=sys.stderr,
+        )
+        return 1
 
 
 if __name__ == "__main__":

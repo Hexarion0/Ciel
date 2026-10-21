@@ -11,7 +11,7 @@ import soundfile as sf
 from ciel.audio.native import sd
 from ciel.config import normalize_audio_device
 from ciel.logging import get_logger
-from ciel.platform.base import AudioBackend, AudioDeviceInfo
+from ciel.platform.base import AudioBackend, AudioDeviceInfo, AudioInputError
 
 logger = get_logger("platform.linux")
 
@@ -226,16 +226,19 @@ class LinuxAudioBackend(AudioBackend):
                     logger.debug("Stream status notice: %s", status)
                 callback(indata.copy(), frames, time_info, status)
 
-            self._stream = sd.InputStream(
-                samplerate=sample_rate,
-                channels=channels,
-                dtype="float32",
-                device=resolved_device,
-                blocksize=blocksize,
-                callback=_internal_callback,
-            )
             try:
+                self._stream = sd.InputStream(
+                    samplerate=sample_rate,
+                    channels=channels,
+                    dtype="float32",
+                    device=resolved_device,
+                    blocksize=blocksize,
+                    callback=_internal_callback,
+                )
                 self._stream.start()
+            except sd.PortAudioError as error:
+                self._stop_stream_locked()
+                raise AudioInputError("The selected microphone could not be opened.") from error
             except BaseException:
                 self._stop_stream_locked()
                 raise
