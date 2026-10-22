@@ -69,6 +69,12 @@ Implemented integration:
   `runtime.py` and `chat/session.py`. Admission, ownership, cancellation, and
   memory authorization remain application decisions. One bounded native crop can
   supply a closer view before asking the user about unreadable details.
+- `tool_progress.py` prepares short AI-written intent variations in the background
+  and supplies an immediate context-specific fallback when necessary. Screen work,
+  initial web retrieval, and app/system actions announce before execution; existing
+  AI search speech is reused, and repeated initial research announcements are avoided.
+  Progress is transient and grants no action authority. Foreground conversation
+  cancels expendable background wording work.
 - Telegram sends a bounded PNG only when explicitly requested. Expiry, pairing,
   reset, and cancellation are rechecked before delivery and retry. Desktop/voice
   requests to send an image receive guidance to request it in Telegram.
@@ -85,6 +91,15 @@ passed a synthetic red/blue image check in **1.44 seconds on 2026-10-22**.
 The catalog also listed the larger 90B candidate, but its inference timed out;
 the implementation does not treat catalog membership as working image support.
 No personal screen pixels were used for model verification.
+
+The 2026-10-22 follow-up addresses a real response that denied image access despite
+receiving a capture. Visual inference now uses a compact, explicit image-capability
+prompt instead of the entire conversation/persona prompt and old assistant claims.
+Only bounded earlier user questions provide reference context. A synthetic player
+image with a visible invented title was read correctly in **5.14 seconds**, including
+first-use model verification. This is a synthetic timing, not a real-desktop latency
+guarantee. Capture, image preparation, verification, and inference have separate
+privacy-safe latency markers.
 
 The current desktop is Hyprland on Wayland. Installed `grim` supports capturing
 the cursor with `-c`; compositor metadata can supply output layout and pointer

@@ -41,6 +41,7 @@ from ciel.research import (
     previous_observations,
 )
 from ciel.screen.service import ScreenService, screen_scope
+from ciel.tool_progress import ToolProgress
 
 logger = get_logger("chat.session")
 REQUEST_TIMEOUT_SECONDS = 60.0
@@ -132,6 +133,8 @@ class ChatSession:
         self._search_paused = False
         self._lock = threading.RLock()
         self.screen = ScreenService(settings, self.conversation)
+        self.tool_progress = ToolProgress(self.router)
+        self.tool_progress.warm(local_only=self.conversation.local_only_context())
 
     def _finish(
         self, text: str, *, provider: str = "local", model: str = "chat",
@@ -209,6 +212,11 @@ class ChatSession:
                     result = self.screen.answer(
                         visual, messages, cancel_event=canceled,
                         current=lambda: scope == screen_scope(self.conversation),
+                        progress=lambda tool, query: self.tool_progress.announce(
+                            tool, query, self.progress, cancel_event=canceled,
+                            current=lambda: scope == screen_scope(self.conversation),
+                            local_only=ModelRouter.requires_local(messages),
+                        ),
                     )
                     if (result is None or canceled.is_set()
                             or scope != screen_scope(self.conversation)
@@ -251,6 +259,7 @@ class ChatSession:
 
     def _generate(self, query: str, canceled: threading.Event) -> str:
         scope = self.conversation.context_session_ids()
+        version = screen_scope(self.conversation)
         self._search_paused = self.context.web_paused()
         recalled = self.context.recall(query)
         prompt = self.context.system_prompt(recalled, generate=_text_prompt)
@@ -271,15 +280,29 @@ class ChatSession:
         research_cancel = ResearchCancellation(canceled, lambda: (
             (previous is not None or not self.context.web_paused())
             and scope == self.conversation.context_session_ids()
+            and version == screen_scope(self.conversation)
         ))
+        announced = False
+
+        def announce(tool: str, topic: str) -> bool:
+            nonlocal announced
+            announced = self.tool_progress.announce(
+                tool, topic, self.progress, cancel_event=research_cancel,
+                current=lambda: not research_cancel.refresh(), local_only=private,
+            )
+            return announced
+
         lookup = previous if previous is not None else (
             InternetResult() if self._search_paused else self.internet.prepare(
                 query, recent_messages=messages[1:], memories=recalled,
                 cancel_event=research_cancel, local_only=private,
+                before_lookup=announce,
             )
         )
         if canceled.is_set():
             raise TimeoutError("Chat request cancelled")
+        if version != screen_scope(self.conversation):
+            return ""
         if lookup.attempted and research_cancel.refresh():
             return ""
         if lookup.reply is not None:
@@ -296,6 +319,7 @@ class ChatSession:
                 initial, query, messages, self.internet, self.progress,
                 lambda: not research_cancel.refresh(), cancel_event=research_cancel,
                 initial_lookup=lookup, channel="text", evidence_only=previous is not None,
+                announced=announced,
             )
             if report.canceled or research_cancel.refresh():
                 return ""
@@ -346,4 +370,5 @@ class ChatSession:
         """Discard unconfirmed changes and close this thread's database connection."""
         self.memory.cancel_proposal()
         self.screen.close()
+        self.tool_progress.close()
         self.store.close()

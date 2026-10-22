@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 
 from ciel.config import Settings
+from ciel.latency import mark
 from ciel.providers.base import ChatImage, ChatMessage, LLMResponse
 from ciel.providers.router import ModelRouter
 from ciel.providers.streaming import streaming_client
@@ -82,7 +83,7 @@ class VisionClient:
 
     def _request(
         self, messages: list[ChatMessage], cancel_event: threading.Event | None,
-        *, max_tokens: int = 1200,
+        *, max_tokens: int = 600,
     ) -> LLMResponse:
         """Make exactly one bounded request; close blocked HTTP on cancellation."""
         self._check_cancel(cancel_event)
@@ -165,6 +166,7 @@ class VisionClient:
         try:
             if self._verified:
                 return
+            mark("screen_model_verification_started", provider=self.provider, model=self.model)
             result = self._request([
                 ChatMessage(
                     "user", "What color is each half of this image? "
@@ -181,6 +183,7 @@ class VisionClient:
                 )
             self._check_cancel(cancel_event)
             self._verified = True
+            mark("screen_model_verification_finished", provider=self.provider, model=self.model)
         finally:
             self._verification_lock.release()
 

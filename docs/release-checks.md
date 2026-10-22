@@ -4,6 +4,16 @@ Run from the repository root with the development environment active.
 
 ## Screen-awareness validation — 2026-10-22
 
+Follow-up tool-feedback/grounding change: **2,960 tests passed**, five integration
+tests deselected; Ruff passed. Synthetic coverage checks screen announcements before
+capture, web announcements before retrieval, cancellation during announcements,
+application authorization before progress, transient progress history, private
+wording routes, and foreground preemption of background wording. A synthetic
+player's invented visible title was read correctly in 5.14 seconds including model
+verification. This does not establish real anime identification or desktop latency.
+AI wording is prepared in the background; feedback remains immediate if generation
+is slow or unavailable. No real desktop pixels or Telegram messages were used.
+
 - 2,943 automated tests passed; five hardware/model integration tests deselected.
 - Ruff, local documentation links, and wheel build passed.
 - The selected NIM Llama 3.2 11B Vision model passed a synthetic image check in

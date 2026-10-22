@@ -7,6 +7,7 @@ import subprocess
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 
 from ciel.actions.base import Action, ActionContext, ActionError
 from ciel.logging import get_logger
@@ -56,6 +57,7 @@ class ActionRegistry:
 
     def handle(
         self, text: str, *, authorized: bool, cancel_event: threading.Event | None = None,
+        on_start: Callable[[str], bool] | None = None,
     ) -> str | None:
         """Execute an exact local intent; inferred follow-ups cannot mutate the desktop."""
         clean = text.strip().rstrip(".!?")
@@ -69,7 +71,7 @@ class ActionRegistry:
         if pending is not None and authorized and time.monotonic() <= pending[2]:
             if clean.casefold() in {"yes", "yes please", "confirm"}:
                 return self.execute(pending[0], pending[1], authorized=True,
-                                    confirmed=True, cancel_event=cancel_event)
+                                    confirmed=True, cancel_event=cancel_event, on_start=on_start)
             if clean.casefold() in {"no", "cancel", "no thanks", "never mind"}:
                 return "Okay, I canceled that action."
         matches = []
@@ -86,11 +88,12 @@ class ActionRegistry:
             return None
         action, arguments = matches[0]
         return self.execute(action.name, arguments, authorized=authorized,
-                            cancel_event=cancel_event)
+                            cancel_event=cancel_event, on_start=on_start)
 
     def execute(
         self, name: str, arguments: dict[str, str], *, authorized: bool,
         confirmed: bool = False, cancel_event: threading.Event | None = None,
+        on_start: Callable[[str], bool] | None = None,
     ) -> str:
         """Validate every entry path, with explicit authorization for side effects."""
         action = self.actions.get(name)
@@ -111,6 +114,9 @@ class ActionRegistry:
                 self._pending = (name, arguments.copy(), time.monotonic() + 60.0)
                 details = ", ".join(f"{key}={value}" for key, value in arguments.items())
                 return f"Confirm {name} ({details})? Say yes to proceed or no to cancel."
+            context.remaining()
+            if on_start is not None and not on_start(name):
+                raise ActionError("That action was cancelled.")
             context.remaining()
             return action.execute(arguments, context)
         except ActionError as error:

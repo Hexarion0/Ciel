@@ -530,6 +530,7 @@ class AIController:
         current: Callable[[], bool], *, cancel_event: threading.Event | None = None,
         initial_lookup: InternetResult | None = None, channel: str = "voice",
         evidence_only: bool = False,
+        announced: bool = False,
     ) -> ControllerReply:
         """Use one evidence loop for voice and chat, stopping on exhausted useful leads.
 
@@ -560,7 +561,7 @@ class AIController:
             r"\bMongolia\b|Монгол", goal, re.I,
         ) and not evidence_only else "")
         english_query = "Mongolia latest news" if local_query else ""
-        if not evidence_only:
+        if not evidence_only and not announced:
             acknowledge(initial.speech or (
                 "I'll read that page." if initial.action == "read_page" else
                 "I'll check the articles." if news else "I'll check that online."

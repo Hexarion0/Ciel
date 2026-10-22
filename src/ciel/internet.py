@@ -946,6 +946,7 @@ class InternetService:
         self, query: str, *, recent_messages: list[ChatMessage] | None = None,
         memories: list[str] | None = None, cancel_event: threading.Event | None = None,
         local_only: bool = False,
+        before_lookup: Callable[[str, str], bool] | None = None,
     ) -> InternetResult:
         """Search changing facts or explicit requests; ask for missing local-search location."""
         # The controller imports this module too, so resolve shared control wording
@@ -1027,6 +1028,12 @@ class InternetService:
                 attempted=True, query=clean,
                 reply="What topic would you like me to search for?",
             )
+        if before_lookup is not None and not before_lookup(
+            "read_page" if urls else "search", clean,
+        ):
+            return InternetResult()
+        if cancel_event is not None and cancel_event.is_set():
+            return InternetResult()
         return self.lookup(clean, research=research, cancel_event=cancel_event, urls=urls)
 
     def lookup(

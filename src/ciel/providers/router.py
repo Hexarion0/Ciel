@@ -111,7 +111,7 @@ class ModelRouter:
     ) -> RoutingDecision:
         """Determine the optimal provider and model for a given prompt."""
         mark(f"{purpose}.routing_started")
-        if purpose == "controller":
+        if purpose in {"controller", "tool_progress"}:
             complexity, reason, override = (
                 ComplexityLevel.SIMPLE, "Compact AI controller decision", None,
             )
@@ -132,7 +132,7 @@ class ModelRouter:
             provider_name = "ollama"
             reason += " → Local context requires Ollama"
         else:
-            if purpose == "controller":
+            if purpose in {"controller", "tool_progress"}:
                 order = ("nim", "groq", "openrouter", "ollama")
             elif complexity == ComplexityLevel.SIMPLE:
                 order = ("groq", "nim", "openrouter", "ollama")
@@ -146,7 +146,7 @@ class ModelRouter:
 
         if provider_name == "nim":
             settings = get_settings()
-            if purpose == "controller":
+            if purpose in {"controller", "tool_progress"}:
                 model_name = settings.controller.model
             elif complexity == ComplexityLevel.COMPLEX:
                 model_name = settings.providers.nim_complex_model
@@ -204,7 +204,7 @@ class ModelRouter:
         }
         if local_only:
             options["allowed_providers"] = ("ollama",)
-        elif purpose == "controller":
+        elif purpose in {"controller", "tool_progress"}:
             # Keep NIM's dedicated decision model lightweight, while still allowing
             # another configured provider to recover within the caller's deadline.
             options["allow_model_fallback"] = False
@@ -222,8 +222,16 @@ class ModelRouter:
             response.latency = time.monotonic() - started
             return response
 
-        if purpose == "summary":
+        if purpose in {"summary", "tool_progress"}:
             with self.priority.background() as canceled:
+                if cancel_event is not None:
+                    parent = canceled
+
+                    class CombinedCancellation(threading.Event):
+                        def is_set(self) -> bool:
+                            return parent.is_set() or cancel_event.is_set()
+
+                    return collect(CombinedCancellation())
                 return collect(canceled)
         with self.priority.foreground():
             # Gates still return complete JSON, but their blocked reads can now

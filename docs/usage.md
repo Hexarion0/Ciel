@@ -48,6 +48,11 @@ Ollama remains an optional provider for ordinary routing.
 Say “Ciel, look at my screen,” “What does this error mean?”, or “What's under my
 cursor?” Ciel captures all active monitors, including the pointer. During that
 discussion, “What about now?” and “What should I do next?” take fresh captures.
+“What anime am I watching?” also requests a current screen check. Before a screen
+check, search, page read, or supported app/system action, Ciel gives a short,
+natural lead-in fitted to the task. AI-written variations are prepared in the
+background; a useful fallback is immediate while they are loading or offline.
+These progress lines do not become saved answers or permission for another action.
 Explicit questions about the last screenshot reuse it while it remains available.
 She explains and gives steps; she does not click or type.
 
@@ -62,6 +67,10 @@ defaults. The selected model must pass a synthetic image check before any person
 image is sent. Screen requests never fall back to another provider or a text model.
 `SCREEN_TIMEOUT_SECONDS=60` bounds each model request, including verification.
 The first request can include both verification and the actual explanation.
+Visual inference uses a compact screen-specific prompt and a few bounded earlier
+user questions. It does not replay the full text-only persona or older assistant
+guesses as current visual evidence. Title identification needs visible text or
+distinctive clues; uncertainty should prompt a qualified answer or a closer look.
 
 This backend requires an unlocked Hyprland Wayland session with `grim` and
 `hyprctl`. Missing tools, ambiguous desktop sessions, or an unavailable model

@@ -170,6 +170,7 @@ def run_desktop(
     from ciel.providers.router import ModelRouter
     from ciel.research import ResearchCancellation, evidence_payload, previous_observations
     from ciel.screen.service import ScreenService, screen_scope
+    from ciel.tool_progress import ToolProgress
 
     logger.info("Initializing wake-word, TTS, and STT engines (STT loads in background)...")
     detector = WakeWordDetector(
@@ -303,6 +304,8 @@ def run_desktop(
         settings, memory_store, conv_manager, memory_service, semantic_recall=semantic_recall,
     )
     screen_service = ScreenService(settings, conv_manager)
+    tool_progress = ToolProgress(router)
+    tool_progress.warm(local_only=conv_manager.local_only_context())
     web_ui = None
     if web_mode:
         from ciel.web import DesktopWebUI
@@ -520,6 +523,7 @@ def run_desktop(
         if explicit:
             logger.info('%s You: "%s"', "⌨️" if typed else "🗣️", user_text)
         turn_scope = conv_manager.context_session_ids()
+        turn_version = screen_scope(conv_manager)
         dialogue = private_gate_dialogue(conv_manager.get_gate_messages(limit=8), request)
         if turn_scope != conv_manager.context_session_ids():
             return False
@@ -631,6 +635,8 @@ def run_desktop(
                    lookup=None, research_scope=None, screen_result=None) -> bool:
             if not current() or turn_scope != conv_manager.context_session_ids():
                 return False
+            if turn_version != screen_scope(conv_manager):
+                return False
             if lookup is not None and research_scope is not None and (
                 research_scope != conv_manager.context_session_ids()
                 or (prior_lookup is None and dialogue_context.web_paused())
@@ -674,6 +680,17 @@ def run_desktop(
         unmatched_local = False
         contextual_clarification = selected.action == "clarify" and selected.resolve_with_context
         try:
+            def progress(tool: str, topic: str, *, proposed: str = "") -> bool:
+                def emit(text: str) -> None:
+                    log_reply('🤖 CIEL: "%s" [local/progress]', text)
+                    say(text, on_start=lambda: request.update(reply_started=True))
+
+                return tool_progress.announce(
+                    tool, topic, emit, cancel_event=cancel_event,
+                    current=lambda: current() and turn_version == screen_scope(conv_manager),
+                    local_only=conv_manager.local_only_context(), proposed=proposed,
+                )
+
             if visual is not None:
                 if visual.send_image:
                     return finish("Ask me in Telegram to send a screenshot. "
@@ -682,7 +699,7 @@ def run_desktop(
                     system_prompt=build_system_prompt(query),
                 )
                 result = screen_service.answer(visual, messages, cancel_event=cancel_event,
-                                               current=current)
+                                               current=current, progress=progress)
                 if result is None:
                     return False
                 return finish(result.text, provider=result.provider, model=result.model,
@@ -754,6 +771,7 @@ def run_desktop(
                 if local is None:
                     local = actions.handle(
                         local_text, authorized=authorized, cancel_event=cancel_event,
+                        on_start=lambda name: progress(name, local_text),
                     )
                 if local is not None:
                     return finish(local)
@@ -821,8 +839,7 @@ def run_desktop(
                 return False
             if selected.action in {"search", "read_page"} or prior_lookup is not None:
                 def acknowledge(text: str) -> None:
-                    log_reply('🤖 CIEL: "%s" [local/progress]', text)
-                    say(text, on_start=lambda: request.update(reply_started=True))
+                    progress(selected.action, query, proposed=text)
 
                 if prior_lookup is not None:
                     if prior_lookup.reply is not None:
@@ -833,6 +850,7 @@ def run_desktop(
                 research_cancel = ResearchCancellation(cancel_event, lambda: (
                     current() and (prior_lookup is not None or not dialogue_context.web_paused())
                     and scope == conv_manager.context_session_ids()
+                    and turn_version == screen_scope(conv_manager)
                 ))
                 report = controller.run_web(
                     selected, query, messages, internet, acknowledge,
@@ -1221,8 +1239,22 @@ def run_desktop(
             if reliable and not restored_fragments:
                 # Retain a clear app-name correction, without executing an interrupted task.
                 actions.observe_request(cleaned_query)
+        progress_scope = screen_scope(conv_manager)
+
+        def legacy_progress(tool: str, topic: str) -> bool:
+            def emit(text: str) -> None:
+                log_reply('🤖 CIEL: "%s" [local/progress]', text)
+                say(text)
+
+            return tool_progress.announce(
+                tool, topic, emit, cancel_event=cancel_event,
+                current=lambda: current() and progress_scope == screen_scope(conv_manager),
+                local_only=conv_manager.local_only_context(),
+            )
+
         action_reply = actions.handle(
             cleaned_query, authorized=allow_memory, cancel_event=cancel_event,
+            on_start=lambda name: legacy_progress(name, cleaned_query),
         ) if current() and not earlier_fragments and not restored_fragments else None
         if not reliable:
             actions.cancel_pending()
@@ -1299,7 +1331,7 @@ def run_desktop(
             visual_scope = screen_scope(conv_manager)
             result = screen_service.answer(
                 visual, conv_manager.get_active_messages(system_prompt=build_system_prompt()),
-                cancel_event=cancel_event, current=current,
+                cancel_event=cancel_event, current=current, progress=legacy_progress,
             )
             if (result is None or not current()
                     or visual_scope != screen_scope(conv_manager)
@@ -1408,6 +1440,7 @@ def run_desktop(
             internet_private = ModelRouter.requires_local(context_messages)
             research_cancel = ResearchCancellation(cancel_event, lambda: (
                 current() and legacy_scope == conv_manager.context_session_ids()
+                and progress_scope == screen_scope(conv_manager)
                 and (retained_lookup is not None or not dialogue_context.web_paused())
             ))
             if retained_lookup is None and not internet_private and not web_paused[0]:
@@ -1422,12 +1455,14 @@ def run_desktop(
                     ],
                     memories=recalled_memories,
                     cancel_event=research_cancel,
+                    before_lookup=legacy_progress,
                 )
                 mark("internet_retrieval_finished", attempted=internet_result.attempted,
                      sources=len(internet_result.sources))
             research_turn = internet_result.attempted or retained_lookup is not None
             if (
                 not current() or legacy_scope != conv_manager.context_session_ids()
+                or progress_scope != screen_scope(conv_manager)
                 or (research_turn and research_cancel.refresh())
             ):
                 logger.info("Discarded an old internet lookup because speech resumed.")
@@ -1970,4 +2005,5 @@ def run_desktop(
                         restore_terminal_output()
                 finally:
                     screen_service.close()
+                    tool_progress.close()
                     tts.close()
