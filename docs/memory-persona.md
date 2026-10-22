@@ -197,8 +197,8 @@ local measurement, not a guarantee for other hardware or archive sizes.
 
 An explicit "do not search" carries across the owner's channels and process
 restarts. A fresh explicit lookup resumes browsing. Resetting a channel removes
-only its own browsing preference; `/local` continues to restrict the shared
-conversation's provider routing and web access.
+only its own browsing preference. Previously marked private conversations retain
+their provider and web-access restrictions until their history is cleared.
 
 Short references such as `What about that?`, `Tell me more`, and `Continue` can
 use the latest substantive user topic to retrieve relevant saved notes. A clear
@@ -261,8 +261,9 @@ continues the existing conversation without deleting or resetting it.
 Known forgotten wording is masked in recalled notes, derived timelines, local
 saved-fact answers, conversation history, summaries, and speech-gate requests.
 Archived SQLite text remains retained, and paraphrases
-outside known wording are not guaranteed to be erased. `/local` restrictions
-continue through replies, background summaries, context trimming, and restarts.
+outside known wording are not guaranteed to be erased. Privacy restrictions on
+previously marked conversations continue through replies, background summaries,
+context trimming, and restarts.
 Session clears and summary updates use persistent generations and an atomic cursor
 check: a stale summary worker cannot recreate cleared context or overwrite a newer
 summary, including across separate managers. Legacy metadata damage is treated as

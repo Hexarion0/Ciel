@@ -8,6 +8,8 @@ import threading
 import time
 from unittest.mock import MagicMock
 
+import pytest
+
 from ciel.terminal import TerminalInput
 
 
@@ -37,11 +39,37 @@ def test_commands_are_local_and_mute_is_a_toggle():
 
 def test_text_and_provider_overrides_are_forwarded_intact():
     terminal, callbacks = make_terminal()
-    for text in ["What is Ciel?", "/fast explain this", "  Hello.  "]:
+    for text in [
+        "What is Ciel?", "/fast explain this", "/strong explain this", "/deep explain this",
+        "  Hello.  ",
+    ]:
         terminal.handle_line(text)
     assert [call.args[0] for call in callbacks["submit"].call_args_list] == [
-        "What is Ciel?", "/fast explain this", "Hello.",
+        "What is Ciel?", "/fast explain this", "/strong explain this", "/deep explain this",
+        "Hello.",
     ]
+
+
+@pytest.mark.parametrize("text", [
+    "/local", "/LOCAL", "/local tell me a story", " /LoCaL\thi ",
+    "Hello\n/local Tell me a story", "Hello\n  /LOCAL tell me a story",
+])
+def test_removed_local_command_is_not_submitted(text):
+    terminal, callbacks = make_terminal()
+    terminal.handle_line(text)
+    callbacks["submit"].assert_not_called()
+    callbacks["stop_reply"].assert_not_called()
+    callbacks["toggle_mute"].assert_not_called()
+    callbacks["exit_app"].assert_not_called()
+    assert "no longer available" in callbacks["write"].call_args.args[0]
+
+
+def test_help_does_not_offer_removed_local_command():
+    terminal, callbacks = make_terminal()
+    terminal.handle_line("/help")
+    assert "/local" not in callbacks["write"].call_args.args[0]
+    terminal.handle_line("/help local")
+    assert callbacks["write"].call_args.args[0].startswith("Unknown command")
 
 
 def test_reader_handles_multiple_lines_and_exit_without_waiting_for_a_reply():

@@ -16,6 +16,7 @@ from typing import Any
 from ciel.actions import ActionRegistry
 from ciel.config import Settings
 from ciel.conversation import (
+    contains_retired_local_command,
     interpret_clock_address,
     is_farewell,
     strip_internal_reply_notes,
@@ -901,6 +902,21 @@ def run_desktop(
         if persona_change_pending[0] and time.monotonic() > persona_change_deadline[0]:
             persona_change_pending[0] = False
         user_text = text.strip()
+        command_text = user_text if typed else strip_wake_phrase(
+            user_text, settings.audio.wake_word,
+        )
+        if contains_retired_local_command(command_text):
+            # Reject fresh uses before recording history or restoring a pending
+            # request. Legacy private history remains protected during replay.
+            if typed or wake_info.get("wake_verified") or not ambient_enabled[0] or (
+                ambient_context.is_explicit(user_text)
+                or active_control_turn(wake_info)
+            ):
+                reply = "/local is no longer available. Send your message normally."
+                log_reply('🤖 CIEL: "%s" [local/command]', reply)
+                say(reply)
+                return True
+            return False
         raw = wake_info.get("stt_raw_text", user_text)
         previous_request = {} if typed else linked_request(wake_info)
         earlier_fragments = previous_request.get("fragments", [])[:]
@@ -1585,6 +1601,9 @@ def run_desktop(
             ambient_context.is_explicit(text)
         )
         fragment = strip_wake_phrase(text, settings.audio.wake_word)
+        if contains_retired_local_command(fragment):
+            # An interrupted retired command cannot be revived by a later turn.
+            return
         control = conversation_control(fragment)
         if control is not None and (
             explicit or active_control_turn(info, earlier_fragments)
@@ -1798,9 +1817,11 @@ def run_desktop(
                 text = text.strip()
                 if not text:
                     return False
-                if text.startswith("/") and text.split()[0].casefold() not in {
-                    "/fast", "/strong", "/deep", "/local",
-                }:
+                if contains_retired_local_command(text) or (
+                    text.startswith("/") and text.split()[0].casefold() not in {
+                        "/fast", "/strong", "/deep",
+                    }
+                ):
                     web_controls.handle_line(text)
                     return True
                 return loop.submit_text(text)

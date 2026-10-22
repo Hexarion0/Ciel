@@ -59,9 +59,16 @@ def test_classify_manual_overrides(mock_manager):
     assert level == ComplexityLevel.COMPLEX
     assert override == "strong"
 
-    level, _, override = router.classify_complexity("/local how much disk space is left?")
-    assert level == ComplexityLevel.SIMPLE
-    assert override == "local"
+    level, _, override = router.classify_complexity("/deep explain distributed architecture")
+    assert level == ComplexityLevel.COMPLEX
+    assert override == "strong"
+
+
+def test_retired_local_command_is_not_a_supported_manual_override(mock_manager):
+    router = ModelRouter(manager=mock_manager)
+    level, _, override = router.classify_complexity("/local explain the ocean")
+    assert level == ComplexityLevel.MEDIUM
+    assert override is None
 
 
 def test_routing_decisions(mock_manager):
@@ -224,6 +231,38 @@ def test_local_context_uses_local_provider_selected_model(mock_manager):
     decision = ModelRouter(mock_manager).route("Continue", local_only=True)
     assert decision.provider_name == "ollama"
     assert decision.model_name == "installed-local-model"
+
+
+@pytest.mark.parametrize("purpose", ["conversation", "controller", "summary"])
+def test_legacy_private_history_stays_local_after_retiring_command(mock_manager, purpose):
+    from threading import Event
+
+    router = ModelRouter(mock_manager)
+    router.send(
+        [
+            ChatMessage("user", "/local My old private conversation"),
+            ChatMessage("assistant", "Private reply"),
+            ChatMessage("user", "What did I tell you?"),
+        ],
+        purpose=purpose,
+        cancel_event=Event(),
+    )
+    options = mock_manager.stream_with_fallback.call_args.kwargs
+    assert options["preferred_provider"] == "ollama"
+    assert options["allowed_providers"] == ("ollama",)
+    delivered = mock_manager.stream_with_fallback.call_args.args[0]
+    assert delivered[0].content == "My old private conversation"
+
+
+def test_legacy_private_history_stays_local_when_streamed(mock_manager):
+    router = ModelRouter(mock_manager)
+    list(router.stream([
+        ChatMessage("user", "/local My old private conversation"),
+        ChatMessage("user", "Continue"),
+    ]))
+    options = mock_manager.stream_with_fallback.call_args.kwargs
+    assert options["preferred_provider"] == "ollama"
+    assert options["allowed_providers"] == ("ollama",)
 
 
 @pytest.mark.parametrize("followup", ["Can you fix it?", "Optimize that.", "Please review this."])

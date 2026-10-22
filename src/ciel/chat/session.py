@@ -19,7 +19,7 @@ from ciel.controller import (
     conversation_only_request,
     is_explicit_web_request,
 )
-from ciel.conversation import strip_internal_reply_notes
+from ciel.conversation import contains_retired_local_command, strip_internal_reply_notes
 from ciel.dialogue import DialogueContext
 from ciel.internet import InternetResult, InternetService, _bounded, public_urls
 from ciel.logging import get_logger
@@ -43,7 +43,7 @@ from ciel.research import (
 
 logger = get_logger("chat.session")
 REQUEST_TIMEOUT_SECONDS = 60.0
-_OVERRIDE = re.compile(r"^/(?:local|fast|strong|deep)\s+", re.I)
+_OVERRIDE = re.compile(r"^/(?:fast|strong|deep)\s+", re.I)
 _REMINDER = re.compile(
     r"^(?:(?:please|can you|could you|would you)\s+)*(?:remind me\b|"
     r"(?:set|create|schedule|add)\s+(?:(?:a|an|the)\s+)?reminder\b)", re.I,
@@ -58,7 +58,6 @@ _HELP = (
     "/memory — show saved personal details\n"
     "/cancel — discard a pending memory change\n"
     "/reset — clear this chat's history, keeping voice history and saved facts\n"
-    "/local <message> — use only local AI; Telegram still transports the messages\n"
     "/fast, /strong, /deep — use your existing AI routing choices\n\n"
     "Reminders, voice messages, and desktop actions are not available in chat yet."
 )
@@ -150,6 +149,8 @@ class ChatSession:
                 return "Please send a text message."
             if len(text) > 4096:
                 return "Please split that into messages of at most 4,096 characters."
+            if contains_retired_local_command(text):
+                return "/local is no longer available. Send your message normally."
             if text == "/reset":
                 self.memory.cancel_proposal()
                 self._search_paused = False
@@ -165,9 +166,6 @@ class ChatSession:
             if text == "/cancel":
                 self.memory.cancel_proposal()
                 return "The pending memory change was cancelled."
-            if text == "/local":
-                self.memory.cancel_proposal()
-                return "Use /local followed by your message. Telegram still transports the text."
             if text.startswith("/") and text != "/memory" and not _OVERRIDE.match(text):
                 self.memory.cancel_proposal()
                 return "I don't recognize that chat command. Use /help to see the available ones."

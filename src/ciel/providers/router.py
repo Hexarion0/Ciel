@@ -57,8 +57,6 @@ class ModelRouter:
             return ComplexityLevel.SIMPLE, "Manual /fast override requested", "fast"
         if re.match(r"^/(?:strong|deep)(?:\s|$)", clean):
             return ComplexityLevel.COMPLEX, "Manual /strong override requested", "strong"
-        if re.match(r"^/local(?:\s|$)", clean):
-            return ComplexityLevel.SIMPLE, "Manual /local override requested", "local"
 
         # 2. Simple Heuristics (short greetings, time, simple math)
         conversational = re.sub(
@@ -130,7 +128,7 @@ class ModelRouter:
 
         # Choose an available provider first; its model names are provider-specific.
         # Private context never enters the configured cloud fallback chain.
-        if override == "local" or local_only:
+        if local_only:
             provider_name = "ollama"
             reason += " → Local context requires Ollama"
         else:
@@ -260,7 +258,7 @@ class ModelRouter:
 
     @staticmethod
     def requires_local(messages: list[ChatMessage]) -> bool:
-        """Keep private context on Ollama, including continuations and summaries."""
+        """Keep legacy private context on Ollama, including continuations and summaries."""
         return any(
             message.local_only or (
                 message.role == "user"
@@ -299,7 +297,7 @@ class ModelRouter:
 
     @staticmethod
     def _clean_override_prefixes(messages: list[ChatMessage]) -> list[ChatMessage]:
-        """Strip /fast, /strong, /local command prefixes from message text."""
+        """Strip active overrides and legacy /local prefixes during historical replay."""
         cleaned: list[ChatMessage] = []
         for m in messages:
             if m.role == "user":

@@ -1,6 +1,6 @@
 # CIEL development roadmap
 
-Last reviewed: **2026-10-21**. Package version: **0.3.6 development**.
+Last reviewed: **2026-10-22**. Package version: **0.3.6 development**.
 
 The goal is a personal companion with natural voice conversation, persistent memory,
 shared context across voice and chat, and useful awareness of what the user is doing.
@@ -39,7 +39,7 @@ The version headings below group existing work and backlog, rather than promise 
 
 | Order | Feature | First useful outcome |
 | --- | --- | --- |
-| 1 | Screen awareness | Ask “What does this error mean?” or “Explain this page” using an on-request screen or window capture |
+| 1 | Screen awareness | Ask “What does this error mean?” or “Explain this page” using an on-request whole-screen capture |
 | 2 | Image and document conversations | Send a screenshot through Telegram, discuss it by voice, then add text/PDF attachments |
 | 3 | Useful action workflows | Connect requested research, explanations, and supported desktop actions through the existing validated action registry |
 | 4 | Reminders and optional initiative | Persistent reminders with Telegram delivery, followed by quiet-hours-aware check-ins tied to user-approved topics |
@@ -49,21 +49,22 @@ The version headings below group existing work and backlog, rather than promise 
 Tone and camera presence remain later experiments. They are separate from screen
 awareness and are not needed for the first screenshot feature.
 
-For every feature, keep voice/chat continuity, immediate cancellation, and local
-privacy working. Run the relevant [release checks](release-checks.md) alongside
+For every feature, keep voice/chat continuity, immediate cancellation, and owner
+boundaries working. Run the relevant [release checks](release-checks.md) alongside
 development: real conversations, owner pairing/startup, restart recovery, provider
 outages, and clean installation still need broader desktop acceptance. Existing
 automated checks and small live probes do not complete that release acceptance.
 
 ## Screen awareness — proposed next feature
 
-Start with one explicit capture or an image supplied by the user. Continuous screen
-watching and autonomous clicking are later decisions.
+Start with a whole-screen capture only when requested, or an image supplied by the
+user. Continuous screen watching and autonomous clicking are later decisions.
 
-- [ ] Capture the requested screen/window and make the image available for review.
+- [ ] Capture the whole screen on request and make the image available for review.
 - [ ] Route image requests only to a configured provider/model that supports images;
-      explain when no compatible model is available. `/local` still requires a
-      compatible local model and never sends the image to a cloud fallback.
+      explain when no compatible model is available.
+- [ ] For “look at my screen” without a specific question, give a brief observation
+      and ask a natural follow-up question.
 - [ ] Answer questions about visible errors, pages, code, or game menus; distinguish
       visible details from guesses and ask when the screenshot is insufficient.
 - [ ] Keep follow-ups such as “What about that button?” attached to the same image
@@ -84,7 +85,7 @@ answer a follow-up through voice or chat without inventing unseen screen content
 - [x] Whisper keyword spotting and optional openWakeWord integration.
 - [x] Local faster-whisper transcription, VAD, confidence checks, bounded retries.
 - [x] NIM, Groq, OpenRouter, and Ollama provider clients.
-- [x] Heuristic request routing and `/fast`, `/strong`, `/deep`, `/local` overrides.
+- [x] Heuristic request routing and `/fast`, `/strong`, `/deep` overrides.
 - [x] Explicit local time/date, memory, and desktop commands without an AI decision.
 - [x] Shared terminal/web session runtime outside CLI argument and startup handling.
 - [x] Ambient listening and live AI captions by default; setup offers CPU recognition
@@ -207,7 +208,7 @@ setup but does not remove the storage required for dependencies and models.
 - [x] Add application-side web search, source links, bounded public page reads,
       timeouts, and honest failure handling.
 - [x] Search current facts by default, use relevant user memory/context, and support
-      larger research/compare/double-check budgets with session privacy through `/local`.
+      larger research/compare/double-check budgets.
 - [x] Configure an optional home city; explicit request locations take priority.
 - [x] Free DuckDuckGo/public Brave retrieval through DDGS, with optional Brave/Tavily
       API selection before credentials; use only the selected search provider.

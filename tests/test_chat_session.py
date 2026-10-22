@@ -119,18 +119,66 @@ def test_recall_pause_and_reset_keep_saved_facts(session):
     assert not session.memory.has_pending_confirmation
 
 
-def test_local_route_survives_later_messages_and_never_searches(session, monkeypatch):
+def test_legacy_local_history_remains_protected_after_restart(session, monkeypatch):
     local_flags = []
+
+    # Existing private conversation history retains its original privacy boundary.
+    session.conversation.add_turn("user", "/local Tell me a short story")
+    session.close()
+    session = ChatSession(session.settings, channel="telegram", session_id="telegram:test-owner",
+                          router=RecordingRouter())
 
     def prepare(*args, **kwargs):
         local_flags.append(kwargs["local_only"])
         return InternetResult()
 
     monkeypatch.setattr(session.internet, "prepare", prepare)
-    session.reply("/local Tell me a short story")
-    session.reply("Continue")
-    assert local_flags == [True, True]
-    assert all(messages[0].local_only for messages in session.router.messages)
+    try:
+        session.reply("Continue")
+        session.reply("What happens next?")
+        assert local_flags == [True, True]
+        assert all(messages[0].local_only for messages in session.router.messages)
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize("text", [
+    "/local", "/LOCAL", "/local Remember my name is Secret", " /LoCaL\tSearch for news ",
+    "Hello\n/local Tell me a story", "Hello\n  /LOCAL remember my name is Secret",
+])
+def test_removed_local_command_cannot_generate_or_save_anything(session, monkeypatch, text):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Removed commands must not reach memory or internet handlers")
+
+    monkeypatch.setattr(session.internet, "prepare", forbidden)
+    monkeypatch.setattr(session.context, "memory_reply", forbidden)
+    assert "no longer available" in session.reply(text)
+    assert session.conversation.get_total_turn_count() == 0
+    assert not session.router.messages
+
+
+def test_removed_local_command_keeps_pending_memory_proposal(session):
+    session.reply("Remember my favorite game is Standoff 2")
+    session.reply("My favorite game is Portal 2")
+    assert session.memory.has_pending_confirmation
+    count = session.conversation.get_total_turn_count()
+    session.reply("/local Yes, update it")
+    assert session.memory.has_pending_confirmation
+    assert session.store.get_fact("user:favorite_game").metadata["value"] == "Standoff 2"
+    assert session.conversation.get_total_turn_count() == count
+
+
+def test_chat_help_does_not_offer_removed_local_command(session):
+    assert "/local" not in session.reply("/help")
+
+
+@pytest.mark.parametrize("text", [
+    "/fast Tell me a story", "/strong Tell me a story", "/deep Tell me a story",
+    "What did /local do?",
+])
+def test_other_routes_and_ordinary_command_mentions_still_reach_provider(session, text):
+    assert session.reply(text) == session.router.answer
+    assert session.router.messages[-1][-1].content == text
 
 
 def test_reminders_and_desktop_actions_do_not_reach_provider(session):

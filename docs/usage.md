@@ -22,7 +22,7 @@ including “What time is Ciel?” when speech recognition drops “it”. That 
 retains the raw transcript and does not authorize memory commands. Background summaries use the economical route (Groq when configured,
 otherwise the default NIM model), with separate `summary` routing logs. Technical
 words or long messages alone do not select the complex model; implementation,
-debugging, architecture, and explicit `/strong` requests do. `/fast` and `/local`
+debugging, architecture, and explicit `/strong` requests do. `/fast` and `/deep`
 remain available, and continuation requests retain the preceding task's routing.
 
 Action decisions use configured providers in this order: NIM, Groq, OpenRouter,
@@ -36,12 +36,12 @@ request and any successful format repair without loading personal conversation d
 OpenRouter defaults to its [Free Models Router](https://openrouter.ai/docs/guides/routing/routers/free-router),
 `openrouter/free`; the underlying model, availability, and latency can vary.
 
-`/local` requires Ollama and never falls back to cloud providers. After a local
-request, follow-up replies, summaries, and ambient intent classification for that
-persisted conversation also require Ollama, even after context trimming or restart.
-Clearing the conversation resets the restriction. A local
-provider outage reports failure or defers the background request. This setting
-controls provider routing; it does not disable microphone capture or persistence.
+The former private-session command has been retired. Previously marked private
+conversations retain their restrictions: replies, summaries, and ambient intent
+classification require Ollama, and web retrieval stays disabled, including after
+context trimming or restart. Clearing that conversation resets its restriction.
+An Ollama outage reports failure or defers background work for that conversation.
+Ollama remains an optional provider for ordinary routing.
 
 ## Personality and memory
 

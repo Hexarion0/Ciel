@@ -268,10 +268,11 @@ availability or spoken answer quality.
    no stale answer or source links attached to the next request. Disconnect the
    network, ask for current facts, and expect an inability-to-verify explanation
    and a retry offer. Restore connectivity and retry.
-6. Use `/local` and ask a related current-information question, including after
-   restart. Confirm the private session makes no external retrieval requests.
-   Also check `INTERNET_ENABLED=false` and `INTERNET_AUTOMATIC=false` behave as
-   documented.
+6. Verify a fixture containing previously marked private conversation history
+   makes no cloud or external retrieval requests, including after restart.
+   Check the retired private-session command is rejected locally without an AI
+   request. Also check `INTERNET_ENABLED=false` and `INTERNET_AUTOMATIC=false`
+   behave as documented.
 
 ## Live microphone acceptance
 

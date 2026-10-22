@@ -11,9 +11,10 @@ import threading
 from collections.abc import Callable
 from typing import TextIO
 
+from ciel.conversation import contains_retired_local_command
 from ciel.terminal_output import TerminalOutput
 
-_PROVIDER_COMMANDS = {"/fast", "/strong", "/deep", "/local"}
+_PROVIDER_COMMANDS = {"/fast", "/strong", "/deep"}
 _COMMAND_HELP = {
     "/status": "/status — Show the current session, microphone, listening mode, and memory status.",
     "/mute": "/mute [on|off] — Toggle the microphone, or explicitly mute/unmute it.",
@@ -28,7 +29,6 @@ _COMMAND_HELP = {
     "/fast": "/fast MESSAGE — Send one message using the fast route.",
     "/strong": "/strong MESSAGE — Send one message using the strong route.",
     "/deep": "/deep MESSAGE — Send one message using the deep route.",
-    "/local": "/local MESSAGE — Send one message using the local route.",
 }
 _COMMAND_USAGE = {
     "/status": "/status", "/mute": "/mute [on|off]", "/unmute": "/unmute",
@@ -77,6 +77,10 @@ class TerminalInput:
         """Handle controls locally; send ordinary text through the listener queue."""
         text = line.strip()
         if not text:
+            return
+        if contains_retired_local_command(text):
+            with self._command_lock:
+                self.write("/local is no longer available. Send your message normally.")
             return
         words = text.split()
         command = words[0].casefold()
@@ -132,7 +136,7 @@ class TerminalInput:
                     "/stop cancels the reply; /exit quits; /help shows these controls.\n"
                     "More controls: /status; /mute on|off; /unmute; /mode [ambient|wake]; "
                     "/memory [status|pause|resume]; /quit.\n"
-                    "Route one message with /fast, /strong, /deep, or /local. "
+                    "Route one message with /fast, /strong, or /deep. "
                     "Use /help COMMAND for details."
                 )
         elif command == "/status":

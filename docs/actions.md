@@ -85,10 +85,8 @@ authorize a local action.
 Current-information requests trigger searches by default. Explicit search and
 public HTTP(S) links also request retrieval; research, comparison, and double-check
 requests use larger bounded budgets. Relevant user memory and conversation context
-can refine queries. `/local` keeps retrieval disabled for the session, including
-follow-ups and restarts, until its history is cleared. `INTERNET_ENABLED=false`
-disables retrieval globally. See [internet settings](../README.md#internet-access)
-for limits and home-city setup.
+can refine queries. `INTERNET_ENABLED=false` disables retrieval globally.
+See [internet settings](../README.md#internet-access) for limits and home-city setup.
 
 Search or site failures must remain visible in the answer. Current facts require
 retrieved evidence; general background after a failed lookup needs a clear label.

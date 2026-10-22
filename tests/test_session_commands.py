@@ -102,16 +102,16 @@ def test_help_lists_new_controls_and_all_provider_overrides():
     terminal, callbacks = make_terminal()
     terminal.handle_line("/help")
     help_text = callbacks["write"].call_args.args[0]
-    for command in ("status", "unmute", "mode", "memory", "quit", "fast", "strong", "deep",
-                    "local"):
+    for command in ("status", "unmute", "mode", "memory", "quit", "fast", "strong", "deep"):
         assert f"/{command}" in help_text
+    assert "/local" not in help_text
     terminal.handle_line("/help missing")
     assert callbacks["write"].call_args.args[0] == "Unknown command. Use /help for controls."
     callbacks["submit"].assert_not_called()
 
 
 @pytest.mark.parametrize(
-    "text", ["/FAST Explain This", "/strong  keep  spacing", "/deep hello", "/local Status"],
+    "text", ["/FAST Explain This", "/strong  keep  spacing", "/deep hello"],
 )
 def test_provider_override_text_keeps_its_case_and_spacing(text):
     terminal, callbacks = make_terminal()

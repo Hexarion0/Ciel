@@ -140,8 +140,7 @@ Chat uses your existing AI providers, saved facts, and the paired owner's recent
 voice conversation. You can continue a voice conversation in Telegram and return
 to it by voice. The archives retain their channel and time; memory confirmations
 stay in the channel where they were proposed. Chat does not load speech models.
-Use `/help`, `/memory`, `/cancel`, and `/reset` in the paired chat. `/local <message>`
-keeps AI generation local; Telegram still transports your messages.
+Use `/help`, `/memory`, `/cancel`, and `/reset` in the paired chat.
 
 Automatic startup uses Linux systemd user services. The PC must be on, logged in,
 and connected. Pairing automatically pauses and resumes chat; no separate start
@@ -247,8 +246,8 @@ While CIEL is running, type these commands in the terminal or desktop web input:
 Microphone and listening-mode changes apply to the current session; restarting uses
 your saved configuration. Memory recall pause/resume persists across restarts and
 keeps saved facts, recent conversation, and learning active. These controls run
-locally without an AI request. Prefix a message with `/fast`, `/strong`, `/deep`, or
-`/local` to select a provider route for that message.
+locally without an AI request. Prefix a message with `/fast`, `/strong`, or `/deep`
+to select a provider route for that message.
 
 Try:
 
@@ -376,11 +375,9 @@ Edit `.env` and restart to change these controls:
 
 A location in your request overrides the saved default. Set `INTERNET_HOME_CITY`
 to your city and country, or tell CIEL the location when asked; a timezone does
-not establish your home city. `/local` keeps the conversation session private:
-internet retrieval stays disabled for follow-ups and after restarting CIEL,
-until that session's history is cleared.
-Private-session decisions use only Ollama. Local commands remain available without
-a cloud provider. If every eligible controller provider fails, an admitted request
+not establish your home city. `INTERNET_ENABLED=false` disables internet retrieval.
+Local commands remain available without a cloud provider. If every eligible
+controller provider fails, an admitted request
 receives a short clarification. Background speech stays outside the conversation.
 Research model requests have a 60-second stall limit; the investigation can continue
 across further useful lookups without an overall deadline.
@@ -426,13 +423,13 @@ and suppresses known wording in provider context; it does not erase archived cha
 Wake recognition, transcription, and speech synthesis run locally. Cloud replies
 send conversation context and relevant saved facts to the selected provider.
 Web searches send query terms and relevant user context to public search services,
-and page reads contact the requested public sites. Use `/local` to keep the session
-private or set `INTERNET_ENABLED=false` to disable retrieval.
+and page reads contact the requested public sites. Set `INTERNET_ENABLED=false`
+to disable retrieval.
 In ambient mode, short background excerpts stay temporarily in RAM. Ambiguous
 follow-ups can go to the configured AI provider with bounded dialogue context to
 choose a response or action. Clear inactive or third-party speech is filtered
-before the action decision. `/local` keeps these decisions local too. There is no speaker
-identification or acoustic echo cancellation. Diagnostic transcript logging can
+before the action decision. There is no speaker identification or acoustic echo
+cancellation. Diagnostic transcript logging can
 expose nearby speech, so enable it deliberately.
 
 ## Development

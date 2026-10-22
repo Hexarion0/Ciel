@@ -48,8 +48,7 @@ and delegates to shared conversation components. Wake detection, playback,
 captions, and microphone state stay in the desktop runtime.
 
 Telegram receives and transports chat text. Existing AI-provider choices still
-apply. `/local` restricts AI generation and web access to the existing local-only
-policy; it does not remove Telegram from the message path.
+apply.
 
 The chat service acknowledges incoming updates through a persisted offset and
 claims each authorized request before processing it. Repeated updates must not

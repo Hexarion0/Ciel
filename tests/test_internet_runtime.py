@@ -10,6 +10,7 @@ import pytest
 from ciel.config import InternetConfig
 from ciel.internet import InternetResult, InternetService, InternetSource
 from ciel.memory import MemoryItem, MemoryStore, MemoryType
+from ciel.memory.bridge import desktop_conversation_id
 from ciel.providers.base import LLMResponse, LLMStreamChunk
 from tests.test_ambient import run_callbacks
 
@@ -175,12 +176,22 @@ def test_canceled_lookup_cannot_generate_speak_or_save_an_answer(tmp_path, monke
 
 
 def test_local_only_session_skips_retrieval_for_followup(tmp_path, monkeypatch):
+    """Legacy private history remains protected after the local command's removal."""
+    seed = MemoryStore(tmp_path / "memory.db")
+    try:
+        seed.save_memory(MemoryItem(
+            content="A private conversation from an earlier release.",
+            memory_type=MemoryType.CONVERSATION,
+            metadata={"session_id": desktop_conversation_id(), "local_only": True},
+        ))
+    finally:
+        seed.close()
     service = stub_internet(monkeypatch, InternetResult())
     router = MagicMock()
     router.send.return_value = LLMResponse("I can answer locally.", "test", "ollama")
     _, _, _, store, _ = run_callbacks(
         tmp_path, monkeypatch,
-        [("/local today's news?", {"input_source": "keyboard"}),
+        [("Today's news?", {"input_source": "keyboard"}),
          ("What about tomorrow?", {"input_source": "keyboard"})],
         router=router,
     )

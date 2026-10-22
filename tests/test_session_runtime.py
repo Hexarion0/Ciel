@@ -214,9 +214,22 @@ def test_memory_pause_persists_but_microphone_and_mode_reset(launch_session, sur
 
 @pytest.mark.parametrize("surface", ["terminal", "web"])
 def test_provider_overrides_keep_their_message_routes(launch_session, surface):
-    messages = [f"/{route} Explain this clearly." for route in ("fast", "strong", "deep", "local")]
+    messages = [f"/{route} Explain this clearly." for route in ("fast", "strong", "deep")]
     result = launch_session(surface, [*messages, "/exit"])
     assert [call.args[0] for call in result.loop.submit_text.call_args_list] == messages
+
+
+@pytest.mark.parametrize("surface", ["terminal", "web"])
+def test_removed_local_command_never_enters_listener_or_changes_session(launch_session, surface):
+    result = launch_session(surface, [
+        "/local", "/LOCAL remember my name is Example",
+        "Hello\n/local Tell me a story", "Hello\n  /LOCAL remember my name is Example", "/exit",
+    ])
+    result.loop.submit_text.assert_not_called()
+    for state in result.states:
+        assert state["facts"] == ["Your favorite game is CS2."]
+        assert state["conversation"] == ["A conversation worth keeping."]
+    assert sum("no longer available" in message for message in result.feedback) == 4
 
 
 @pytest.mark.parametrize("surface", ["terminal", "web"])

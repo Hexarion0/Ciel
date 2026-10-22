@@ -129,7 +129,8 @@ def test_control_drops_older_queued_turns_and_preserves_newer_turns_without_conc
     assert receipts[2] == "cancelled"
 
 
-def test_ordinary_next_message_never_cancels_the_active_reply(state):
+@pytest.mark.parametrize("next_text", ["What about sports?", "/local stop", "/LOCAL wait"])
+def test_ordinary_or_retired_command_never_cancels_the_active_reply(state, next_text):
     started, release = threading.Event(), threading.Event()
     stop = threading.Event()
     seen, sent = [], []
@@ -148,19 +149,19 @@ def test_ordinary_next_message_never_cancels_the_active_reply(state):
                 return [update(1, "Search news")]
             if offset == 2:
                 assert started.wait(1)
-                return [update(2, "What about sports?")]
+                return [update(2, next_text)]
             release.set()
             time.sleep(0.001)
             return []
 
         def send(self, owner, text, cancel):
             sent.append(text)
-            if text == "What about sports? reply":
+            if text == next_text + " reply":
                 stop.set()
 
     TelegramService(Client(), state, 123, reply, stop=stop, clock=lambda: NOW).run()
-    assert seen == ["Search news", "What about sports?"]
-    assert sent == ["Search news reply", "What about sports? reply"]
+    assert seen == ["Search news", next_text]
+    assert sent == ["Search news reply", next_text + " reply"]
 
 
 @pytest.mark.parametrize("invalid", [

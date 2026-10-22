@@ -8,6 +8,8 @@ import pytest
 
 from ciel.config import InternetConfig
 from ciel.internet import InternetResult, InternetService, InternetSource
+from ciel.memory import MemoryItem, MemoryStore, MemoryType
+from ciel.memory.bridge import desktop_conversation_id
 from ciel.providers.base import LLMResponse
 from ciel.providers.router import ModelRouter
 from tests.test_ambient import run_callbacks
@@ -25,6 +27,19 @@ def _internet(monkeypatch, results):
     factory._context = InternetService._context
     monkeypatch.setattr("ciel.internet.InternetService", factory)
     return service
+
+
+def _seed_legacy_private_summary(tmp_path) -> None:
+    """Reopen protected history created before the local command was retired."""
+    store = MemoryStore(tmp_path / "memory.db")
+    try:
+        store.save_memory(MemoryItem(
+            content="A private conversation from an earlier release.",
+            memory_type=MemoryType.CONVERSATION,
+            metadata={"session_id": desktop_conversation_id(), "local_only": True},
+        ))
+    finally:
+        store.close()
 
 
 @pytest.mark.parametrize("typed", [False, True])
@@ -229,10 +244,11 @@ def test_topic_change_clears_pending_memory_before_later_yes(tmp_path, monkeypat
 
 
 def test_local_session_stays_private_after_restart_and_cannot_search(tmp_path, monkeypatch):
+    _seed_legacy_private_summary(tmp_path)
     router = MagicMock()
     router.send.return_value = _decision("local")
     _, _, _, store, turns = run_callbacks(tmp_path, monkeypatch, [
-        ("/local What time is it?", {"input_source": "keyboard"}),
+        ("What time is it?", {"input_source": "keyboard"}),
     ], router=router, controller=True)
     assert ":" in turns[-1].content
     router.send.assert_not_called()
@@ -273,7 +289,9 @@ def test_repeated_superseded_fragments_reach_one_final_controller_turn(
     first, second, latest = Event(), Event(), Event()
     first.set()
     second.set()
-    initial = ("/local " if private else "") + "explain this setting."
+    initial = "explain this setting."
+    if private:
+        _seed_legacy_private_summary(tmp_path)
     router = MagicMock()
     router.send.side_effect = [
         _decision("answer", intent="follow_up"),
@@ -345,7 +363,9 @@ def test_active_nameless_superseded_followup_is_gated_as_one_complete_turn(
 ):
     canceled = Event()
     canceled.set()
-    greeting = "Ciel, " + ("/local " if private else "") + "hello."
+    greeting = "Ciel, hello."
+    if private:
+        _seed_legacy_private_summary(tmp_path)
     router = MagicMock()
     router.send.side_effect = [
         _decision("answer", intent="greeting"), LLMResponse("Hello.", "chat", "nim"),
@@ -564,14 +584,13 @@ def test_logged_garbled_request_then_greeting_never_executes_old_search(
 @pytest.mark.parametrize("failure", [
     RuntimeError("NIM is not configured"), TimeoutError("offline"),
 ])
-@pytest.mark.parametrize("text", ["What time is it?", "/local What time is it?"])
 def test_explicit_clock_needs_no_controller_when_provider_is_unavailable(
-    tmp_path, monkeypatch, failure, text,
+    tmp_path, monkeypatch, failure,
 ):
     router = MagicMock()
     router.send.side_effect = failure
     _, _, _, store, turns = run_callbacks(
-        tmp_path, monkeypatch, [(text, {"input_source": "keyboard"})],
+        tmp_path, monkeypatch, [("What time is it?", {"input_source": "keyboard"})],
         router=router, controller=True,
     )
     try:

@@ -332,6 +332,13 @@ class ConversationManager:
                 content = strip_internal_reply_notes(content)
             if content:
                 messages.append(ChatMessage(turn.role, content, local_only=local_only))
+        if local_only and not messages:
+            # A legacy private summary can outlive the recent dialogue. Carry its
+            # routing policy without replaying its contents to an initial gate.
+            messages.append(ChatMessage(
+                "system", "This conversation retains a local-only routing policy.",
+                local_only=True,
+            ))
         return self._bound_replayed_messages(messages)
 
     def summarize_older_turns(self, router_or_provider: Any = None) -> str | None:

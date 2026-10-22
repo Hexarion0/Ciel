@@ -378,7 +378,7 @@ class TelegramService:
             # Keep setup/pairing imports light; classify only authenticated text.
             from ciel.controller import conversation_control
 
-            text = re.sub(r"^/(?:local|fast|strong|deep)\s+", "", request.text, flags=re.I)
+            text = re.sub(r"^/(?:fast|strong|deep)\s+", "", request.text, flags=re.I)
             if conversation_control(text) is not None:
                 if active is not None:
                     active.cancel.set()

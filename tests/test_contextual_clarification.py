@@ -8,6 +8,8 @@ import pytest
 
 from ciel.config import ControllerConfig
 from ciel.controller import AIController, ControllerDecision
+from ciel.memory import MemoryItem, MemoryStore, MemoryType
+from ciel.memory.bridge import desktop_conversation_id
 from ciel.providers.base import ChatMessage, LLMResponse, LLMStreamChunk
 from ciel.providers.router import ModelRouter
 from tests.test_ambient import run_callbacks
@@ -148,7 +150,7 @@ def test_private_web_policy_clarification_cannot_be_delegated_to_chat():
 def test_model_clarification_uses_full_history_without_any_tool_authority(
     tmp_path, monkeypatch, streaming, private,
 ):
-    """A normal active clarification reaches chat in both playback and privacy modes."""
+    """Active clarifications retain full dialogue and protection of legacy private history."""
     from ciel.actions import ActionRegistry
     from ciel.internet import InternetService
     from ciel.memory.service import MemoryService
@@ -159,7 +161,17 @@ def test_model_clarification_uses_full_history_without_any_tool_authority(
     monkeypatch.setattr(MemoryService, "handle", memory_handle)
     monkeypatch.setattr(ActionRegistry, "handle", action_handle)
     monkeypatch.setattr(InternetService, "lookup", lookup)
-    question = ("/local " if private else "") + "How long did the sample prototype take?"
+    question = "How long did the sample prototype take?"
+    if private:
+        seed = MemoryStore(tmp_path / "memory.db")
+        try:
+            seed.save_memory(MemoryItem(
+                content="A private conversation from an earlier release.",
+                memory_type=MemoryType.CONVERSATION,
+                metadata={"session_id": desktop_conversation_id(), "local_only": True},
+            ))
+        finally:
+            seed.close()
     original = "The prototype took 18 days."
     resolved = "Yes, just over two weeks of work."
     router, tts = MagicMock(), MagicMock()
@@ -190,7 +202,8 @@ def test_model_clarification_uses_full_history_without_any_tool_authority(
     try:
         assert len(gate_requests) == len(reply_requests) == 2
         assert [turn.content for turn in turns if turn.role == "assistant"] == [original, resolved]
-        assert [(message.role, message.content) for message in reply_requests[-1][1:]] == [
+        assert [(message.role, message.content) for message in reply_requests[-1]
+                if message.role != "system"] == [
             ("user", question), ("assistant", original), ("user", "That's a big number."),
         ]
         assert "Which number do you mean?" in reply_requests[-1][0].content
@@ -200,7 +213,7 @@ def test_model_clarification_uses_full_history_without_any_tool_authority(
         memory_handle.assert_not_called()
         action_handle.assert_not_called()
         lookup.assert_not_called()
-        assert store.count_memories() == 0
+        assert store.count_memories() == int(private)
     finally:
         store.close()
 

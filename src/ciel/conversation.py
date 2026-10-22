@@ -11,6 +11,11 @@ _INTERNAL_REPLY_NOTE = re.compile(
 )
 
 
+def contains_retired_local_command(text: str) -> bool:
+    """Reject fresh retired commands wherever legacy replay would detect their policy."""
+    return re.search(r"^\s*/local(?:\s|$)", text, re.I | re.M) is not None
+
+
 def strip_internal_reply_notes(text: str) -> str:
     """Remove reserved playback annotations from generated or replayed assistant text."""
     return _INTERNAL_REPLY_NOTE.sub("", text).strip()

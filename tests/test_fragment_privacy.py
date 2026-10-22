@@ -1,11 +1,13 @@
-"""Bounded pending speech must not discard an earlier explicit private route."""
+"""Speech fragments preserve old privacy boundaries without reviving retired commands."""
 
 from threading import Event
 from unittest.mock import MagicMock
 
 import pytest
 
-from ciel.internet import InternetService
+from ciel.internet import InternetResult, InternetService
+from ciel.memory import MemoryItem, MemoryStore, MemoryType
+from ciel.memory.bridge import desktop_conversation_id
 from ciel.memory.manager import ConversationManager
 from ciel.providers.base import LLMResponse
 from ciel.providers.router import ModelRouter
@@ -13,17 +15,34 @@ from tests.test_ambient import run_callbacks
 from tests.test_controller_runtime import _decision
 
 
-def _long_private_chain(*, address_all=False, empty_middle=False):
-    """Return linked clips whose original route falls outside the five-fragment tail."""
+def _seed_legacy_private_context(tmp_path, source):
+    """Write an archive from an older release before constructing the runtime."""
+    store = MemoryStore(tmp_path / "memory.db")
+    try:
+        manager = ConversationManager(store=store, session_id=desktop_conversation_id())
+        manager.add_turn("user", "/local Explain this setting." if source == "history" else
+                         "Explain this setting.")
+        if source == "summary":
+            store.save_memory(MemoryItem(
+                content="An earlier private discussion about this setting.",
+                memory_type=MemoryType.CONVERSATION,
+                metadata={"session_id": desktop_conversation_id(), "local_only": True},
+            ))
+    finally:
+        store.close()
+
+
+def _long_chain(*, address_all=False, retired_start=False):
+    """Include an empty interruption and more clips than the five-fragment tail."""
     texts = [
-        "Ciel, /local explain this setting.", "Include an example.", "Use simple words.",
+        "Ciel, explain this setting.", "Include an example.", "", "Use simple words.",
         "Keep it brief.", "Mention drawbacks.", "Cover alternatives.",
         "Finish with a recommendation.",
     ]
-    if empty_middle:
-        texts.insert(2, "")
+    if retired_start:
+        texts[0] = "Ciel, /LoCaL retired secret marker"
     if address_all:
-        texts = [texts[0], *["Ciel, " + text if text else "" for text in texts[1:-1]], texts[-1]]
+        texts = [texts[0], *["Ciel, " + text if text else "" for text in texts[1:]]]
     events = [Event() for _text in texts]
     for event in events[:-1]:
         event.set()
@@ -41,18 +60,16 @@ def _long_private_chain(*, address_all=False, empty_middle=False):
 
 
 @pytest.mark.parametrize("controller", [False, True])
-@pytest.mark.parametrize("empty_middle", [False, True])
-def test_private_route_survives_fragment_cap_and_persisted_history(
-    tmp_path, monkeypatch, controller, empty_middle,
+@pytest.mark.parametrize("source", ["history", "summary"])
+def test_legacy_privacy_survives_normal_fragment_cap_restart_and_summary(
+    tmp_path, monkeypatch, controller, source,
 ):
-    observed, final = _long_private_chain(address_all=not controller, empty_middle=empty_middle)
+    _seed_legacy_private_context(tmp_path, source)
+    observed, final = _long_chain(address_all=not controller)
     router = MagicMock()
-    router.send.side_effect = [
-        _decision("answer") if controller else LLMResponse(
-            '{"listener":"assistant","confidence":0.99}', "gate", "nim",
-        ),
-        LLMResponse("An explanation.", "chat", "nim"),
-    ]
+    router.send.side_effect = ([
+        _decision("answer"),
+    ] if controller else []) + [LLMResponse("An explanation.", "chat", "ollama")]
     prepare, lookup = MagicMock(), MagicMock()
     monkeypatch.setattr(InternetService, "prepare", prepare)
     monkeypatch.setattr(InternetService, "lookup", lookup)
@@ -60,160 +77,65 @@ def test_private_route_survives_fragment_cap_and_persisted_history(
         tmp_path, monkeypatch, [final], observed=observed, router=router, controller=controller,
     )
     try:
-        assert router.send.call_count == 2
+        assert router.send.call_count == (2 if controller else 1)
         assert all(ModelRouter.requires_local(call.args[0])
                    for call in router.send.call_args_list)
-        assert any(turn.content == "/local explain this setting." for turn in turns)
-        restored = ConversationManager(store=store, session_id=turns[0].session_id)
-        assert ModelRouter.requires_local(restored.get_gate_messages(limit=1))
-        assert ModelRouter.requires_local(restored.get_active_messages("Continue normally."))
-        assert store.count_memories() == 0
+        assert sum(turn.content.startswith("/local") for turn in turns) == (source == "history")
+        assert any(turn.content == "Finish with a recommendation." for turn in turns)
         prepare.assert_not_called()
         lookup.assert_not_called()
-        # A new manager uses persisted route policy even after the original
-        # fragment leaves the recent window and moves into a summary.
+    finally:
+        store.close()
+
+    # Reopen the archive independently with a smaller window, then summarize
+    # older turns. The old privacy decision must survive both kinds of clipping.
+    store = MemoryStore(tmp_path / "memory.db")
+    try:
         restored = ConversationManager(
-            store=store, session_id=turns[0].session_id, max_turns=2,
+            store=store, session_id=desktop_conversation_id(), max_turns=2,
             auto_summarize_threshold=2,
         )
+        assert ModelRouter.requires_local(restored.get_gate_messages(limit=1))
+        assert ModelRouter.requires_local(restored.get_active_messages("Continue normally."))
         summary_provider = MagicMock()
         summary_provider.name = "ollama"
         summary_provider.send.return_value = LLMResponse("A private explanation.", "chat", "ollama")
         assert restored.summarize_older_turns(summary_provider) == "A private explanation."
         assert ModelRouter.requires_local(summary_provider.send.call_args.args[0])
+        assert store.get_session_summary(desktop_conversation_id()).metadata["local_only"]
         assert ModelRouter.requires_local(restored.get_gate_messages(limit=1))
     finally:
         store.close()
 
 
-def test_contextual_reply_and_web_policy_inherit_the_uncapped_private_route(tmp_path, monkeypatch):
-    observed, final = _long_private_chain()
-    router = MagicMock()
-    router.send.side_effect = [
-        _decision("answer"), LLMResponse("The sample took 18 days.", "chat", "nim"),
-        _decision("clarify", speech="Which recommendation do you mean?"),
-        LLMResponse("A brief recommendation.", "chat", "nim"),
-    ]
-    _, _, _, store, _turns = run_callbacks(
-        tmp_path, monkeypatch,
-        [("Describe the sample.", {"input_source": "keyboard"}), final],
-        observed_after={0: observed}, router=router, controller=True,
-    )
-    try:
-        assert router.send.call_count == 4
-        assert all(ModelRouter.requires_local(call.args[0])
-                   for call in router.send.call_args_list[2:])
-    finally:
-        store.close()
-
-    lookup = MagicMock()
-    monkeypatch.setattr(InternetService, "lookup", lookup)
-    router = MagicMock()
-    router.send.return_value = _decision("search", query="sample alternatives")
-    _, _, _, store, turns = run_callbacks(
-        tmp_path, monkeypatch, [("Search for more alternatives.", {"input_source": "keyboard"})],
-        router=router, controller=True,
-    )
-    try:
-        assert ModelRouter.requires_local(router.send.call_args.args[0])
-        lookup.assert_not_called()
-        assert "private" in turns[-1].content
-    finally:
-        store.close()
-
-
-def test_unaccepted_long_private_chain_cannot_trigger_a_web_lookup(tmp_path, monkeypatch):
-    observed, final = _long_private_chain()
-    router = MagicMock()
-    router.send.return_value = _decision("search", query="sample alternatives")
-    lookup = MagicMock()
-    monkeypatch.setattr(InternetService, "lookup", lookup)
-    _, _, _, store, turns = run_callbacks(
-        tmp_path, monkeypatch, [final], observed=observed, router=router, controller=True,
-    )
-    try:
-        router.send.assert_called_once()
-        assert ModelRouter.requires_local(router.send.call_args.args[0])
-        lookup.assert_not_called()
-        assert "private" in turns[-1].content
-    finally:
-        store.close()
-
-
-@pytest.mark.parametrize("replacement", ["typed", "unlinked"])
-def test_replacement_does_not_persist_or_inherit_abandoned_private_fragments(
-    tmp_path, monkeypatch, replacement,
+@pytest.mark.parametrize("controller", [False, True])
+def test_superseded_retired_prefix_is_never_retained_merged_or_persisted(
+    tmp_path, monkeypatch, controller,
 ):
-    observed, _final = _long_private_chain(empty_middle=True)
-    info = {"cancel_event": Event(), "supersedes_cancel_event": Event()}
-    if replacement == "typed":
-        info["input_source"] = "keyboard"
+    observed, final = _long_chain(address_all=True, retired_start=True)
     router = MagicMock()
-    router.send.side_effect = [_decision("answer"), LLMResponse("A new answer.", "chat", "nim")]
+    router.send.side_effect = ([
+        _decision("answer"),
+    ] if controller else []) + [LLMResponse("An explanation.", "chat", "nim")]
+    monkeypatch.setattr(InternetService, "prepare", lambda *_args, **_kwargs: InternetResult())
     _, _, _, store, turns = run_callbacks(
-        tmp_path, monkeypatch, [("Ciel, describe another sample.", info)],
-        observed=observed, router=router, controller=True,
+        tmp_path, monkeypatch, [final], observed=observed, router=router, controller=controller,
     )
     try:
+        assert router.send.call_count == (2 if controller else 1)
         assert all(not ModelRouter.requires_local(call.args[0])
                    for call in router.send.call_args_list)
-        assert not any("/local" in turn.content for turn in turns)
+        assert all("retired secret marker" not in message.content
+                   for call in router.send.call_args_list for message in call.args[0])
+        assert all("/local" not in turn.content.casefold() for turn in turns)
         assert store.count_memories() == 0
     finally:
         store.close()
 
 
-@pytest.mark.parametrize("address_final", [False, True])
-def test_stopped_private_chain_does_not_revive_or_persist_on_later_speech(
-    tmp_path, monkeypatch, address_final,
+def test_retired_transcript_does_not_establish_an_active_ambient_conversation(
+    tmp_path, monkeypatch,
 ):
-    observed, final = _long_private_chain()
-    if address_final:
-        final = ("Ciel, " + final[0], final[1])
-    rejected = final[1]["cancel_event"]
-    stopped = Event()
-    router = MagicMock()
-    replies = iter([
-        _decision("answer"), LLMResponse("A new answer.", "chat", "nim"),
-    ])
-
-    def send(*_args, **_kwargs):
-        if router.send.call_count == 1:
-            # Cancel while the pending private request is still being classified;
-            # the following app-owned stop must discard it before the next topic.
-            rejected.set()
-            return _decision("answer")
-        return next(replies)
-
-    router.send.side_effect = send
-
-    def utterances():
-        yield final
-        yield "Stop.", {
-            "cancel_event": stopped, "supersedes_cancel_event": rejected,
-        }
-        stopped.set()
-        yield "Ciel, describe another sample.", {
-            "cancel_event": Event(), "supersedes_cancel_event": stopped,
-        }
-
-    _, _, _, store, turns = run_callbacks(
-        tmp_path, monkeypatch, utterances(), observed=observed, router=router, controller=True,
-    )
-    try:
-        assert router.send.call_count == 3
-        assert ModelRouter.requires_local(router.send.call_args_list[0].args[0])
-        assert all(not ModelRouter.requires_local(call.args[0])
-                   for call in router.send.call_args_list[1:])
-        assert [turn.content for turn in turns if turn.role == "user"] == [
-            "describe another sample.",
-        ]
-        assert store.count_memories() == 0
-    finally:
-        store.close()
-
-
-def test_abandoned_private_ram_transcript_still_keeps_legacy_gate_local(tmp_path, monkeypatch):
     canceled = Event()
     canceled.set()
     router = MagicMock()
@@ -223,14 +145,13 @@ def test_abandoned_private_ram_transcript_still_keeps_legacy_gate_local(tmp_path
     _, _, _, store, turns = run_callbacks(
         tmp_path, monkeypatch,
         [("Could you explain something else?", {"supersedes_cancel_event": Event()})],
-        observed=[("Ciel, /local explain this setting.", {
+        observed=[("Ciel, /local retired secret marker", {
             "superseded": True, "cancel_event": canceled,
         })],
         router=router, controller=False,
     )
     try:
-        router.send.assert_called_once()
-        assert ModelRouter.requires_local(router.send.call_args.args[0])
+        router.send.assert_not_called()
         assert turns == []
         assert store.count_memories() == 0
     finally:
