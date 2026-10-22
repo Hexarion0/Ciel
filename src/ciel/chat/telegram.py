@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import math
 import re
 import secrets
 import threading
@@ -21,6 +22,61 @@ MAX_MESSAGE_AGE_SECONDS = 300
 PAIR_TTL_SECONDS = 300
 MAX_PENDING_REQUESTS = 16
 REPLY_SHUTDOWN_SECONDS = 2.0
+MAX_PHOTO_BYTES = 10_000_000
+
+
+@dataclass(frozen=True)
+class OutgoingPhoto:
+    """One application-authorized, expiring PNG held only in memory."""
+
+    data: bytes = field(repr=False)
+    expires_at: float
+    caption: str = ""
+    valid: Callable[[], bool] | None = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.data) is not bytes or not 33 <= len(self.data) <= MAX_PHOTO_BYTES
+            or self.data[:8] != b"\x89PNG\r\n\x1a\n"
+            or self.data[8:16] != b"\x00\x00\x00\rIHDR"
+        ):
+            raise ValueError("Screenshot delivery requires a bounded PNG image.")
+        width = int.from_bytes(self.data[16:20], "big")
+        height = int.from_bytes(self.data[20:24], "big")
+        if (
+            not width or not height or width + height > 10_000
+            or max(width, height) > 20 * min(width, height)
+        ):
+            raise ValueError("Screenshot dimensions exceed Telegram's photo limits.")
+        if not isinstance(self.expires_at, (int, float)) or not math.isfinite(self.expires_at):
+            raise ValueError("Screenshot delivery requires a finite expiry time.")
+        if not isinstance(self.caption, str) or len(self.caption.encode("utf-16-le")) > 2048:
+            raise ValueError("Screenshot caption exceeds Telegram's caption limit.")
+        if self.valid is not None and not callable(self.valid):
+            raise ValueError("Screenshot validity must be an application callback.")
+
+
+def _photo_is_current(photo: OutgoingPhoto, now: float) -> bool:
+    """Fail closed when a reset revokes an image lease or its expiry is reached."""
+    try:
+        return now < photo.expires_at and (photo.valid is None or bool(photo.valid()))
+    except Exception:
+        return False
+
+
+class ChatReply(str):
+    """Preserve text-reply compatibility while carrying explicit photo delivery."""
+
+    photos: tuple[OutgoingPhoto, ...]
+
+    def __new__(cls, text: str, *, photos: tuple[OutgoingPhoto, ...] = ()) -> "ChatReply":
+        if not isinstance(text, str):
+            raise TypeError("Chat reply text must be a string.")
+        if len(photos) > 1 or any(not isinstance(photo, OutgoingPhoto) for photo in photos):
+            raise ValueError("A chat reply may contain one authorized screenshot.")
+        answer = super().__new__(cls, text)
+        answer.photos = tuple(photos)
+        return answer
 
 
 class _ReplyCancellation(threading.Event):
@@ -41,6 +97,17 @@ class _ReplyCancellation(threading.Event):
                 break
             super().wait(0.05 if remaining is None else min(0.05, remaining))
         return self.is_set()
+
+
+class _DeliveryCancellation(_ReplyCancellation):
+    """Recheck pairing or expiry before every chunk, upload, and rate-limit retry."""
+
+    def __init__(self, cancel: threading.Event, permitted: Callable[[], bool]) -> None:
+        super().__init__(cancel)
+        self._permitted = permitted
+
+    def is_set(self) -> bool:
+        return super().is_set() or not self._permitted()
 
 
 @dataclass
@@ -105,15 +172,20 @@ class TelegramClient:
         """Attach service/pairing cancellation without changing injected client constructors."""
         self._stop = stop
 
-    async def _post(self, method: str, parameters: dict[str, Any]) -> httpx.Response:
+    async def _post(
+        self, method: str, parameters: dict[str, Any], *,
+        files: dict[str, tuple[str, bytes, str]] | None = None,
+        cancel: threading.Event | None = None,
+    ) -> httpx.Response:
         """Cancel the actual in-flight HTTP task before releasing pairing or polling locks."""
-        task = asyncio.create_task(self._client.post(self._base_url + method, json=parameters))
+        options = {"json": parameters} if files is None else {"data": parameters, "files": files}
+        task = asyncio.create_task(self._client.post(self._base_url + method, **options))
         try:
             while not task.done():
-                if self._stop is not None and self._stop.is_set():
+                if self._cancelled(cancel):
                     raise TelegramError("Telegram request cancelled.")
                 await asyncio.wait({task}, timeout=0.05)
-            if self._stop is not None and self._stop.is_set():
+            if self._cancelled(cancel):
                 raise TelegramError("Telegram request cancelled.")
             return await task
         finally:
@@ -122,14 +194,32 @@ class TelegramClient:
             with suppress(asyncio.CancelledError):
                 await task
 
-    def request(self, method: str, **parameters: Any) -> Any:
+    def _cancelled(self, cancel: threading.Event | None = None) -> bool:
+        return bool(
+            (self._stop is not None and self._stop.is_set())
+            or (cancel is not None and cancel.is_set())
+        )
+
+    def request(
+        self, method: str, *,
+        _files: dict[str, tuple[str, bytes, str]] | None = None,
+        _cancel: threading.Event | None = None, **parameters: Any,
+    ) -> Any:
         """Call a fixed Bot API method without exposing httpx's token-containing errors."""
         try:
-            if self._stop is not None and self._stop.is_set():
+            if self._cancelled(_cancel):
                 raise TelegramError("Telegram request cancelled.")
-            response = self._loop.run_until_complete(self._post(method, parameters)) if (
-                self._loop is not None
-            ) else self._client.post(self._base_url + method, json=parameters)
+            if self._loop is not None:
+                response = self._loop.run_until_complete(
+                    self._post(method, parameters, files=_files, cancel=_cancel),
+                )
+            else:
+                options = {"json": parameters} if _files is None else {
+                    "data": parameters, "files": _files,
+                }
+                response = self._client.post(self._base_url + method, **options)
+            if self._cancelled(_cancel):
+                raise TelegramError("Telegram request cancelled.")
             payload = response.json()
         except (httpx.HTTPError, ValueError):
             raise TelegramError(
@@ -193,13 +283,38 @@ class TelegramClient:
                 if stop.is_set():
                     return
                 try:
-                    self.request("sendMessage", chat_id=owner_id, text=chunk)
+                    self.request("sendMessage", chat_id=owner_id, text=chunk, _cancel=stop)
                     break
                 except TelegramError as error:
                     if not error.retry_after or attempt == 2:
                         raise
                     if stop.wait(error.retry_after):
                         return
+
+    def send_photo(
+        self, owner_id: int, photo: OutgoingPhoto, stop: threading.Event,
+    ) -> bool:
+        """Upload explicit PNG bytes once; retry only definite rate-limit rejections."""
+        if not isinstance(photo, OutgoingPhoto):
+            raise TypeError("Screenshot delivery requires an authorized photo.")
+        cancel = _DeliveryCancellation(stop, lambda: _photo_is_current(photo, time.time()))
+        for attempt in range(3):
+            if cancel.is_set():
+                return False
+            try:
+                self.request(
+                    "sendPhoto", chat_id=owner_id, caption=photo.caption,
+                    _files={"photo": ("screen.png", photo.data, "image/png")}, _cancel=cancel,
+                )
+                return True
+            except TelegramError as error:
+                if cancel.is_set():
+                    return False
+                if not error.retry_after or attempt == 2:
+                    raise
+                if cancel.wait(error.retry_after):
+                    return False
+        return False
 
     def close(self) -> None:
         """Release only the HTTP client created by this transport."""
@@ -263,6 +378,28 @@ class TelegramService:
         self._reply_worker: threading.Thread | None = None
         self.progress = progress
 
+    def _deliver(self, request: _ReplyTask, answer: str, cancel: threading.Event) -> bool:
+        """Keep pairing and cancellation boundaries around every outgoing component."""
+        permitted = _DeliveryCancellation(
+            cancel, lambda: self.state.owner(self.bot_id) == request.owner,
+        )
+        if permitted.is_set():
+            return False
+        if answer.strip():
+            try:
+                self.client.send(request.owner, answer, permitted)
+            except TelegramError:
+                if permitted.is_set():
+                    return False
+                raise
+        photos = answer.photos if isinstance(answer, ChatReply) else ()
+        for photo in photos:
+            if permitted.is_set() or not _photo_is_current(photo, self.clock()):
+                return False
+            if not self.client.send_photo(request.owner, photo, permitted):
+                return False
+        return True
+
     def _claim_request(self, update: dict[str, Any]) -> _ReplyTask | None:
         """Claim before any reply work, retaining owner and freshness boundaries."""
         update_id = update.get("update_id")
@@ -297,12 +434,12 @@ class TelegramService:
             self.state.finish(self.bot_id, request.update_id, "cancelled")
             return
         try:
-            self.client.send(request.owner, answer, self.stop)
+            delivered = self._deliver(request, answer, self.stop)
         except TelegramError as error:
             self.state.finish(self.bot_id, request.update_id, "reply_failed")
             self.report(f"Reply delivery failed: {error} The request will not be run again.")
             return
-        self.state.finish(self.bot_id, request.update_id, "done")
+        self.state.finish(self.bot_id, request.update_id, "done" if delivered else "cancelled")
 
     def poll(self, *, timeout: int = 20) -> list[dict[str, Any]]:
         """Retry read-only polls with bounded, interruptible delays."""
@@ -427,19 +564,23 @@ class TelegramService:
                     self.report(f"Progress delivery failed: {error}")
 
         def finish(request: _ReplyTask) -> None:
+            answer = request.answer
+            # The idle worker retains its last task while waiting for more work.
+            # Release any image bytes as soon as delivery finishes or is cancelled.
+            request.answer = ""
             if (
-                request.cancel.is_set() or not request.answer
+                request.cancel.is_set() or not answer
                 or self.state.owner(self.bot_id) != request.owner
             ):
                 self.state.finish(self.bot_id, request.update_id, "cancelled")
                 return
             try:
-                self.client.send(request.owner, request.answer, request.cancel)
+                delivered = self._deliver(request, answer, request.cancel)
             except TelegramError as error:
                 self.state.finish(self.bot_id, request.update_id, "reply_failed")
                 self.report(f"Reply delivery failed: {error} The request will not be run again.")
                 return
-            self.state.finish(self.bot_id, request.update_id, "done")
+            self.state.finish(self.bot_id, request.update_id, "done" if delivered else "cancelled")
 
         worker = threading.Thread(target=generate, name="ciel-telegram-reply", daemon=True)
         self._reply_worker = worker

@@ -63,6 +63,8 @@ class ScriptedUI:
             answer = next(self.more_provider_choices, None)
         elif title == "Search provider":
             answer = next(self.search_choices, None)
+        elif title in {"Screen connection", "Screen model"}:
+            answer = None
         elif title == "Chat service":
             answer = next(self.chat_choices, None)
         elif title == "Chat at login":
@@ -480,8 +482,8 @@ def test_review_can_return_to_customize(tmp_path, wizard_factory):
 def test_numbered_terminal_menu_completes_customize_flow(tmp_path, wizard_factory, monkeypatch):
     harness = wizard_factory([], secrets=["", "", ""])
     output = StringIO()
-    # Customize, keep personal defaults, skip keys, free search, skip chat, Amy, save and confirm.
-    terminal_input = StringIO("2\n\n\n\n4\n\n\n\n3\n1\n1\n1\n1\n1\n1\n")
+    # Customize, personal defaults, skip keys, free search, screen off, skip chat, Amy.
+    terminal_input = StringIO("2\n\n\n\n4\n\n\n\n\n3\n1\n1\n1\n1\n1\n1\n")
     monkeypatch.setattr(
         setup_wizard, "ConsoleUI", lambda: ConsoleUI(stream=output, input_stream=terminal_input),
     )

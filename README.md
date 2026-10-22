@@ -25,6 +25,9 @@ internet, and desktop acceptance checks remain open in
   or development console output.
 - Owner-paired Telegram text chat, automatically started when configured, with
   conversation continuity across voice and chat without loading voice models.
+- On-request Hyprland screen understanding across all monitors, including mouse
+  position, temporary image context, and explicit screenshot delivery in Telegram.
+  See [screen awareness](docs/screen-awareness.md) for setup and acceptance status.
 
 Reminders, additional chat services, model-selected tool calls, Windows support, tone detection,
 and presence detection are **planned**.

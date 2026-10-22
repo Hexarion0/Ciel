@@ -47,8 +47,12 @@ delivery, and transport state. A headless conversation session owns text request
 and delegates to shared conversation components. Wake detection, playback,
 captions, and microphone state stay in the desktop runtime.
 
-Telegram receives and transports chat text. Existing AI-provider choices still
-apply.
+Telegram receives text requests and can send a PC screenshot when explicitly
+requested. Ask “Look at my screen” for an explanation, then “What about now?” for
+a fresh view. Replies are text-only by default; “Send me a screenshot” requests
+image delivery. Incoming image uploads remain planned. The PC must have an
+unlocked, reachable Hyprland desktop and a working selected vision connection
+for explanations. See [screen awareness](screen-awareness.md).
 
 The chat service acknowledges incoming updates through a persisted offset and
 claims each authorized request before processing it. Repeated updates must not
@@ -81,6 +85,8 @@ Unpairing or changing owner excludes the previous chat archive from future conte
 No archive migration or deletion is needed. `/reset` clears the Telegram archive
 and invalidates summaries that included it, keeping voice history and saved facts.
 Local-only routing stays enforced across the shared context and its summaries.
+Reset and owner changes also invalidate temporary screenshots and pending image
+deliveries. Only the last two captures remain available for up to 15 minutes.
 
 ## Validation
 

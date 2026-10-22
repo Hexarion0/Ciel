@@ -40,6 +40,7 @@ from ciel.research import (
     evidence_payload,
     previous_observations,
 )
+from ciel.screen.service import ScreenService, screen_scope
 
 logger = get_logger("chat.session")
 REQUEST_TIMEOUT_SECONDS = 60.0
@@ -59,6 +60,7 @@ _HELP = (
     "/cancel — discard a pending memory change\n"
     "/reset — clear this chat's history, keeping voice history and saved facts\n"
     "/fast, /strong, /deep — use your existing AI routing choices\n\n"
+    "Ask me to look at your screen, or send a screenshot of your PC.\n"
     "Reminders, voice messages, and desktop actions are not available in chat yet."
 )
 
@@ -129,6 +131,7 @@ class ChatSession:
         self.progress: Callable[[str], None] = lambda _: None
         self._search_paused = False
         self._lock = threading.RLock()
+        self.screen = ScreenService(settings, self.conversation)
 
     def _finish(
         self, text: str, *, provider: str = "local", model: str = "chat",
@@ -196,6 +199,39 @@ class ChatSession:
                 return self._finish(
                     "Reminders aren't available in chat yet. I haven't scheduled one.",
                 )
+            visual = self.screen.resolve(local_text)
+            if visual is not None:
+                canceled = _RequestCancellation(cancel_event)
+                scope = screen_scope(self.conversation)
+                messages = self.conversation.get_active_messages(system_prompt=
+                    self.context.system_prompt([], generate=_text_prompt))
+                try:
+                    result = self.screen.answer(
+                        visual, messages, cancel_event=canceled,
+                        current=lambda: scope == screen_scope(self.conversation),
+                    )
+                    if (result is None or canceled.is_set()
+                            or scope != screen_scope(self.conversation)
+                            or not self.screen.still_valid(result)):
+                        return ""
+                    turn_id = self.conversation.add_turn(
+                        "assistant", result.text, provider=result.provider, model=result.model,
+                    )
+                    self.screen.mark(turn_id)
+                    if result.image is not None:
+                        from ciel.chat.telegram import ChatReply, OutgoingPhoto
+
+                        return ChatReply(result.text, photos=(OutgoingPhoto(
+                            data=result.image, expires_at=result.expires_at,
+                            valid=lambda: self.screen.image_valid(result),
+                        ),))
+                    return result.text
+                except Exception as error:
+                    if canceled.is_set() or scope != screen_scope(self.conversation):
+                        return ""
+                    logger.warning("Screen request failed (%s).", type(error).__name__)
+                    return self._finish("I couldn't access the screen just now. Please try again.",
+                                        model="screen")
             if (_DESKTOP_ACTION.match(local_text) and not public_urls(local_text)
                     and not evidence_followup(local_text)):
                 return self._finish("Desktop actions aren't available through chat yet.")
@@ -224,6 +260,8 @@ class ChatSession:
             "No desktop action, reminder, scheduled delivery, voice playback, or file access "
             "was performed. Those features are unavailable in this channel. Do not claim "
             "success or promise future work. The latest user message was typed intentionally."
+            " No screenshot was obtained for this turn. Earlier screen discussions are "
+            "historical text, not current visual access."
         )
         messages = self.conversation.get_active_messages(system_prompt=prompt)
         if scope != self.conversation.context_session_ids():
@@ -307,4 +345,5 @@ class ChatSession:
     def close(self) -> None:
         """Discard unconfirmed changes and close this thread's database connection."""
         self.memory.cancel_proposal()
+        self.screen.close()
         self.store.close()

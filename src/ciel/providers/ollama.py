@@ -54,7 +54,7 @@ class OllamaProvider(LLMProvider):
 
         payload = {
             "model": target_model,
-            "messages": [m.to_dict() for m in msgs],
+            "messages": [m.to_ollama_dict() for m in msgs],
             "options": {
                 "temperature": temperature,
                 "num_predict": max_tokens,
@@ -103,7 +103,7 @@ class OllamaProvider(LLMProvider):
 
         payload = {
             "model": target_model,
-            "messages": [m.to_dict() for m in msgs],
+            "messages": [m.to_ollama_dict() for m in msgs],
             "options": {
                 "temperature": temperature,
                 "num_predict": max_tokens,

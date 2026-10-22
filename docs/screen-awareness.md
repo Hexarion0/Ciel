@@ -1,6 +1,6 @@
 # Screen awareness: agreed design and implementation plan
 
-Status: **design agreed, implementation pending**. Updated: **2026-10-22**.
+Status: **implemented; live screen/Telegram acceptance pending**. Updated: **2026-10-22**.
 
 The first version lets Ciel look at the user's desktop when asked and discuss it
 naturally through voice, the desktop interface, or the paired Telegram account.
@@ -57,21 +57,34 @@ setup; any additional provider requires an explicit setup choice. Do not infer
 vision support from the presence of a key, a provider name, or a catalog listing.
 Verify the model with a small synthetic image before using personal screenshots.
 
-Current integration gaps:
+Implemented integration:
 
-- `providers/base.py` has text-only messages. Add typed image attachments and
-  provider-specific serialization without turning images into transcript text.
-- `providers/manager.py` can fall back across text models. Image requests need
-  capability-filtered routing and the existing protected-history routing rules.
-  Do not silently send an image to an incompatible model or another service.
-- `controller.py`, `runtime.py`, and `chat/session.py` need a shared screen-request
-  path. Keep application admission, owner checks, cancellation, and memory policy
-  outside model-generated decisions.
-- Telegram transport currently handles text. Add explicit outgoing screenshot
-  delivery without bundling incoming image/document uploads into this milestone.
-- Voice and Telegram run in separate processes. Provide one owner-scoped,
-  audio-independent capture/cache interface that works with the logged-in desktop
-  session and has explicit lifetime, expiry, and reset behavior.
+- `providers/base.py` carries typed image attachments, excluded from message
+  representations. Text-only serialization remains unchanged; Ollama uses native
+  image fields. Generic text routing rejects attachments before any fallback.
+- `providers/vision.py` uses one explicitly selected provider/model, verifies it
+  with synthetic pixels, checks protected history, and bounds/cancels HTTP calls.
+  One labeled contact sheet supports models that accept only one image per request.
+- `screen/service.py` resolves clear user requests and visual follow-ups for
+  `runtime.py` and `chat/session.py`. Admission, ownership, cancellation, and
+  memory authorization remain application decisions. One bounded native crop can
+  supply a closer view before asking the user about unreadable details.
+- Telegram sends a bounded PNG only when explicitly requested. Expiry, pairing,
+  reset, and cancellation are rechecked before delivery and retry. Desktop/voice
+  requests to send an image receive guidance to request it in Telegram.
+- `screen/capture.py` reads all active outputs and cursor metadata without audio.
+  `screen/cache.py` shares private runtime files between same-owner processes;
+  live leases, reset generations, expiry checks, and idle cleanup bound their lifetime.
+
+Configure screen understanding in `ciel setup`, or use `SCREEN_ENABLED`,
+`SCREEN_PROVIDER`, `SCREEN_MODEL`, and `SCREEN_TIMEOUT_SECONDS` in `.env`.
+The default is the existing NIM connection with
+[`meta/llama-3.2-11b-vision-instruct`](https://build.nvidia.com/meta/llama-3.2-11b-vision-instruct).
+Its [image API](https://docs.api.nvidia.com/nim/reference/meta-llama-3_2-11b-vision-instruct)
+passed a synthetic red/blue image check in **1.44 seconds on 2026-10-22**.
+The catalog also listed the larger 90B candidate, but its inference timed out;
+the implementation does not treat catalog membership as working image support.
+No personal screen pixels were used for model verification.
 
 The current desktop is Hyprland on Wayland. Installed `grim` supports capturing
 the cursor with `-c`; compositor metadata can supply output layout and pointer
@@ -85,23 +98,22 @@ offsets, scale, crop transforms, focus, and capture time alongside the image. If
 pointer metadata is sampled separately from the pixels, account for movement
 instead of claiming an exact target from stale coordinates.
 
-## Implementation order
+## Implemented stages
 
-1. **Capture contract and temporary cache.** Define a capture containing monitor
-   images/layout, cursor information, timestamps, and owner/reset identity. Add
+1. **Capture contract and temporary cache.** A capture contains monitor
+   images/layout, cursor information, timestamps, and owner/reset identity, with
    all-monitor capture, transformed cursor positions, bounded storage, expiry,
    cancellation, and audio-independent access from separate processes.
-2. **Image messages and model routing.** Add attachment serialization and explicit
-   vision configuration/capability checks. Preserve legacy private-history
-   restrictions and failure behavior. Verify a configured model with a synthetic
-   image; do not use a real screen for availability probing.
-3. **Shared conversation flow.** Connect voice, desktop text, and paired Telegram
-   requests to the same resolver. Support fresh contextual follow-ups, previous
+2. **Image messages and model routing.** Typed attachments and explicit vision
+   configuration/capability checks preserve legacy private-history restrictions.
+   Availability probing uses synthetic pixels before personal screen inference.
+3. **Shared conversation flow.** Voice, desktop text, and paired Telegram requests
+   use the same resolver, with fresh contextual follow-ups, previous
    image comparisons, targeted crops, timestamped observations, and expired-image
    responses without creating durable personal facts automatically.
-4. **Explicit screenshot delivery and acceptance.** Add Telegram image output,
-   enforce cancellation/owner/reset checks before delivery, document setup and
-   limitations, then perform the live checks below before marking the feature done.
+4. **Explicit screenshot delivery.** Telegram image output enforces
+   cancellation/owner/reset checks before delivery. The live checks below remain
+   necessary before marking desktop acceptance complete.
 
 ## Acceptance checks
 
@@ -136,6 +148,17 @@ committing captures or other personal data.
 Completion requires a real request covering all monitors and the pointer, a fresh
 follow-up/comparison, and a paired voice/chat handoff with the chosen vision model.
 Automated checks alone do not establish that desktop acceptance.
+
+Validation on 2026-10-22: **2,943 automated tests passed**, with five hardware/model
+integration tests deselected. Ruff, documentation links, and wheel build passed.
+Synthetic coverage includes separate-process sharing/crash cleanup, reset during
+inference or error handling, expiry during comparison, crop geometry, request
+negations, and explicit Telegram image delivery. Target-desktop metadata checks
+confirmed unlocked-session status, two active monitors, cursor position support,
+and background session discovery without inherited display variables. These
+checks captured no pixels. Actual
+all-monitor image quality, pointer targeting, and live paired Telegram handoff
+remain acceptance work.
 
 Incoming Telegram image uploads, documents, continuous observation, and clicking
 or typing remain separate roadmap work. See the [roadmap](roadmap.md).

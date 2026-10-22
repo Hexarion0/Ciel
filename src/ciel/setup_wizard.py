@@ -11,6 +11,7 @@ from dotenv import dotenv_values, set_key, unset_key
 from ciel.audio.engines import resolve_tts_engine
 from ciel.chat.setup import apply_chat_autostart, chat_review_rows, configure_chat
 from ciel.config import (
+    DEFAULT_SCREEN_MODEL,
     AudioConfig,
     ProviderConfig,
     get_settings,
@@ -102,6 +103,10 @@ def _initial_configuration(current_env: dict[str, str]) -> dict[str, str]:
         "INTERNET_PROVIDER": "ddgs",
         "MEMORY_LEARNING_MODE": "confirm",
         "NIM_MODEL": ProviderConfig().nim_model,
+        "SCREEN_ENABLED": "true",
+        "SCREEN_PROVIDER": "nim",
+        "SCREEN_MODEL": DEFAULT_SCREEN_MODEL,
+        "SCREEN_TIMEOUT_SECONDS": "60",
         "OLLAMA_HOST": "http://localhost:11434",
         "WAKE_WORD": "hey ciel",
         "WAKE_THRESHOLD": "0.5",
@@ -259,6 +264,49 @@ def _search_label(configuration: dict[str, str]) -> str:
     )
 
 
+def _configure_screen(ui: ConsoleUI, configuration: dict[str, str]) -> None:
+    """Select one existing image connection without borrowing other providers' quotas."""
+    ui.step("Screen awareness")
+    ui.note("Ciel looks only when asked. Choose an existing AI connection for screenshots.")
+    ui.note("The selected model must pass a small synthetic image check before screen images.")
+    choices = [
+        (value, name) for value, name, key in _API_PROVIDERS
+        if configuration.get(key, "").strip()
+    ]
+    choices.extend([("ollama", "Ollama · an installed local image model"), ("off", "Off")])
+    current = configuration.get("SCREEN_PROVIDER", "nim")
+    enabled = configuration.get("SCREEN_ENABLED", "true").lower() in {"true", "1", "yes", "on"}
+    selected = ui.choose(
+        "Screen connection", choices,
+        default=current if enabled and current in {value for value, _name in choices} else "off",
+    )
+    if selected == "off":
+        configuration["SCREEN_ENABLED"] = "false"
+        return
+    saved_model = configuration.get("SCREEN_MODEL", "") if selected == current else ""
+    suggested = saved_model or (DEFAULT_SCREEN_MODEL if selected == "nim" else "")
+    model_choices = ([("keep", f"Use {suggested}")] if suggested else [])
+    model_choices.append(("custom", "Enter an image model ID"))
+    choice = ui.choose("Screen model", model_choices, default="keep" if suggested else "custom")
+    if choice == "custom":
+        suggested = ui.prompt("Image model ID (Enter to keep the previous screen choice)").strip()
+        if not suggested:
+            return
+    configuration.update(
+        SCREEN_ENABLED="true", SCREEN_PROVIDER=selected, SCREEN_MODEL=suggested,
+    )
+
+
+def _screen_label(configuration: dict[str, str]) -> str:
+    """Describe the selected screen model without claiming that it was tested."""
+    if configuration.get("SCREEN_ENABLED", "true").lower() not in {"true", "1", "yes", "on"}:
+        return "Off"
+    return (
+        f"{configuration.get('SCREEN_PROVIDER', 'nim')} · "
+        f"{configuration.get('SCREEN_MODEL', DEFAULT_SCREEN_MODEL)} · image check on first use"
+    )
+
+
 def _enabled(configuration: dict[str, str], key: str) -> bool:
     """Interpret the boolean spellings accepted by environment configuration."""
     return configuration.get(key, "").strip().lower() in {"1", "true", "yes", "on", "y", "t"}
@@ -353,6 +401,7 @@ def _customize(
     _personalize(ui, configuration)
     _configure_keys(ui, configuration)
     _configure_search(ui, configuration)
+    _configure_screen(ui, configuration)
     configure_chat(ui, configuration)
     pending_persona = _configure_persona(ui, configuration, pending_persona, original_names)
     ui.step("Voice")
@@ -402,6 +451,7 @@ def _review_configuration(
         ("AI connection", f"{', '.join(providers)} · key configured" if providers
          else "No cloud key; local tools available"),
         ("Web search", _search_label(configuration)),
+        ("Screen awareness", _screen_label(configuration)),
         ("Voice", _voice_label(configuration) if _enabled(configuration, "TTS_ENABLED")
          else "Voice output off"),
         ("Recognition", f"{configuration['STT_MODEL']} · {configuration['STT_DEVICE'].upper()}"),
@@ -512,6 +562,7 @@ def run_setup_wizard(*, install_components: bool = False) -> bool:
             _personalize(ui, configuration)
             _configure_keys(ui, configuration)
             _configure_search(ui, configuration)
+            _configure_screen(ui, configuration)
             configure_chat(ui, configuration)
             pending_persona = _configure_persona(ui, configuration, pending_persona, original_names)
         if install_components:

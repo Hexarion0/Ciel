@@ -5,7 +5,13 @@ from threading import Event
 from typing import Any
 
 from ciel.logging import get_logger
-from ciel.providers.base import ChatMessage, LLMProvider, LLMResponse, LLMStreamChunk
+from ciel.providers.base import (
+    ChatMessage,
+    LLMProvider,
+    LLMResponse,
+    LLMStreamChunk,
+    require_text_messages,
+)
 from ciel.providers.groq import GroqProvider
 from ciel.providers.nim import NimProvider
 from ciel.providers.ollama import OllamaProvider
@@ -89,6 +95,7 @@ class ProviderManager:
         **kwargs: Any,
     ) -> LLMResponse:
         """Send prompt attempting preferred provider first with automatic fallback."""
+        require_text_messages(messages)
         preferred = preferred_provider.lower() if preferred_provider else None
         order: list[str] = []
         if preferred in self.providers:
@@ -152,6 +159,7 @@ class ProviderManager:
         **kwargs: Any,
     ) -> Iterator[LLMStreamChunk]:
         """Stream response from the first functioning provider."""
+        require_text_messages(messages)
         preferred = preferred_provider.lower() if preferred_provider else None
         order: list[str] = []
         if preferred in self.providers:

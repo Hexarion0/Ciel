@@ -476,9 +476,12 @@ class ConversationManager:
 
     def clear_session(self) -> int:
         """Clear persisted context and invalidate any summary currently being generated."""
+        from ciel.screen.lifecycle import invalidate_screen_images
+
         with self._lock:
             cleared = self.store.clear_session(self.session_id)
             self._generation += 1
             self._cached_summary = None
+        invalidate_screen_images()
         logger.info("Cleared %d turns for session '%s'", cleared, self.session_id)
         return cleared

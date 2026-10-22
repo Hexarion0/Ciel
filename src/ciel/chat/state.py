@@ -66,17 +66,23 @@ class ChatState:
 
     def bind(self, bot_id: int, owner_id: int) -> None:
         """Bind an owner after local code verification, preserving the consumed offset."""
+        from ciel.screen.lifecycle import invalidate_screen_images
+
         with self._db:
             self._db.execute(
                 "INSERT INTO telegram_bots (bot_id, owner_id) VALUES (?, ?) "
                 "ON CONFLICT(bot_id) DO UPDATE SET owner_id = excluded.owner_id",
                 (bot_id, owner_id),
             )
+        invalidate_screen_images()
 
     def unpair(self) -> None:
         """Remove local owner bindings while retaining delivery offsets against replay."""
+        from ciel.screen.lifecycle import invalidate_screen_images
+
         with self._db:
             self._db.execute("UPDATE telegram_bots SET owner_id = NULL")
+        invalidate_screen_images()
 
     def bindings(self) -> list[tuple[int, int]]:
         """Return local bot/owner identifiers for a terminal status display."""

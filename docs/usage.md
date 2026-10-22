@@ -43,6 +43,34 @@ context trimming or restart. Clearing that conversation resets its restriction.
 An Ollama outage reports failure or defers background work for that conversation.
 Ollama remains an optional provider for ordinary routing.
 
+## Screen questions
+
+Say “Ciel, look at my screen,” “What does this error mean?”, or “What's under my
+cursor?” Ciel captures all active monitors, including the pointer. During that
+discussion, “What about now?” and “What should I do next?” take fresh captures.
+Explicit questions about the last screenshot reuse it while it remains available.
+She explains and gives steps; she does not click or type.
+
+The same requests work in paired Telegram without starting voice mode. Telegram
+replies contain text by default; “Send me a screenshot” sends the latest discussed
+capture, or a new one if no screen discussion is active. If an explicitly referenced
+old capture has expired, Ciel asks for a fresh look instead of substituting one.
+
+`ciel setup` offers screen understanding using a saved AI connection or Off.
+`SCREEN_PROVIDER=nim` and `SCREEN_MODEL=meta/llama-3.2-11b-vision-instruct` are the
+defaults. The selected model must pass a synthetic image check before any personal
+image is sent. Screen requests never fall back to another provider or a text model.
+`SCREEN_TIMEOUT_SECONDS=60` bounds each model request, including verification.
+The first request can include both verification and the actual explanation.
+
+This backend requires an unlocked Hyprland Wayland session with `grim` and
+`hyprctl`. Missing tools, ambiguous desktop sessions, or an unavailable model
+produce an explanation. Keep the last two captures for up to 15 minutes in the
+private Linux runtime directory; restart, reset, or owner changes invalidate them.
+Brief text discussion remains in normal history. Copies explicitly sent to
+Telegram or the selected AI service have that service's retention rules.
+See [screen awareness](screen-awareness.md) for implementation and live checks.
+
 ## Personality and memory
 
 See [memory and personality](memory-persona.md) for confirmed goals and profiles,

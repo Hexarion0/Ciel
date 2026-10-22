@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, SecretStr, field_validator, model_validat
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_NIM_MODEL = "nvidia/nemotron-3.5-lightning-30b-a3b"
+DEFAULT_SCREEN_MODEL = "meta/llama-3.2-11b-vision-instruct"
 
 
 def _register_search_secret(value: SecretStr | None) -> SecretStr | None:
@@ -317,6 +318,12 @@ class Settings(BaseSettings):
     openrouter_api_key: SecretStr | None = Field(default=None)
     groq_api_key: SecretStr | None = Field(default=None)
     ollama_host: str = Field(default="http://localhost:11434")
+
+    # Screenshots use only this explicit image connection, never text-model fallback.
+    screen_enabled: bool = Field(default=True)
+    screen_provider: Literal["nim", "groq", "openrouter", "ollama"] = "nim"
+    screen_model: str = Field(default=DEFAULT_SCREEN_MODEL, min_length=1, max_length=256)
+    screen_timeout_seconds: float = Field(default=60.0, ge=1, le=120)
 
     # Messaging is disabled until a service is selected and paired locally.
     chat_services: str = ""

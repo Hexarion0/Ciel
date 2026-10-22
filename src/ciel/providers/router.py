@@ -8,7 +8,7 @@ from enum import Enum
 from ciel.config import get_settings
 from ciel.latency import mark
 from ciel.logging import get_logger
-from ciel.providers.base import ChatMessage, LLMResponse, LLMStreamChunk
+from ciel.providers.base import ChatMessage, LLMResponse, LLMStreamChunk, require_text_messages
 from ciel.providers.intents import answer_clock_query
 from ciel.providers.manager import ProviderManager
 from ciel.providers.priority import BackgroundDeferred, RequestPriority
@@ -183,6 +183,7 @@ class ModelRouter:
         cancel_event: threading.Event | None = None,
     ) -> LLMResponse:
         """Route and execute a chat completion with automatic fallback."""
+        require_text_messages(messages)
         mark(f"{purpose}.route_call_started")
         latest_user_text = next(
             (m.content for m in reversed(messages) if m.role == "user"),
@@ -240,6 +241,7 @@ class ModelRouter:
         cancel_event: threading.Event | None = None,
     ) -> Iterator[LLMStreamChunk]:
         """Route and stream chat completion tokens with automatic fallback."""
+        require_text_messages(messages)
         mark("conversation.route_call_started")
         local_only = self.requires_local(messages)
         decision = self.route(self._routing_text(messages), local_only=local_only)

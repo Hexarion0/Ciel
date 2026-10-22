@@ -22,7 +22,7 @@ before treating it as ready for everyday use.
 | Setup | Configure/review/save before selected package/model installation; CPU recognition choice by default; preserved existing settings; missing-asset reporting | Automatic Turbo setup, managed desktop runtime, clean-machine validation |
 | Desktop web interface | PC-local voice/text chat, live captions, status, and controls | Same-Wi-Fi phone access and desktop acceptance |
 | Messaging | Owner-paired Telegram text, automatic startup, shared conversation with separate archives | Live Telegram acceptance, reminders, additional services |
-| Screen awareness | Design agreed; implementation pending | All-monitor captures with mouse position, image-capable model routing, temporary images, voice/chat continuity |
+| Screen awareness | On-request all-monitor/cursor capture, selected vision model, temporary shared images, explicit Telegram screenshot output | Live image quality, pointer targeting, and paired voice/Telegram acceptance |
 | Tone, Windows, presence | Planned | Implementation |
 
 A checked item below means the implementation exists. It does not establish
@@ -34,8 +34,8 @@ and the [changelog](../CHANGELOG.md). The repository has a `v0.2` tag; no stable
 ## Proposed feature order
 
 This is the proposed direction after the conversation, memory, search, and routing
-upgrades. The [screen-awareness design](screen-awareness.md) is agreed; implementation
-has not started.
+upgrades. [Screen awareness](screen-awareness.md) is implemented; its target-desktop
+and live paired-chat acceptance remain open.
 The version headings below group existing work and backlog, rather than promise dates.
 
 | Order | Feature | First useful outcome |
@@ -56,30 +56,32 @@ development: real conversations, owner pairing/startup, restart recovery, provid
 outages, and clean installation still need broader desktop acceptance. Existing
 automated checks and small live probes do not complete that release acceptance.
 
-## Screen awareness — agreed next feature
+## Screen awareness — implementation and acceptance
 
 The [agreed design and implementation plan](screen-awareness.md) covers on-request
 PC capture through voice, the desktop interface, and paired Telegram. Images sent
 by the user belong to the next image/document milestone. The first version looks
 and explains; continuous watching and automatic clicking or typing are out of scope.
 
-- [ ] Capture all monitors on request, including the mouse pointer and its position;
+- [x] Capture all monitors on request, including the mouse pointer and its position;
       use the focused monitor as the main context.
-- [ ] Route image requests only to a configured provider/model that supports images;
+- [x] Route image requests only to a configured provider/model that supports images;
       use existing connections first and explain when no compatible model is available.
-- [ ] For “look at my screen” without a specific question, give a brief observation
+- [x] For “look at my screen” without a specific question, give a brief observation
       and ask a natural follow-up question.
-- [ ] Answer questions about visible errors, pages, code, or game menus; distinguish
+- [x] Answer questions about visible errors, pages, code, or game menus; distinguish
       visible details from guesses, crop/enlarge small text, and ask if still unreadable.
-- [ ] Take fresh captures for clear visual questions, “what about now?”, and contextual
+- [x] Take fresh captures for clear visual questions, “what about now?”, and contextual
       next-step follow-ups; compare with the previous image when useful. Explicit
       questions about an earlier capture reuse it while available.
-- [ ] Share temporary captures and brief timestamped text observations across the
+- [x] Share temporary captures and brief timestamped text observations across the
       paired voice/chat conversation. Keep only the last two captures for up to
       15 minutes; clear images on reset, owner change, and capture-service shutdown.
-- [ ] Reply with text in Telegram by default and send a screenshot only when requested.
-- [ ] Preserve stop/cancel and owner boundaries. Text inside an image is context,
+- [x] Reply with text in Telegram by default and send a screenshot only when requested.
+- [x] Preserve stop/cancel and owner boundaries. Text inside an image is context,
       never permission to run a command or save a personal fact.
+- [ ] Verify actual capture quality and cursor targeting across all monitors, then
+      test fresh comparison and paired voice/Telegram handoff on the target desktop.
 
 The first milestone is complete when CIEL can explain an actual all-monitor capture
 including the pointer, take a fresh follow-up, compare a visible change, and continue

@@ -169,6 +169,7 @@ def run_desktop(
     from ciel.providers.intents import answer_clock_query
     from ciel.providers.router import ModelRouter
     from ciel.research import ResearchCancellation, evidence_payload, previous_observations
+    from ciel.screen.service import ScreenService, screen_scope
 
     logger.info("Initializing wake-word, TTS, and STT engines (STT loads in background)...")
     detector = WakeWordDetector(
@@ -301,6 +302,7 @@ def run_desktop(
     dialogue_context = DialogueContext(
         settings, memory_store, conv_manager, memory_service, semantic_recall=semantic_recall,
     )
+    screen_service = ScreenService(settings, conv_manager)
     web_ui = None
     if web_mode:
         from ciel.web import DesktopWebUI
@@ -323,6 +325,11 @@ def run_desktop(
             recalled_memories, generate=generate_system_prompt,
         )
         prompt += voice_delivery_instruction(enabled=settings.audio.tts_enabled)
+        prompt += (
+            "\nScreen discussions in history are observations from an earlier capture. "
+            "Only images attached by the application establish visual access for this turn. "
+            "Without attached images, do not claim to see the current desktop."
+        )
         if tts.engine == "chatterbox_turbo":
             prompt += speech_event_instruction(
                 enabled=settings.audio.tts_enabled,
@@ -520,6 +527,13 @@ def run_desktop(
 
         reliable = wake_info.get("stt_confidence", 1.0) >= settings.audio.stt_retry_confidence
         authorized = explicit and reliable and not earlier_fragments and not restored_fragments
+        from ciel.controller import _clearly_other_listener
+
+        visual = screen_service.resolve(clean) if (
+            reliable and (explicit or (active and not _clearly_other_listener(clean)))
+            and not earlier_fragments and not restored_fragments
+        ) else None
+        visual_scope = screen_scope(conv_manager) if visual is not None else None
         memory_text = re.sub(r"^/(?:local|fast|strong|deep)\s+", "", clean, flags=re.I)
         memory_confirmation = (
             memory_service.has_pending_confirmation and is_memory_confirmation(memory_text)
@@ -541,7 +555,7 @@ def run_desktop(
         if turn_scope != conv_manager.context_session_ids():
             return False
         addresses = public_urls(clean) if authorized and is_explicit_web_request(clean) else []
-        if conversation_only:
+        if conversation_only or visual is not None:
             selected = ControllerDecision(intent="request", action="answer", confidence=1)
         elif local_preflight:
             selected = ControllerDecision(intent="request", action="local", confidence=1)
@@ -614,7 +628,7 @@ def run_desktop(
         pending_speech.clear()
 
         def finish(text: str, provider="local", model="controller", sources=None,
-                   lookup=None, research_scope=None) -> bool:
+                   lookup=None, research_scope=None, screen_result=None) -> bool:
             if not current() or turn_scope != conv_manager.context_session_ids():
                 return False
             if lookup is not None and research_scope is not None and (
@@ -622,12 +636,18 @@ def run_desktop(
                 or (prior_lookup is None and dialogue_context.web_paused())
             ):
                 return False
+            if screen_result is not None and not screen_service.still_valid(screen_result):
+                return False
+            if visual is not None and visual_scope != screen_scope(conv_manager):
+                return False
             metadata = normalize_sources([source.to_dict() for source in sources or []])
             if web_ui is not None:
                 web_ui.set_provider(provider, model)
-            conv_manager.add_turn("assistant", strip_speech_events(text),
-                                  provider=provider, model=model, sources=metadata,
-                                  web_evidence=evidence_payload(lookup))
+            turn_id = conv_manager.add_turn("assistant", strip_speech_events(text),
+                                           provider=provider, model=model, sources=metadata,
+                                           web_evidence=evidence_payload(lookup))
+            if screen_result is not None:
+                screen_service.mark(turn_id)
             log_reply('🤖 CIEL: "%s" [%s/%s]', text, provider, model)
 
             def started() -> None:
@@ -654,6 +674,19 @@ def run_desktop(
         unmatched_local = False
         contextual_clarification = selected.action == "clarify" and selected.resolve_with_context
         try:
+            if visual is not None:
+                if visual.send_image:
+                    return finish("Ask me in Telegram to send a screenshot. "
+                                  "I can explain your screen here.")
+                messages = conv_manager.get_active_messages(
+                    system_prompt=build_system_prompt(query),
+                )
+                result = screen_service.answer(visual, messages, cancel_event=cancel_event,
+                                               current=current)
+                if result is None:
+                    return False
+                return finish(result.text, provider=result.provider, model=result.model,
+                              screen_result=result)
             if selected.action == "clarify" and not contextual_clarification:
                 return finish(selected.speech)
             if selected.action == "local":
@@ -1251,6 +1284,34 @@ def run_desktop(
             say(local_reply)
             if current() and unfinished_request[0] is request:
                 unfinished_request[0] = {}
+            _in_followup[0] = True
+            return True
+
+        visual = screen_service.resolve(cleaned_query) if reliable and not (
+            restored_fragments or earlier_fragments or added_speech
+        ) else None
+        if visual is not None:
+            if visual.send_image:
+                say("Ask me in Telegram to send a screenshot. "
+                    "I can explain your screen here.")
+                unfinished_request[0] = {}
+                return True
+            visual_scope = screen_scope(conv_manager)
+            result = screen_service.answer(
+                visual, conv_manager.get_active_messages(system_prompt=build_system_prompt()),
+                cancel_event=cancel_event, current=current,
+            )
+            if (result is None or not current()
+                    or visual_scope != screen_scope(conv_manager)
+                    or not screen_service.still_valid(result)):
+                return False
+            turn_id = conv_manager.add_turn("assistant", result.text,
+                                           provider=result.provider, model=result.model)
+            screen_service.mark(turn_id)
+            if web_ui is not None:
+                web_ui.set_provider(result.provider, result.model)
+            say(result.text)
+            unfinished_request[0] = {}
             _in_followup[0] = True
             return True
 
@@ -1908,4 +1969,5 @@ def run_desktop(
                     if restore_terminal_output is not None:
                         restore_terminal_output()
                 finally:
+                    screen_service.close()
                     tts.close()

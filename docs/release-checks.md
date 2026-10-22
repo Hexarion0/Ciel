@@ -2,6 +2,23 @@
 
 Run from the repository root with the development environment active.
 
+## Screen-awareness validation — 2026-10-22
+
+- 2,943 automated tests passed; five hardware/model integration tests deselected.
+- Ruff, local documentation links, and wheel build passed.
+- The selected NIM Llama 3.2 11B Vision model passed a synthetic image check in
+  1.44 seconds. No personal screenshots were used. The larger 90B candidate's
+  inference timed out despite appearing in the model catalog.
+- Read-only desktop metadata checks confirmed two active monitors, cursor and lock
+  state support, and background discovery without inherited display variables.
+- Real all-monitor screenshot quality, pointer targeting, and live paired
+  voice/Telegram handoff remain unchecked. See [screen awareness](screen-awareness.md).
+
+For live acceptance, request “Look at my screen,” point to a visible item and ask
+what it is, change the screen and ask “What about now?”, then continue in paired
+Telegram. Replies should contain text unless “Send me a screenshot” is requested.
+Verify stop, reset, image expiry, and unavailable/locked-desktop responses.
+
 ## Automated validation
 
 ```bash
