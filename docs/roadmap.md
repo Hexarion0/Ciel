@@ -22,7 +22,7 @@ before treating it as ready for everyday use.
 | Setup | Configure/review/save before selected package/model installation; CPU recognition choice by default; preserved existing settings; missing-asset reporting | Automatic Turbo setup, managed desktop runtime, clean-machine validation |
 | Desktop web interface | PC-local voice/text chat, live captions, status, and controls | Same-Wi-Fi phone access and desktop acceptance |
 | Messaging | Owner-paired Telegram text, automatic startup, shared conversation with separate archives | Live Telegram acceptance, reminders, additional services |
-| Screen awareness | Proposed next feature | On-request captures, screenshot questions, image-capable model routing, voice/chat image continuity |
+| Screen awareness | Design agreed; implementation pending | All-monitor captures with mouse position, image-capable model routing, temporary images, voice/chat continuity |
 | Tone, Windows, presence | Planned | Implementation |
 
 A checked item below means the implementation exists. It does not establish
@@ -34,12 +34,13 @@ and the [changelog](../CHANGELOG.md). The repository has a `v0.2` tag; no stable
 ## Proposed feature order
 
 This is the proposed direction after the conversation, memory, search, and routing
-upgrades. Screen awareness has been suggested; its implementation has not started.
+upgrades. The [screen-awareness design](screen-awareness.md) is agreed; implementation
+has not started.
 The version headings below group existing work and backlog, rather than promise dates.
 
 | Order | Feature | First useful outcome |
 | --- | --- | --- |
-| 1 | Screen awareness | Ask “What does this error mean?” or “Explain this page” using an on-request whole-screen capture |
+| 1 | Screen awareness | Discuss all monitors and the mouse pointer through requested captures, with fresh visual follow-ups across voice and chat |
 | 2 | Image and document conversations | Send a screenshot through Telegram, discuss it by voice, then add text/PDF attachments |
 | 3 | Useful action workflows | Connect requested research, explanations, and supported desktop actions through the existing validated action registry |
 | 4 | Reminders and optional initiative | Persistent reminders with Telegram delivery, followed by quiet-hours-aware check-ins tied to user-approved topics |
@@ -55,28 +56,34 @@ development: real conversations, owner pairing/startup, restart recovery, provid
 outages, and clean installation still need broader desktop acceptance. Existing
 automated checks and small live probes do not complete that release acceptance.
 
-## Screen awareness — proposed next feature
+## Screen awareness — agreed next feature
 
-Start with a whole-screen capture only when requested, or an image supplied by the
-user. Continuous screen watching and autonomous clicking are later decisions.
+The [agreed design and implementation plan](screen-awareness.md) covers on-request
+PC capture through voice, the desktop interface, and paired Telegram. Images sent
+by the user belong to the next image/document milestone. The first version looks
+and explains; continuous watching and automatic clicking or typing are out of scope.
 
-- [ ] Capture the whole screen on request and make the image available for review.
+- [ ] Capture all monitors on request, including the mouse pointer and its position;
+      use the focused monitor as the main context.
 - [ ] Route image requests only to a configured provider/model that supports images;
-      explain when no compatible model is available.
+      use existing connections first and explain when no compatible model is available.
 - [ ] For “look at my screen” without a specific question, give a brief observation
       and ask a natural follow-up question.
 - [ ] Answer questions about visible errors, pages, code, or game menus; distinguish
-      visible details from guesses and ask when the screenshot is insufficient.
-- [ ] Keep follow-ups such as “What about that button?” attached to the same image
-      until a new image or topic replaces it.
-- [ ] Reuse image observations across the paired voice/chat conversation; define
-      retention and deletion before storing screenshots durably.
-- [ ] Accept Telegram image messages through that shared image path.
+      visible details from guesses, crop/enlarge small text, and ask if still unreadable.
+- [ ] Take fresh captures for clear visual questions, “what about now?”, and contextual
+      next-step follow-ups; compare with the previous image when useful. Explicit
+      questions about an earlier capture reuse it while available.
+- [ ] Share temporary captures and brief timestamped text observations across the
+      paired voice/chat conversation. Keep only the last two captures for up to
+      15 minutes; clear images on reset, owner change, and capture-service shutdown.
+- [ ] Reply with text in Telegram by default and send a screenshot only when requested.
 - [ ] Preserve stop/cancel and owner boundaries. Text inside an image is context,
       never permission to run a command or save a personal fact.
 
-The first milestone is complete when CIEL can explain an actual screenshot and
-answer a follow-up through voice or chat without inventing unseen screen contents.
+The first milestone is complete when CIEL can explain an actual all-monitor capture
+including the pointer, take a fresh follow-up, compare a visible change, and continue
+across paired voice/chat without inventing unseen screen contents.
 
 ## Foundation and core voice — v0.1 / v0.2
 
