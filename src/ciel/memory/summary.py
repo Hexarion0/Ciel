@@ -2,33 +2,52 @@
 
 import json
 import re
-from typing import Annotated
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, StringConstraints, ValidationError
 
 SUMMARY_MAX_CHARS = 4000
 SUMMARY_MAX_TOKENS = 600
 SummaryEntry = Annotated[
-    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=160),
+    str, StringConstraints(min_length=1, pattern=r"\S"),
 ]
 
 
-class ConversationSummary(BaseModel):
-    """Separate dialogue context, choices, pending work, and obsolete plans."""
+class SummaryValidationError(ValueError):
+    """Expose a fixed failure category without including private provider output."""
 
-    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
-    overview: str = Field(min_length=1, max_length=400)
-    user_context: list[SummaryEntry] = Field(max_length=4)
-    decisions: list[SummaryEntry] = Field(max_length=4)
-    open_threads: list[SummaryEntry] = Field(max_length=4)
-    superseded: list[SummaryEntry] = Field(max_length=4)
+    def __init__(self, category: Literal["empty", "malformed_json", "schema", "length"]) -> None:
+        self.category = category
+        super().__init__(category)
+
+
+class ConversationSummary(BaseModel):
+    """Validate note types; per-field concision targets never discard complete notes.
+
+    The 400-character overview, four entries per list, and 160-character entries
+    guide generation. Only the serialized total context budget is a hard size limit.
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    overview: SummaryEntry
+    user_context: list[SummaryEntry]
+    decisions: list[SummaryEntry]
+    open_threads: list[SummaryEntry]
+    superseded: list[SummaryEntry]
 
 
 SUMMARY_INSTRUCTION = (
     "Update the previous conversation state using the new dialogue. Return only a JSON object "
-    "with exactly these keys: overview (a string of at most 400 characters), user_context, "
-    "decisions, open_threads, and superseded (each an array of at most four strings, each at most "
-    "160 characters). Use empty arrays when there is no supported information. "
+    "with exactly these keys: overview (a nonempty string), user_context, decisions, "
+    "open_threads, and superseded (each an array of nonempty strings). Use empty arrays when "
+    "there is no supported information. Shape example: "
+    '{"overview":"Current topic","user_context":[],"decisions":[],"open_threads":[],'
+    '"superseded":[]}. Replace the example topic with the actual supported topic. '
+    "Aim for 1,200-1,800 characters total and keep the complete JSON within 4,000 characters. "
+    "Concision targets: overview within 400 characters, each array within four entries, "
+    "and each entry within 160 characters. Preserve complete decisions and corrections, "
+    "including their negation, conditions, and authorization boundaries; never cut off a note "
+    "just to meet a per-field target. "
     "overview describes the active topic. user_context attributes relevant goals, constraints, "
     "and preferences to what the user said; these are conversation notes, not confirmed durable "
     "facts. decisions retains choices the user actually made, not assistant suggestions. "
@@ -51,11 +70,19 @@ def normalize_summary(text: str) -> tuple[str, str]:
     if fenced:
         clean = fenced.group(1).strip()
     if not clean:
-        raise ValueError("The summary is empty")
+        raise SummaryValidationError("empty")
     if clean.startswith(("{", "[")) or fenced:
-        state = ConversationSummary.model_validate_json(clean)
-        normalized = json.dumps(state.model_dump(), ensure_ascii=False)
+        try:
+            state = ConversationSummary.model_validate_json(clean)
+        except ValidationError as error:
+            categories = {item["type"] for item in error.errors(include_input=False)}
+            if "json_invalid" in categories:
+                raise SummaryValidationError("malformed_json") from None
+            if categories & {"string_too_long", "string_too_short", "too_long", "too_short"}:
+                raise SummaryValidationError("length") from None
+            raise SummaryValidationError("schema") from None
+        normalized = json.dumps(state.model_dump(), ensure_ascii=False, separators=(",", ":"))
         if len(normalized) > SUMMARY_MAX_CHARS:
-            raise ValueError("The summary exceeds the context budget")
+            raise SummaryValidationError("length")
         return normalized, "structured-v1"
     return clean[:SUMMARY_MAX_CHARS], "text"

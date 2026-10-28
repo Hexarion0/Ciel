@@ -264,23 +264,37 @@ def test_search_provider_is_selected_before_masked_key_without_network_check(
     network.assert_not_called()
 
 
-def test_free_search_needs_no_key_and_preserves_unused_keys(tmp_path, wizard_factory):
+@pytest.mark.parametrize("provider", ["parallel", "ddgs"])
+def test_free_search_needs_no_key_and_preserves_unused_keys(tmp_path, wizard_factory, provider):
     original = (
         "# Preserve unused keys\nINTERNET_PROVIDER=brave\n"
         "brave_search_api_key='synthetic-brave-key'\nTAVILY_API_KEY=synthetic-tavily-key\n"
     )
     (tmp_path / ".env").write_text(original)
     harness = wizard_factory(
-        ["quick", "save", "yes"], provider_choices=["done"], search_choices=["ddgs"],
+        ["quick", "save", "yes"], provider_choices=["done"], search_choices=[provider],
     )
 
     assert setup_wizard.run_setup_wizard()
 
     saved = dotenv_values(tmp_path / ".env")
-    assert saved["INTERNET_PROVIDER"] == "ddgs"
+    assert saved["INTERNET_PROVIDER"] == provider
     assert saved["brave_search_api_key"] == "synthetic-brave-key"
     assert saved["TAVILY_API_KEY"] == "synthetic-tavily-key"
     assert not harness.secret_prompts
+
+
+def test_fresh_search_setup_defaults_to_parallel_without_a_secret(tmp_path, wizard_factory):
+    harness = wizard_factory(["quick", "save", "yes"], provider_choices=["done"])
+
+    assert setup_wizard.run_setup_wizard()
+
+    saved = dotenv_values(tmp_path / ".env")
+    assert saved["INTERNET_PROVIDER"] == "parallel"
+    assert not harness.secret_prompts
+    assert not any(key.endswith("_API_KEY") for key in saved)
+    summary = dict(harness.ui.summaries[-1])
+    assert "Parallel" in summary["Web search"]
 
 
 def test_search_setup_keeps_existing_selected_key_when_input_is_blank(tmp_path, wizard_factory):

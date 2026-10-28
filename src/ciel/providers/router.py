@@ -2,13 +2,20 @@ import re
 import threading
 import time
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
+from typing import Any, Literal
 
 from ciel.config import get_settings
 from ciel.latency import mark
 from ciel.logging import get_logger
-from ciel.providers.base import ChatMessage, LLMResponse, LLMStreamChunk, require_text_messages
+from ciel.providers.base import (
+    ChatMessage,
+    LLMResponse,
+    LLMStreamChunk,
+    ToolCallAccumulator,
+    require_text_messages,
+)
 from ciel.providers.intents import answer_clock_query
 from ciel.providers.manager import ProviderManager
 from ciel.providers.priority import BackgroundDeferred, RequestPriority
@@ -33,6 +40,7 @@ class RoutingDecision:
     model_name: str | None
     reason: str
     override_applied: str | None = None
+    reasoning_enabled: bool = False
 
 
 class ModelRouter:
@@ -47,6 +55,21 @@ class ModelRouter:
     def __init__(self, manager: ProviderManager | None = None) -> None:
         self.manager = manager or ProviderManager()
         self.priority = RequestPriority()
+        self._reasoning_lock = threading.Lock()
+        self._reasoning_mode: Literal["auto", "on", "off"] = get_settings().providers.nim_reasoning
+
+    @property
+    def reasoning_mode(self) -> Literal["auto", "on", "off"]:
+        """Return this router's session-scoped reasoning preference."""
+        with self._reasoning_lock:
+            return self._reasoning_mode
+
+    def set_reasoning_mode(self, mode: Literal["auto", "on", "off"]) -> None:
+        """Change future requests without changing an in-flight request or saved settings."""
+        if mode not in {"auto", "on", "off"}:
+            raise ValueError("Reasoning mode must be auto, on, or off")
+        with self._reasoning_lock:
+            self._reasoning_mode = mode
 
     def classify_complexity(self, prompt: str) -> tuple[ComplexityLevel, str, str | None]:
         """Classify prompt into SIMPLE, MEDIUM, or COMPLEX with explanation and override info."""
@@ -115,6 +138,10 @@ class ModelRouter:
             complexity, reason, override = (
                 ComplexityLevel.SIMPLE, "Compact AI controller decision", None,
             )
+        elif purpose == "verification":
+            complexity, reason, override = (
+                ComplexityLevel.MEDIUM, "Bounded evidence check on the normal responder", None,
+            )
         elif purpose in {"summary", "speech_gate"}:
             complexity, reason, override = (
                 ComplexityLevel.SIMPLE,
@@ -134,7 +161,7 @@ class ModelRouter:
         else:
             if purpose in {"controller", "tool_progress"}:
                 order = ("nim", "groq", "openrouter", "ollama")
-            elif complexity == ComplexityLevel.SIMPLE:
+            elif purpose != "conversation" and complexity == ComplexityLevel.SIMPLE:
                 order = ("groq", "nim", "openrouter", "ollama")
             else:
                 order = ("nim", "openrouter", "groq", "ollama")
@@ -154,12 +181,18 @@ class ModelRouter:
                 model_name = settings.providers.nim_model
         else:
             model_name = getattr(self.manager, provider_name).default_model
+        reasoning_mode = self.reasoning_mode
+        reasoning_enabled = purpose == "conversation" and (
+            reasoning_mode == "on"
+            or (reasoning_mode == "auto" and complexity == ComplexityLevel.COMPLEX)
+        )
         decision = RoutingDecision(
             complexity=complexity,
             provider_name=provider_name,
             model_name=model_name,
             reason=reason,
             override_applied=override,
+            reasoning_enabled=reasoning_enabled,
         )
         logger.info(
             "🔀 Routed %s [%s] to provider '%s' (Model: %s) — %s",
@@ -181,6 +214,8 @@ class ModelRouter:
         *,
         purpose: str = "conversation",
         cancel_event: threading.Event | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> LLMResponse:
         """Route and execute a chat completion with automatic fallback."""
         require_text_messages(messages)
@@ -198,10 +233,15 @@ class ModelRouter:
         # Strip override command prefixes from messages if present
         clean_messages = self._clean_override_prefixes(messages)
 
-        options = {
+        options: dict[str, Any] = {
             "preferred_provider": decision.provider_name, "model": decision.model_name,
             "temperature": temperature, "max_tokens": max_tokens or 512,
+            "nim_reasoning": decision.reasoning_enabled,
         }
+        if tools is not None:
+            options["tools"] = tools
+        if tool_choice is not None:
+            options["tool_choice"] = tool_choice
         if local_only:
             options["allowed_providers"] = ("ollama",)
         elif purpose in {"controller", "tool_progress"}:
@@ -212,14 +252,17 @@ class ModelRouter:
         def collect(canceled: threading.Event | None) -> LLMResponse:
             started = time.monotonic()
             response = LLMResponse("", "", "")
+            tool_calls = ToolCallAccumulator()
             for chunk in self.manager.stream_with_fallback(
                 clean_messages, cancel_event=canceled, **options,
             ):
                 response.content += chunk.delta
+                tool_calls.add(chunk.tool_calls)
                 response.model, response.provider = chunk.model, chunk.provider
             if canceled is not None and canceled.is_set():
                 raise BackgroundDeferred("Provider work was canceled")
             response.latency = time.monotonic() - started
+            response.tool_calls = tool_calls.finish()
             return response
 
         if purpose in {"summary", "tool_progress"}:
@@ -247,12 +290,18 @@ class ModelRouter:
         max_tokens: int | None = 512,
         *,
         cancel_event: threading.Event | None = None,
+        purpose: str = "conversation",
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> Iterator[LLMStreamChunk]:
         """Route and stream chat completion tokens with automatic fallback."""
         require_text_messages(messages)
-        mark("conversation.route_call_started")
+        mark(f"{purpose}.route_call_started")
         local_only = self.requires_local(messages)
-        decision = self.route(self._routing_text(messages), local_only=local_only)
+        routing_text = self._routing_text(messages) if purpose == "conversation" else next(
+            (message.content for message in reversed(messages) if message.role == "user"), "",
+        )
+        decision = self.route(routing_text, purpose=purpose, local_only=local_only)
         clean_messages = self._clean_override_prefixes(messages)
 
         with self.priority.foreground():
@@ -263,6 +312,9 @@ class ModelRouter:
                 temperature=temperature,
                 max_tokens=max_tokens or 512,
                 cancel_event=cancel_event,
+                nim_reasoning=decision.reasoning_enabled,
+                **({"tools": tools} if tools is not None else {}),
+                **({"tool_choice": tool_choice} if tool_choice is not None else {}),
                 **({"allowed_providers": ("ollama",)} if local_only else {}),
             )
 
@@ -272,7 +324,7 @@ class ModelRouter:
         return any(
             message.local_only or (
                 message.role == "user"
-                and re.search(r"(?m)^\s*/local(?:\s|$)", message.content) is not None
+                and re.search(r"(?im)^\s*/local(?:\s|$)", message.content) is not None
             )
             for message in messages
         )
@@ -312,7 +364,7 @@ class ModelRouter:
         for m in messages:
             if m.role == "user":
                 content = re.sub(r"^/(fast|strong|deep|local)(?:\s+|$)", "", m.content)
-                cleaned.append(ChatMessage(role=m.role, content=content, local_only=m.local_only))
+                cleaned.append(replace(m, content=content))
             else:
                 cleaned.append(m)
         return cleaned

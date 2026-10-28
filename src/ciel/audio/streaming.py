@@ -224,8 +224,12 @@ class _SentencePipeline:
                     except queue.Full:
                         continue
         finally:
-            if self._current():
-                self.audio.put(self._END)
+            while self._current():
+                try:
+                    self.audio.put(self._END, timeout=0.02)
+                    break
+                except queue.Full:
+                    continue
 
     def _play(self) -> None:
         while self._current():
@@ -277,6 +281,8 @@ class _SentencePipeline:
 
     def finish(self, *, cancel: bool) -> None:
         """Drain valid audio or discard every stale sentence after barge-in."""
+        deadline = time.monotonic() + (0.1 if cancel else 180)
+
         def discard_queued() -> None:
             self.cancelled.set()
             for target in [self.sentences, self.audio]:
@@ -286,27 +292,44 @@ class _SentencePipeline:
                     except queue.Empty:
                         break
 
+        def join_worker(worker: threading.Thread) -> bool:
+            nonlocal deadline
+            while worker.is_alive():
+                now = time.monotonic()
+                if not self._current():
+                    discard_queued()
+                    deadline = min(deadline, now + 0.1)
+                remaining = deadline - now
+                if remaining <= 0:
+                    return False
+                worker.join(timeout=min(0.02, remaining))
+            return True
+
         if cancel:
             discard_queued()
         else:
             while self._current():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    discard_queued()
+                    raise TimeoutError("Queued CIEL synthesis did not finish")
                 try:
-                    self.sentences.put(self._END, timeout=0.02)
+                    self.sentences.put(self._END, timeout=min(0.02, remaining))
                     break
                 except queue.Full:
                     continue
             if not self._current():
                 discard_queued()
-        self._synthesizer.join(timeout=180 if not cancel else 1)
+        synthesized = join_worker(self._synthesizer)
+        if not synthesized and self._current():
+            discard_queued()
+            raise TimeoutError("Queued CIEL synthesis did not finish")
         if not self._current():
             discard_queued()
-        if not cancel and self._current():
-            self._player.join(timeout=180)
-            if self._player.is_alive():
-                discard_queued()
-                raise TimeoutError("Queued CIEL audio did not finish playing")
-        else:
-            self._player.join(timeout=1)
+        played = join_worker(self._player)
+        if not played and self._current():
+            discard_queued()
+            raise TimeoutError("Queued CIEL audio did not finish playing")
 
 
 def stream_reply(

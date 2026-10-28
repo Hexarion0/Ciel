@@ -72,7 +72,9 @@ memory corrections use the existing learning and confirmation policy. "Wait,"
 "don't," and "do not search" are local conversation controls. Online lookups stay
 paused until a fresh explicit search request. The most recent browsing control
 carries between the owner's voice and chat
-channels and survives process restart. Resetting a channel clears its own control.
+channels and survives a worker restart within that conversation. A new foreground
+launch starts a new conversation with fresh browsing controls. Resetting a channel
+clears its own control.
 
 ## Conversation continuity
 
@@ -80,6 +82,11 @@ Voice and Telegram share recent conversation, topic-based recall of older user
 messages, and a running summary for the current paired owner. Origins and recorded
 times distinguish the channels. Confirmed facts remain authoritative; old dialogue
 is historical context and never an automatic fact or permission to act.
+
+Each new `ciel` or `ciel web` launch selects fresh desktop and paired-chat archives.
+The persistent Telegram worker joins that new conversation on its next message,
+discarding old pending confirmations and screen context. Saved personal facts and
+all earlier archived conversations remain stored; prior launches are not replayed.
 
 Unpairing or changing owner excludes the previous chat archive from future context.
 No archive migration or deletion is needed. `/reset` clears the Telegram archive

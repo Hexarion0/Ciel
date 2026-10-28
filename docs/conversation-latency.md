@@ -6,6 +6,125 @@ plus 0.2 seconds of grace. That later 0.9-second setting needs live acceptance
 and does not inherit the no-cut or latency results below. Current configuration
 is documented in the [README](../README.md).
 
+## Requested larger models and reasoning — 2026-10-28
+
+Normal conversation now requests `nvidia/nemotron-3.5-super-vl-120b-a12b`; complex work
+requests `nvidia/nemotron-3-ultra-550b-a55b`. Ultra is also the explicit NIM backup.
+The actual local configuration was updated as well as fresh-install defaults.
+
+Synthetic live checks on 2026-10-27 found both identifiers in NVIDIA's catalogue.
+Super inference returned 404, including through the streaming conversation path.
+Ultra answered successfully, so the configured normal route fell back to Ultra
+with a visible warning. Reasoning-off greeting, reasoning-on arithmetic, and an
+automatic-reasoning native tool/result loop all returned final answers without
+exposing internal reasoning. The tool loop used two main-model requests.
+A 2026-10-28 refresh reproduced Super inference returning 404 and Ultra answering
+successfully while the catalogue continued to list both models.
+
+The replacement Super 3.5 VL endpoint passed direct synthetic inference on
+2026-10-28 with reasoning off and on, native tool calls followed by tool results,
+and streaming with the ordinary 400-token voice budget. No fallback was used.
+The public request identifier is `nvidia/nemotron-3.5-super-vl-120b-a12b`; NVIDIA
+reports backend alias `private/nvidia/nemotron-3.5-super-120b-a12b` in its response.
+Both the saved local configuration and defaults now use the replacement.
+Actual CIEL routing then completed a reasoning-off greeting, reasoning-on arithmetic,
+and a two-round native tool/result reply on the replacement without falling back.
+
+The reasoning preference is `auto` by default: off for ordinary replies, on for
+complex work. `/reasoning on`, `/reasoning off`, and `/reasoning auto` change the
+session preference. The NIM thinking allowance is at least 8,192 completion tokens;
+hidden reasoning counts toward that limit. Voice delivery remains brief, while
+typed chat supports detailed answers and complete code. Desktop typed replies also
+speak a deterministic excerpt of at most 80 words after generation, with code and
+the full answer retained in chat. That excerpt does not make another model request.
+
+The complete ordinary regression run passed 3,821 tests, with five hardware cases
+deselected. Packaging and lint checks passed. These are functional checks rather
+than a controlled comparison of answer quality or end-to-end voice latency.
+The subsequent model replacement and restored startup panel passed 312 focused
+provider/routing checks and 109 terminal/startup/CLI checks.
+
+## Main-model tool selection — 2026-10-27
+
+The default foreground flow now calls the responding model directly. It can produce
+an answer or native tool calls in that request. Tool results continue through the
+main model; ordinary conversation no longer pays for a separate controller request.
+Clear local commands and screen requests retain application fast paths. Ambiguous
+screen follow-ups reach the main model without a separate screen classifier.
+The retained controller benchmark below measures the old architecture, not the
+new default path. `CONTROLLER_ENABLED=false` retains the legacy desktop intent flow.
+
+Native adapters retain tool arguments outside text and speech. The application
+validates declared schemas, current request ownership, tool permissions, and result
+scope. Web reports are buffered until existing attribution and task relevance checks
+pass. Relevance checks use normal conversation routing, not the decision model.
+Tool-assisted requests can still require multiple inference requests.
+
+Synthetic live checks against the configured NIM Lightning endpoint completed an
+ordinary greeting in one main request and a tool/result/answer in two requests,
+including streamed tool arguments. They used invented tool data, not saved history
+or desktop pixels. The full ordinary regression suite passed 3,725 tests; five
+hardware integration tests were deselected. No new microphone-to-audio latency
+claim is inferred from these checks.
+
+## Historical compact decisions and screen recall — 2026-10-27
+
+The controller chooses an action before the reply model answers. A live synthetic
+probe showed an ordinary conversational decision returning all 13 schema fields,
+including unused query, goal, speech, and memory defaults. That response contained
+220 characters and took 1.41 seconds. Two broader synthetic checks took 1.67 and
+2.59 seconds to choose an action, independently of answer generation and speech.
+
+The controller now requests only applicable fields. `answer` and `local` need
+`intent`, `action`, and `confidence`; web, clarification, and memory actions add
+their required arguments. The validator retains its existing defaults and strict
+tool checks. Format repair uses the same compact contract and includes both
+memory actions. Successful decision logs now include elapsed decision time.
+Both prompt variants keep the actual current request in its own user message,
+with earlier dialogue and routing context in a separately labeled system block.
+
+An alternating before/after comparison used the same configured
+`nvidia/nemotron-3.5-lightning-30b-a3b` route, two synthetic ordinary/contextual
+cases, and two repeats per format. All eight choices returned the expected
+`answer` action without a repair:
+
+| Measurement | Previous full-field format | Compact format |
+| --- | ---: | ---: |
+| Median decision time | 2.186 s | 1.247 s |
+| Observed decision range | 1.540–2.586 s | 0.955–1.689 s |
+| Median returned JSON size | 297.5 characters | 56 characters |
+
+This sample reduced median routing time by about 43%; it is not a guarantee of
+future provider latency or complete speech-to-audio response time. Input
+instructions grew slightly to explain conditional fields. The measured reduction
+was in generated output; one contextual reply still emitted extra optional fields.
+The existing eight-second shared decision/repair deadline remains unchanged.
+
+The wider live checker passed 21 of 24 cases on its first compact-format sweep.
+It exposed incorrect routing for a search-failure explanation, an ambiguous
+selection among multiple choices, and a weather query missing its configured
+city. Paired old/new probes reproduced the explanation failure in both formats;
+the other two varied between runs. Clarifying the instructions and separating
+the current message did not reliably eliminate these errors. These measurements
+establish a formatting speedup, not complete routing reliability. The unresolved
+cases remain in the checker rather than being reclassified as passes.
+
+Controlled screen requests also reuse their already recalled context when building
+the screen prompt. Regression tests measured two recall calls before the change
+and one afterward for voice/keyboard input with ordinary/protected history.
+They preserve the actual recalled preference, local-only marker, screen result,
+and absence of a general controller call. This removes duplicate local work;
+no separate wall-clock saving is claimed for that path.
+
+The provider still contributes network and service wait, and an ambiguous active
+screen follow-up can run a screen classifier before general routing. Those stages
+remain separate. Use the synthetic checker to assess the currently configured
+route without loading personal conversation data:
+
+```bash
+.venv/bin/python scripts/check_controller.py 'new task after pending request' 'number reaction'
+```
+
 ## Controller follow-up — 2026-10-17
 
 The conversation routes already selected Super, but the separate controller still

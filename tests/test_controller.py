@@ -13,9 +13,26 @@ def _response(action, **fields):
     return LLMResponse(json.dumps({"action": action, "confidence": 0.98, **fields}), "test", "nim")
 
 
+def _web_model_responses(responses, *, relevant_claims=(1,)):
+    """Script independent goal checks without consuming report or decision responses."""
+    scripted = None if callable(responses) else iter(responses)
+
+    def send(messages, **kwargs):
+        if messages[0].content.startswith("WEB GOAL CHECK"):
+            assert kwargs["purpose"] == "controller"
+            return LLMResponse(json.dumps({"relevant_claims": list(relevant_claims)}),
+                               "goal-check", "test")
+        response = responses(messages, **kwargs) if scripted is None else next(scripted)
+        if isinstance(response, BaseException):
+            raise response
+        return response
+
+    return send
+
+
 def test_controller_keeps_retry_context_without_keyword_query_stripping():
     from ciel.config import ControllerConfig
-    from ciel.controller import AIController
+    from ciel.controller import _CONTEXT_MARKER, AIController
 
     router = MagicMock()
     router.send.return_value = _response(
@@ -29,7 +46,8 @@ def test_controller_keeps_retry_context_without_keyword_query_stripping():
     ], addressed=True, active=True, internet_enabled=True)
     assert decision.action == "search" and "Tensura" in decision.query
     messages = router.send.call_args.args[0]
-    payload = json.loads(messages[-1].content)
+    payload = json.loads(messages[0].content.split(_CONTEXT_MARKER, 1)[1])
+    assert messages[-1].content == "Okay, try again"
     assert payload["current_utterance"] == "Okay, try again"
     assert "Tensura" in payload["previous_dialogue"][0]["text"]
     assert router.send.call_args.kwargs["purpose"] == "controller"
@@ -134,7 +152,9 @@ def test_web_loop_reads_page_after_snippet_and_validates_before_reporting():
         "text": quote, "source": 1, "quote": quote,
     }]}), "light", "nim")
     # The exact same supported-looking number in a search preview MUST NOT pass.
-    router.send.side_effect = [report, _response("read_page", query=url), report]
+    router.send.side_effect = _web_model_responses([
+        report, _response("read_page", query=url), report,
+    ])
     acknowledge = MagicMock()
     reply = controller.run_web(initial, messages[-1].content, messages, service,
                                acknowledge, lambda: True)
@@ -231,19 +251,20 @@ def test_fresh_retry_sources_survive_a_full_previous_source_budget():
             "Helpful", "https://example.com/new", content=quote,
         )]),
     ]
-    router.send.side_effect = [
+    router.send.side_effect = _web_model_responses([
         LLMResponse('{"claims":[]}', "light", "nim"),
         _response("search", query="Amber season 4 novel adaptation"),
         LLMResponse(json.dumps({"claims": [{"text": quote, "source": 1, "quote": quote}]}),
                     "light", "nim"),
-    ]
+    ])
     reply = controller.run_web(initial, messages[-1].content, messages, service,
                                lambda _text: None, lambda: True)
     assert reply.text == quote
     assert [source.url for source in reply.sources] == ["https://example.com/new"]
 
 
-def test_latest_turn_is_separate_from_unanswered_history():
+@pytest.mark.parametrize("active", [False, True])
+def test_latest_turn_is_separate_from_unanswered_history(active):
     from ciel.config import ControllerConfig
     from ciel.controller import AIController
 
@@ -251,12 +272,37 @@ def test_latest_turn_is_separate_from_unanswered_history():
     router.send.return_value = _response('answer', intent='greeting')
     AIController(router, ControllerConfig()).decide(
         'Good evening, Ciel!', [ChatMessage('user', 'Find the Lantern Festival date.')],
-        addressed=True, active=False, internet_enabled=True,
+        addressed=True, active=active, internet_enabled=True,
     )
     sent = router.send.call_args.args[0]
     assert sent[-1].role == 'user' and sent[-1].content == 'Good evening, Ciel!'
     assert 'Lantern Festival' not in sent[-1].content
     assert 'Lantern Festival' in sent[-2].content
+
+
+def test_format_repair_preserves_the_memory_read_action():
+    from ciel.config import ControllerConfig
+    from ciel.controller import AIController
+
+    requests = []
+
+    def send(messages, **kwargs):
+        requests.append(messages)
+        if len(requests) == 1:
+            return LLMResponse("invalid JSON", "test", "nim")
+        correction = messages[0].content.split("Your previous response failed", 1)[1]
+        assert "memory_search" in correction and "memory_get" in correction
+        return _response("memory_get", memory_path="memory/cedar.md", memory_from=2,
+                         memory_lines=1)
+
+    router = MagicMock()
+    router.send.side_effect = send
+    result = AIController(router, ControllerConfig()).decide(
+        "Find the recorded Cedar rollout decision", [], addressed=True, active=False,
+        internet_enabled=True,
+    )
+    assert result.action == "memory_get" and result.memory_path == "memory/cedar.md"
+    assert len(requests) == 2
 
 
 def test_empty_model_clarification_gets_a_speakable_question():

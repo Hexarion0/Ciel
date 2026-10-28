@@ -2,18 +2,21 @@
 
 import threading
 from collections.abc import Callable
+from time import monotonic
 from typing import Any
 
-from ciel.config import get_settings
+from ciel.config import MemoryConfig, get_settings
 from ciel.conversation import strip_internal_reply_notes
 from ciel.logging import get_logger
 from ciel.memory.bridge import ConversationContext, conversation_channel
+from ciel.memory.lifecycle import ConsolidationResult, MemoryLifecycle
 from ciel.memory.models import ConversationTurn, MemoryItem, MemoryType
 from ciel.memory.store import MemoryStore
 from ciel.memory.summary import (
     SUMMARY_INSTRUCTION,
     SUMMARY_MAX_CHARS,
     SUMMARY_MAX_TOKENS,
+    SummaryValidationError,
     normalize_summary,
 )
 from ciel.providers.base import ChatMessage
@@ -25,6 +28,8 @@ logger = get_logger("memory.manager")
 SUMMARY_BATCH_TURNS = 32
 SUMMARY_TURN_CHARS = 1000
 CONTEXT_MAX_CHARS = 24000
+_SUMMARY_RETRY_SECONDS = 30.0
+_SummaryRetryKey = tuple[str, int, int, int]
 _CONTEXT_CLIP_MARKER = "\n[Middle of message omitted to fit conversation context.]\n"
 
 
@@ -40,6 +45,7 @@ class ConversationManager:
         summary_interval: int = 6,
         max_context_chars: int = CONTEXT_MAX_CHARS,
         context_resolver: Callable[[], ConversationContext] | None = None,
+        memory_config: MemoryConfig | None = None,
     ) -> None:
         if max_context_chars < 1:
             raise ValueError("max_context_chars must be positive")
@@ -58,6 +64,54 @@ class ConversationManager:
         self._generation = 0
         self._cached_summary: str | None = None
         self._summary_thread: threading.Thread | None = None
+        self._summary_retry: tuple[_SummaryRetryKey, float] | None = None
+        memory_settings = memory_config or settings.memory
+        self.lifecycle = MemoryLifecycle(
+            self.store, context_resolver=self._context,
+            generation_resolver=lambda: self._generation, guard_lock=self._lock,
+            learning_mode=memory_settings.learning_mode,
+            confirm_corrections=memory_settings.confirm_corrections,
+            capture_enabled=getattr(memory_settings, "daily_capture_enabled", True),
+            flush_enabled=getattr(memory_settings, "flush_enabled", True),
+            consolidation_enabled=getattr(memory_settings, "consolidation_enabled", True),
+            consolidation_time=getattr(memory_settings, "consolidation_time", "03:00"),
+            bootstrap_max_chars=min(memory_settings.workspace_bootstrap_max_chars,
+                                    memory_settings.recall_max_chars),
+            profile_max_chars=min(4000, memory_settings.recall_max_chars // 2),
+        )
+
+    def start_memory_lifecycle(self, router_or_provider: Any = None) -> bool:
+        """Start scheduled background reflection using the application's priority router."""
+        return self.lifecycle.start(router_or_provider)
+
+    def flush_memory(self) -> int:
+        """Write new useful owner notes silently, without advancing the summary cursor."""
+        return self.lifecycle.flush()
+
+    def consolidate_memory(self, router_or_provider: Any = None) -> ConsolidationResult:
+        """Run the same guarded reflection used by the nightly scheduler."""
+        return self.lifecycle.consolidate(router_or_provider)
+
+    def list_memory_reviews(self) -> list[dict[str, Any]]:
+        """Return pending owner-scoped consolidation decisions without inference."""
+        return self.lifecycle.list_reviews()
+
+    def apply_memory_review(
+        self, run_id: str, action_indexes: list[int] | None = None,
+    ) -> ConsolidationResult:
+        """Apply an explicit owner approval from an application-owned interface."""
+        return self.lifecycle.apply_review(run_id, action_indexes)
+
+    def close(self) -> None:
+        """Stop scheduled memory work before its store or owner binding is released."""
+        with self._lock:
+            try:
+                self.lifecycle.flush()
+            except Exception as err:
+                logger.warning("Closing memory checkpoint failed (%s)", type(err).__name__)
+            self._generation += 1
+            self._summary_retry = None
+        self.lifecycle.close()
 
     def _context(self) -> ConversationContext:
         context = (
@@ -87,6 +141,7 @@ class ConversationManager:
 
     def schedule_summary(self, router_or_provider: Any = None) -> bool:
         """Schedule occasional summaries without delaying voice replies."""
+        self.start_memory_lifecycle(router_or_provider)
         with self._lock:
             if self._summary_thread and self._summary_thread.is_alive():
                 return False
@@ -96,6 +151,12 @@ class ConversationManager:
             context = self._context()
             summary = self.store.get_session_summary(context.summary_session_id)
             after_id = summary.metadata.get("last_turn_id", 0) if summary else 0
+            retry_key = (
+                context.summary_session_id, self._generation,
+                self.store.get_session_generation(context.summary_session_id), after_id,
+            )
+            if self._summary_retry_blocked(retry_key):
+                return False
             if (
                 len(
                     self.store.get_context_summary_batch(
@@ -122,6 +183,19 @@ class ConversationManager:
             self._summary_thread.start()
             return True
 
+    def _summary_retry_blocked(self, key: _SummaryRetryKey) -> bool:
+        """Delay only the failed batch in its exact owner/reset generation."""
+        return bool(
+            self._summary_retry is not None and self._summary_retry[0] == key
+            and monotonic() < self._summary_retry[1]
+        )
+
+    def _defer_summary_retry(self, key: _SummaryRetryKey) -> None:
+        """Keep pending turns while bounding retries after a real request failure."""
+        with self._lock:
+            if key[1] == self._generation:
+                self._summary_retry = (key, monotonic() + _SUMMARY_RETRY_SECONDS)
+
     def add_turn(
         self,
         role: str,
@@ -132,6 +206,7 @@ class ConversationManager:
         tokens: int = 0,
         sources: list[dict[str, str]] | None = None,
         web_evidence: dict[str, Any] | None = None,
+        origin: str = "",
     ) -> int:
         """Persist a conversation turn to SQLite and return the turn ID."""
         turn = ConversationTurn(
@@ -145,7 +220,15 @@ class ConversationManager:
             sources=sources or [],
             web_evidence=web_evidence or {},
         )
-        turn_id = self.store.save_turn(turn)
+        with self._lock:
+            guard = self.lifecycle.snapshot() if origin == "owner" else None
+            turn_id = self.store.save_turn(turn)
+            turn.id = turn_id
+            if origin == "owner":
+                try:
+                    self.lifecycle.capture_turn(turn, trusted_origin=origin, guard=guard)
+                except Exception as err:
+                    logger.warning("Owner memory staging failed (%s)", type(err).__name__)
         logger.debug(
             "Saved %s turn #%d to session '%s' (%d chars)",
             role,
@@ -185,7 +268,7 @@ class ConversationManager:
             candidates = self.store._get_connection().execute(
                 "SELECT content FROM conversation_turns "
                 f"WHERE session_id IN ({placeholders}) "
-                "AND role='user' AND instr(content, '/local') > 0;",
+                "AND role='user' AND instr(lower(content), '/local') > 0;",
                 session_ids,
             )
             return any(
@@ -357,6 +440,9 @@ class ConversationManager:
             session_generation = self.store.get_session_generation(summary_session_id)
             previous = self.store.get_session_summary(summary_session_id)
             after_id = previous.metadata.get("last_turn_id", 0) if previous else 0
+            retry_key = (summary_session_id, generation, session_generation, after_id)
+            if self._summary_retry_blocked(retry_key):
+                return None
             older_turns = self.store.get_context_summary_batch(
                 list(context.session_ids), after_id, self.max_turns, SUMMARY_BATCH_TURNS
             )
@@ -419,18 +505,20 @@ class ConversationManager:
                         else {}
                     ),
                 )
-                summary_text, summary_format = normalize_summary(response.content)
             except BackgroundDeferred:
                 logger.info("Deferred memory summary for foreground conversation.")
                 return None
-            except ValueError:
-                logger.warning("Conversation state was invalid; will retry later.")
-                return None
             except Exception as err:
-                logger.warning("LLM summarization failed (%s); will retry later.", err)
+                self._defer_summary_retry(retry_key)
+                logger.warning("Memory summary request failed (provider_%s); retry in %.0fs.",
+                               type(err).__name__, _SUMMARY_RETRY_SECONDS)
                 return None
-            if not summary_text:
-                logger.warning("LLM summary was empty; will retry later.")
+            try:
+                summary_text, summary_format = normalize_summary(response.content)
+            except SummaryValidationError as err:
+                self._defer_summary_retry(retry_key)
+                logger.warning("Conversation state was invalid (category=%s); retry in %.0fs.",
+                               err.category, _SUMMARY_RETRY_SECONDS)
                 return None
         if not summary_text:
             older_turns = older_turns[:3]
@@ -444,6 +532,14 @@ class ConversationManager:
         with self._lock:
             if generation != self._generation or context != self._context():
                 return None
+            # Preserve useful original owner evidence before the compaction cursor moves.
+            # A filesystem failure leaves summarization available and makes no save promise.
+            try:
+                guard = self.lifecycle.snapshot()
+                if dict(guard.session_generations).get(summary_session_id) == session_generation:
+                    self.lifecycle.flush(older_turns, guard=guard)
+            except Exception as err:
+                logger.warning("Pre-compaction memory flush failed (%s)", type(err).__name__)
             saved = self.store.save_session_summary(
                 MemoryItem(
                     id=previous.id if previous else None,
@@ -469,6 +565,7 @@ class ConversationManager:
                 logger.info("Discarded stale summary for session '%s'", self.session_id)
                 return None
             self._cached_summary = summary_text
+            self._summary_retry = None
         logger.info(
             "Summarized %d new older turns for session '%s'", len(older_turns), self.session_id
         )
@@ -482,6 +579,7 @@ class ConversationManager:
             cleared = self.store.clear_session(self.session_id)
             self._generation += 1
             self._cached_summary = None
+            self._summary_retry = None
         invalidate_screen_images()
         logger.info("Cleared %d turns for session '%s'", cleared, self.session_id)
         return cleared

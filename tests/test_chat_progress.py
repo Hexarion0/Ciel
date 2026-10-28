@@ -14,7 +14,8 @@ from ciel.chat.state import ChatState
 from ciel.chat.telegram import TelegramError, TelegramService
 from ciel.config import Settings
 from ciel.internet import InternetResult, InternetSource
-from ciel.providers.base import LLMResponse
+from ciel.providers.base import ToolCall
+from tests.test_chat_session import RecordingRouter
 from tests.test_chat_telegram_interrupts import NOW, update
 
 
@@ -130,13 +131,16 @@ def test_unpair_discards_queued_progress_before_any_send(state):
 def test_chat_session_reports_only_actual_new_research(tmp_path):
     settings = Settings(_env_file=None, memory_db_path=str(tmp_path / "memory.db"),
                         ciel_persona_file="", internet_enabled=True)
-    router = MagicMock()
+    router = RecordingRouter()
     quote = "The example project supports private text chat."
-    router.send.return_value = LLMResponse(json.dumps({"claims": [
+    router.answer = json.dumps({"claims": [
         {"text": quote, "quote": quote, "source": 1},
-    ]}), "model", "provider")
+    ]})
+    router.tool_calls.append(ToolCall(
+        "example-search", "web_search", '{"query": "example project"}',
+    ))
     session = ChatSession(settings, channel="telegram", session_id="test-owner", router=router)
-    session.internet.prepare = MagicMock(return_value=InternetResult(
+    session.internet.lookup = MagicMock(return_value=InternetResult(
         attempted=True, query="example project", sources=[
             InternetSource("Example project", "https://example.com/guide", content=quote),
         ],
@@ -144,12 +148,13 @@ def test_chat_session_reports_only_actual_new_research(tmp_path):
     session.progress = MagicMock()
     try:
         assert quote in session.reply("Search the example project")
-        session.progress.assert_called_once_with("I'll check that online.")
+        session.progress.assert_called_once()
+        assert session.progress.call_args.args[0].strip()
+        session.internet.lookup.assert_called_once()
         session.progress.reset_mock()
         assert quote in session.reply("Tell me what you found")
         session.progress.assert_not_called()
-        session.internet.prepare.return_value = InternetResult()
-        router.send.return_value = LLMResponse("Hi.", "model", "provider")
+        router.answer = "Hi."
         assert session.reply("Hello") == "Hi."
         session.progress.assert_not_called()
     finally:

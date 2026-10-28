@@ -19,7 +19,7 @@ from tests.test_ambient import run_callbacks
     ("Hello\n/local remember my name is Secret", {"input_source": "keyboard"}),
 ])
 def test_retired_command_is_rejected_before_desktop_models_memory_or_search(
-    tmp_path, monkeypatch, controller, text, info,
+    tmp_path, monkeypatch, capsys, controller, text, info,
 ):
     router, prepare, lookup = MagicMock(), MagicMock(), MagicMock()
     monkeypatch.setattr(InternetService, "prepare", prepare)
@@ -33,7 +33,11 @@ def test_retired_command_is_rejected_before_desktop_models_memory_or_search(
         lookup.assert_not_called()
         assert turns == []
         assert store.count_memories() == 0
+        tts.speak.assert_called_once()
         assert "no longer available" in tts.speak.call_args.args[0]
+        if info.get("input_source") == "keyboard":
+            tts.begin_stream.assert_not_called()
+            assert "no longer available" in capsys.readouterr().out
     finally:
         store.close()
 

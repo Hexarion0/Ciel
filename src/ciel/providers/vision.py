@@ -12,6 +12,7 @@ import httpx
 from ciel.config import Settings
 from ciel.latency import mark
 from ciel.providers.base import ChatImage, ChatMessage, LLMResponse
+from ciel.providers.nim import NimProvider
 from ciel.providers.router import ModelRouter
 from ciel.providers.streaming import streaming_client
 
@@ -100,6 +101,8 @@ class VisionClient:
             payload["options"] = {"temperature": 0.2, "num_predict": max_tokens}
         else:
             payload.update(temperature=0.2, max_tokens=max_tokens)
+            if self.provider == "nim":
+                payload = NimProvider._model_payload(payload, self.model)
         started = time.monotonic()
         timed_out = threading.Event()
         data: Any = None

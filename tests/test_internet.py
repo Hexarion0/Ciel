@@ -33,7 +33,7 @@ def no_network(monkeypatch):
 
 @pytest.fixture
 def service(monkeypatch):
-    instance = InternetService(InternetConfig(max_pages=0, research_max_pages=0))
+    instance = InternetService(InternetConfig(provider="ddgs", max_pages=0, research_max_pages=0))
     def topical(query, *_args):
         return [{"title": "Result for " + query, "href": "https://example.com/release",
                  "body": "Public information about " + query}]
@@ -397,7 +397,7 @@ def test_free_backends_are_lazy_and_use_independent_search_providers(monkeypatch
     client.text.return_value = [{"title": "News", "href": "https://example.com", "body": "Today"}]
     factory = Mock(return_value=client)
     monkeypatch.setitem(sys.modules, "ddgs", SimpleNamespace(DDGS=factory))
-    service = InternetService(InternetConfig(max_pages=0))
+    service = InternetService(InternetConfig(provider="ddgs", max_pages=0))
     assert not service.prepare("Hello").attempted
     factory.assert_not_called()
     assert service.prepare("News today").sources

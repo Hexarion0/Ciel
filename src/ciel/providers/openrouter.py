@@ -9,8 +9,22 @@ import httpx
 
 from ciel.config import ProviderConfig, get_settings
 from ciel.logging import get_logger
-from ciel.providers.base import ChatMessage, LLMProvider, LLMResponse, LLMStreamChunk
+from ciel.providers.base import (
+    ChatMessage,
+    LLMProvider,
+    LLMResponse,
+    LLMStreamChunk,
+    ToolCallAccumulator,
+    require_text_messages,
+)
 from ciel.providers.streaming import streaming_client
+from ciel.providers.tool_calls import (
+    openai_choice,
+    openai_tool_calls,
+    openai_tool_deltas,
+    reply_content,
+    response_object,
+)
 
 logger = get_logger("providers.openrouter")
 
@@ -74,6 +88,7 @@ class OpenRouterProvider(LLMProvider):
     ) -> LLMResponse:
         """Send chat messages to OpenRouter."""
         msgs = self.normalize_messages(messages)
+        require_text_messages(msgs)
         target_model = model or self.default_model
 
         payload = {
@@ -96,8 +111,12 @@ class OpenRouterProvider(LLMProvider):
             data = resp.json()
 
         latency = time.time() - start_t
-        choice = data["choices"][0]
-        content = choice["message"]["content"]
+        choice = openai_choice(data)
+        if choice is None:
+            raise ValueError("OpenRouter completion returned no choices")
+        message = response_object(choice.get("message"), "OpenRouter message")
+        content = reply_content(message.get("content"))
+        tool_calls = openai_tool_calls(message.get("tool_calls"))
         usage = data.get("usage", {})
 
         return LLMResponse(
@@ -106,6 +125,7 @@ class OpenRouterProvider(LLMProvider):
             provider=self.name,
             usage=usage,
             latency=latency,
+            tool_calls=tool_calls,
         )
 
     def stream(
@@ -121,6 +141,7 @@ class OpenRouterProvider(LLMProvider):
         if cancel_event is not None and cancel_event.is_set():
             return
         msgs = self.normalize_messages(messages)
+        require_text_messages(msgs)
         target_model = model or self.default_model
 
         payload = {
@@ -133,6 +154,7 @@ class OpenRouterProvider(LLMProvider):
         }
 
         response_model = target_model
+        calls = ToolCallAccumulator()
         with streaming_client(self.timeout, cancel_event) as client:
             with client.stream(
                 "POST",
@@ -149,6 +171,7 @@ class OpenRouterProvider(LLMProvider):
                         continue
                     data_str = line[len("data:") :].strip()
                     if data_str == "[DONE]":
+                        calls.finish()
                         yield LLMStreamChunk(
                             delta="",
                             model=response_model,
@@ -157,22 +180,33 @@ class OpenRouterProvider(LLMProvider):
                         )
                         break
                     try:
-                        chunk_json = json.loads(data_str)
+                        chunk_json = response_object(json.loads(data_str), "OpenRouter event")
                         if chunk_json.get("error") is not None:
                             raise RuntimeError("OpenRouter stream reported an error")
                         response_model = chunk_json.get("model") or response_model
-                        choices = chunk_json.get("choices") or []
-                        if not choices:
+                        choice = openai_choice(chunk_json)
+                        if choice is None:
                             continue  # Usage-only events contain no reply text.
-                        if choices[0].get("finish_reason") == "error":
+                        if choice.get("finish_reason") == "error":
                             raise RuntimeError("OpenRouter stream reported an error")
-                        delta = (choices[0].get("delta") or {}).get("content", "")
-                        if delta:
+                        raw_delta = response_object(choice.get("delta", {}), "OpenRouter delta")
+                        delta = reply_content(raw_delta.get("content"))
+                        tool_calls = openai_tool_deltas(raw_delta.get("tool_calls"))
+                        calls.add(tool_calls)
+                        if delta or tool_calls:
                             yield LLMStreamChunk(
                                 delta=delta,
                                 model=response_model,
                                 provider=self.name,
                                 is_final=False,
+                                tool_calls=tool_calls,
                             )
+                        if choice.get("finish_reason") is not None:
+                            calls.finish()
+                            yield LLMStreamChunk(
+                                delta="", model=response_model, provider=self.name, is_final=True,
+                            )
+                            return
                     except json.JSONDecodeError:
                         continue
+                calls.finish()

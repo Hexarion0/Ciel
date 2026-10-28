@@ -9,8 +9,10 @@ from ciel.config import ControllerConfig, InternetConfig, Settings
 from ciel.controller import AIController, ControllerDecision
 from ciel.internet import InternetResult, InternetSource
 from ciel.memory import ConversationManager, MemoryStore
-from ciel.providers.base import ChatMessage, LLMResponse
+from ciel.providers.base import ChatMessage, LLMResponse, ToolCall
 from ciel.research import ResearchCancellation, evidence_payload, previous_observations
+from tests.test_chat_session import RecordingRouter
+from tests.test_controller import _web_model_responses
 
 
 def test_chat_reuses_actual_website_observations_after_restart_without_fetching(tmp_path):
@@ -20,22 +22,25 @@ def test_chat_reuses_actual_website_observations_after_restart_without_fetching(
     lookup = InternetResult(attempted=True, query="retro.mn", sources=[
         InternetSource("RETRO.MN — CS2 Network", "https://retro.mn/", content=quote),
     ])
-    router = Mock()
-    router.send.return_value = LLMResponse(json.dumps({"claims": [
+    router = RecordingRouter()
+    router.answer = json.dumps({"claims": [
         {"text": quote, "quote": quote, "source": 1},
-    ]}), "model", "provider")
+    ]})
+    router.tool_calls.append(ToolCall("retro-page", "read_page", '{"url": "https://retro.mn/"}'))
     chat = ChatSession(settings, channel="telegram", session_id="owner", router=router)
-    chat.internet.prepare = Mock(return_value=lookup)
+    chat.internet.lookup = Mock(return_value=lookup)
     assert "Counter-Strike 2" in chat.reply("whats retro.mn")
-    chat.internet.prepare.assert_called_once()
+    chat.internet.lookup.assert_called_once()
     chat.close()
     reopened = ChatSession(settings, channel="telegram", session_id="owner", router=router)
     reopened.internet.prepare = Mock(side_effect=AssertionError("No fresh search requested"))
     reopened.internet.lookup = Mock(side_effect=AssertionError("No fresh fetch requested"))
     try:
         assert "Counter-Strike 2" in reopened.reply("tell me what u seen")
-        assert quote in "\n".join(m.content for m in router.send.call_args.args[0])
-        assert "previously retrieved observations" in str(router.send.call_args)
+        report_call = next(messages for messages in reversed(router.messages)
+                           if not messages[0].content.startswith("WEB GOAL CHECK"))
+        assert quote in "\n".join(m.content for m in report_call)
+        assert "previously retrieved observations" in str(report_call)
     finally:
         reopened.close()
 
@@ -98,7 +103,7 @@ def test_research_can_progress_beyond_the_old_three_step_limit():
     replies.append(LLMResponse(json.dumps({"claims": [
         {"text": quote, "quote": quote, "source": 1},
     ]}), "model", "provider"))
-    router.send.side_effect = replies
+    router.send.side_effect = _web_model_responses(replies)
     result = controller.run_web(
         ControllerDecision(action="search", confidence=1, query="example project reference 1"),
         "Search the example project private chat support",
@@ -128,10 +133,10 @@ def test_failed_translation_check_keeps_independently_supported_english_findings
     ])
     router, internet = Mock(), Mock()
     internet.config = InternetConfig()
-    router.send.side_effect = [LLMResponse(json.dumps({"claims": [
+    router.send.side_effect = _web_model_responses([LLMResponse(json.dumps({"claims": [
         {"text": english, "quote": english, "source": 1},
         {"text": "A new library opened in Ulaanbaatar.", "quote": mongolian, "source": 2},
-    ]}), "model", "provider"), TimeoutError("Translation service stalled")]
+    ]}), "model", "provider"), TimeoutError("Translation service stalled")], relevant_claims=(1, 2))
     report = AIController(router, ControllerConfig()).run_web(
         ControllerDecision(action="search", query="example project", confidence=1),
         "Tell me what you found", [ChatMessage("system", "Be helpful."),

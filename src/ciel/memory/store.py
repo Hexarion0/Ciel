@@ -1,18 +1,23 @@
-"""SQLite persistence engine for short-term conversation context and long-term memories."""
+"""Markdown-backed durable memory and SQLite conversation persistence/cache."""
 
+import hashlib
 import json
 import math
 import re
 import sqlite3
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from ciel.logging import get_logger
 from ciel.memory.models import ConversationTurn, MemoryItem, MemoryType, normalize_sources
 from ciel.memory.recall_terms import terms
 from ciel.memory.web_evidence import decode_web_evidence, normalize_web_evidence
+from ciel.memory.workspace import MemoryWorkspace
 
 logger = get_logger("memory.store")
 
@@ -37,9 +42,12 @@ class MemoryConflictError(RuntimeError):
 
 
 class MemoryStore:
-    """Thread-safe SQLite storage for long-term facts, preferences, and session history."""
+    """Thread-safe Markdown facts with a rebuildable SQLite cache and session archives."""
 
-    def __init__(self, db_path: str | Path = "data/ciel.db") -> None:
+    def __init__(
+        self, db_path: str | Path = "data/ciel.db", *,
+        workspace_path: str | Path | None = None, workspace_enabled: bool | None = None,
+    ) -> None:
         self.db_path_str = str(db_path)
         self._is_in_memory = self.db_path_str == ":memory:"
 
@@ -50,7 +58,16 @@ class MemoryStore:
         self._lock = threading.Lock()
         self._local = threading.local()
         self._memory_connection: sqlite3.Connection | None = None
+        self.workspace: MemoryWorkspace | None = None
+        self._workspace_signature: tuple[Any, ...] | None = None
         self._init_db()
+        enabled = workspace_enabled is not False and (
+            not self._is_in_memory or workspace_path is not None
+        )
+        if enabled:
+            root = workspace_path or Path(self.db_path_str).with_suffix(".workspace")
+            self.workspace = MemoryWorkspace(root)
+            self._initialize_workspace()
 
     def _get_connection(self) -> sqlite3.Connection:
         """Return a thread-local SQLite connection with WAL mode and row factory."""
@@ -200,6 +217,15 @@ class MemoryStore:
                     "CREATE INDEX IF NOT EXISTS idx_memory_terms_lookup "
                     "ON memory_terms(term, memory_id);"
                 )
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS memory_workspace_records ("
+                    "uid TEXT PRIMARY KEY, memory_id INTEGER UNIQUE NOT NULL "
+                    "REFERENCES memories(id) ON DELETE CASCADE, digest TEXT NOT NULL);"
+                )
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS memory_workspace_state ("
+                    "name TEXT PRIMARY KEY, value TEXT NOT NULL);"
+                )
                 version = conn.execute(
                     "SELECT version FROM memory_index_state WHERE name='recall_terms';"
                 ).fetchone()
@@ -216,6 +242,148 @@ class MemoryStore:
                         (_RECALL_INDEX_VERSION,),
                     )
             logger.debug("Memory database initialized at %s", self.db_path_str)
+
+    @contextmanager
+    def _workspace_transaction(self) -> Iterator[None]:
+        """Keep reconciliation and a durable mutation within the same process lock."""
+        with self.workspace.locked() if self.workspace is not None else nullcontext():
+            self.sync_workspace()
+            yield
+
+    def _initialize_workspace(self) -> None:
+        """Migrate old durable rows once without rewriting archives or settings."""
+        assert self.workspace is not None
+        with self.workspace.locked(), self._lock:
+            connection = self._get_connection()
+            state = connection.execute(
+                "SELECT version FROM memory_index_state WHERE name='markdown_migrated';"
+            ).fetchone()
+            previous_root = connection.execute(
+                "SELECT value FROM memory_workspace_state WHERE name='workspace_root';"
+            ).fetchone()
+            current_root = str(self.workspace.root)
+            new_destination = previous_root is None or previous_root["value"] != current_root
+            if state is None or new_destination and not self.workspace.has_provenance():
+                with connection:
+                    connection.execute("BEGIN IMMEDIATE;")
+                    connection.execute("DELETE FROM memory_workspace_records;")
+                    rows = connection.execute(
+                        "SELECT * FROM memories WHERE memory_type != ? ORDER BY id;",
+                        (MemoryType.CONVERSATION.value,),
+                    ).fetchall()
+                    known = self.workspace.facts()
+                    for row in rows:
+                        item = self._row_to_memory(row)
+                        identity = str(Path(self.db_path_str).absolute()) + ":" + str(item.id)
+                        uid = hashlib.sha256(identity.encode()).hexdigest()[:32]
+                        if uid not in known:
+                            self._persist_workspace_item(connection, item, uid=uid)
+                        else:
+                            connection.execute(
+                                "INSERT INTO memory_workspace_records VALUES (?,?,?)",
+                                (uid, item.id, ""),
+                            )
+                    connection.execute(
+                        "INSERT OR REPLACE INTO memory_index_state "
+                        "VALUES ('markdown_migrated', 1);"
+                    )
+            with connection:
+                connection.execute(
+                    "INSERT INTO memory_workspace_state VALUES ('workspace_root',?) "
+                    "ON CONFLICT(name) DO UPDATE SET value=excluded.value;", (current_root,),
+                )
+        self.sync_workspace()
+
+    def _persist_workspace_item(
+        self, connection: sqlite3.Connection, item: MemoryItem, *, uid: str | None = None,
+    ) -> None:
+        """Write one real Markdown fact and link its rebuildable SQLite cache row."""
+        if self.workspace is None or item.memory_type == MemoryType.CONVERSATION:
+            return
+        existing = connection.execute(
+            "SELECT uid FROM memory_workspace_records WHERE memory_id=?;", (item.id,),
+        ).fetchone()
+        uid = uid or (existing["uid"] if existing else uuid4().hex)
+        record = item.to_dict()
+        record.pop("content", None)
+        record["updated_at"] = datetime.now(timezone.utc).isoformat()
+        stored = self.workspace.put_fact(uid, record, item.content)
+        digest = hashlib.sha256(json.dumps(
+            stored, ensure_ascii=False, sort_keys=True,
+        ).encode("utf-8")).hexdigest()
+        connection.execute(
+            "INSERT INTO memory_workspace_records(uid,memory_id,digest) VALUES (?,?,?) "
+            "ON CONFLICT(uid) DO UPDATE SET memory_id=excluded.memory_id,digest=excluded.digest;",
+            (uid, item.id, digest),
+        )
+        self._workspace_signature = None
+
+    def _remove_workspace_item(self, connection: sqlite3.Connection, memory_id: int) -> None:
+        if self.workspace is None:
+            return
+        row = connection.execute(
+            "SELECT uid FROM memory_workspace_records WHERE memory_id=?;", (memory_id,),
+        ).fetchone()
+        if row:
+            self.workspace.remove_fact(row["uid"])
+            self._workspace_signature = None
+
+    def sync_workspace(self, *, force: bool = False) -> bool:
+        """Refresh changed managed notes and rebuild missing cache rows from Markdown."""
+        if self.workspace is None:
+            return False
+        with self.workspace.locked():
+            signature = self.workspace.signature()
+            if not force and signature == self._workspace_signature:
+                return False
+            records = self.workspace.facts()
+            with self._lock:
+                connection = self._get_connection()
+                with connection:
+                    connection.execute("BEGIN IMMEDIATE;")
+                    mapped = {row["uid"]: row for row in connection.execute(
+                        "SELECT w.*,m.content,m.metadata_json,m.memory_type,m.source,m.confidence "
+                        "FROM memory_workspace_records w "
+                        "JOIN memories m ON m.id=w.memory_id;"
+                    )}
+                    for uid, row in mapped.items():
+                        if uid not in records:
+                            connection.execute("DELETE FROM memories WHERE id=?;",
+                                               (row["memory_id"],))
+                    for uid, record in records.items():
+                        row = mapped.get(uid)
+                        cache_digest = hashlib.sha256(json.dumps(
+                            record, ensure_ascii=False, sort_keys=True,
+                        ).encode("utf-8")).hexdigest()
+                        if (row is not None and row["digest"] == cache_digest
+                                and row["content"] == record["content"]
+                                and self._decode_mapping(row["metadata_json"])
+                                == record.get("metadata", {})
+                                and row["source"] == record.get("source", "user_explicit")
+                                and row["memory_type"] == record.get("memory_type", "fact")
+                                and row["confidence"] == record.get("confidence", 1.0)):
+                            continue
+                        metadata = record.get("metadata", {})
+                        if not isinstance(metadata, dict):
+                            metadata = {}
+                        item = MemoryItem(
+                            id=row["memory_id"] if row else None,
+                            content=record["content"],
+                            memory_type=MemoryType(record.get("memory_type", "fact")),
+                            source=str(record.get("source", "user_explicit")),
+                            confidence=float(record.get("confidence", 1.0)),
+                            created_at=datetime.fromisoformat(record["created_at"]),
+                            updated_at=datetime.fromisoformat(record["updated_at"]),
+                            metadata=metadata,
+                        )
+                        self._save_memory_on_connection(connection, item)
+                        connection.execute(
+                            "INSERT INTO memory_workspace_records VALUES (?,?,?) "
+                            "ON CONFLICT(uid) DO UPDATE SET memory_id=excluded.memory_id,"
+                            "digest=excluded.digest;", (uid, item.id, cache_digest),
+                        )
+            self._workspace_signature = self.workspace.signature()
+            return True
 
     # -------------------------------------------------------------------------
     # Long-Term Memory Operations
@@ -298,6 +466,11 @@ class MemoryStore:
             item.memory_type.value if isinstance(item.memory_type, MemoryType)
             else str(item.memory_type)
         )
+        if item.id is not None:
+            previous = conn.execute("SELECT metadata_json FROM memories WHERE id=?;",
+                                    (item.id,)).fetchone()
+            if previous and self._decode_mapping(previous["metadata_json"]).get("local_only"):
+                item.metadata = {**item.metadata, "local_only": True}
         meta_str = json.dumps(item.metadata)
         if item.id is not None:
             cursor = conn.execute(
@@ -320,13 +493,16 @@ class MemoryStore:
 
     def save_memory(self, item: MemoryItem) -> int:
         """Insert or update a memory item. Returns the assigned memory ID."""
-        with self._lock:
+        with self._workspace_transaction(), self._lock:
             conn = self._get_connection()
             with conn:
-                return self._save_memory_on_connection(conn, item)
+                memory_id = self._save_memory_on_connection(conn, item)
+                self._persist_workspace_item(conn, item)
+                return memory_id
 
     def get_memory(self, memory_id: int) -> MemoryItem | None:
         """Retrieve a specific memory by ID."""
+        self.sync_workspace()
         with self._lock:
             conn = self._get_connection()
             cursor = conn.execute("SELECT * FROM memories WHERE id = ?;", (memory_id,))
@@ -337,6 +513,7 @@ class MemoryStore:
 
     def get_fact(self, key: str) -> MemoryItem | None:
         """Retrieve the current value of a stable, namespaced fact key."""
+        self.sync_workspace()
         with self._lock:
             row = (
                 self._get_connection()
@@ -359,7 +536,7 @@ class MemoryStore:
         that exact current content, or ``None`` to require that no fact exists.
         """
         scope, fact_key = key.split(":", 1)
-        with self._lock:
+        with self._workspace_transaction(), self._lock:
             conn = self._get_connection()
             with conn:
                 conn.execute("BEGIN IMMEDIATE;")
@@ -385,6 +562,8 @@ class MemoryStore:
                     metadata["project"] = "ciel"
                 if row:
                     old = self._row_to_memory(row)
+                    if old.metadata.get("local_only"):
+                        metadata["local_only"] = True
                     revisions = old.metadata.get("revisions", [])
                     revisions = (
                         [revision for revision in revisions if isinstance(revision, dict)]
@@ -452,11 +631,37 @@ class MemoryStore:
                 item.id = memory_id
                 item.metadata = metadata
                 self._sync_recall_index(conn, item)
+                self._persist_workspace_item(conn, item)
                 return memory_id
+
+    def _forget_derived_content(
+        self, connection: sqlite3.Connection, patterns: list[str],
+    ) -> None:
+        """Erase matching derived observations and invalidate pending consolidation proposals."""
+        if self.workspace is not None:
+            self.workspace.forget_patterns(patterns)
+            self._workspace_signature = None
+        tables = {row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table';"
+        )}
+        if "memory_observations" in tables:
+            rows = connection.execute("SELECT entry_id,content FROM memory_observations;")
+            selected = [row["entry_id"] for row in rows if any(
+                re.search(r"(?<!\w)" + re.escape(pattern) + r"(?!\w)", row["content"], re.I)
+                for pattern in patterns if pattern
+            )]
+            connection.executemany("DELETE FROM memory_observations WHERE entry_id=?;",
+                                   [(entry_id,) for entry_id in selected])
+            for table in ("memory_recall_signals", "memory_phase_signals"):
+                if table in tables:
+                    connection.executemany(f"DELETE FROM {table} WHERE entry_id=?;",
+                                           [(entry_id,) for entry_id in selected])
+        if "memory_reflections" in tables:
+            connection.execute("DELETE FROM memory_reflections;")
 
     def forget_memories(self, items: list[MemoryItem]) -> int:
         """Remove selected durable facts and suppress their values in replayed history."""
-        with self._lock:
+        with self._workspace_transaction(), self._lock:
             conn = self._get_connection()
             deleted = 0
             with conn:
@@ -509,6 +714,8 @@ class MemoryStore:
                         "INSERT OR REPLACE INTO forgotten_memories VALUES (?, ?);",
                         (key, json.dumps(list(dict.fromkeys(patterns)))),
                     )
+                    self._remove_workspace_item(conn, item.id)
+                    self._forget_derived_content(conn, patterns)
                     deleted += conn.execute(
                         "DELETE FROM memories WHERE id=?;",
                         (item.id,),
@@ -543,6 +750,7 @@ class MemoryStore:
         if not selected_terms or limit <= 0:
             return []
         placeholders = ",".join("?" for _ in selected_terms)
+        self.sync_workspace()
         with self._lock:
             conn = self._get_connection()
             document_count = conn.execute(
@@ -591,6 +799,31 @@ class MemoryStore:
                     (name, encoded),
                 )
 
+    def compare_setting(self, name: str, expected: Any, value: Any) -> bool:
+        """Replace a matching JSON snapshot; missing matches None and corrupt rows never match."""
+        expected_json = json.dumps(expected, allow_nan=False, sort_keys=True)
+        encoded = json.dumps(value, allow_nan=False)
+        with self._lock:
+            conn = self._get_connection()
+            with conn:
+                conn.execute("BEGIN IMMEDIATE;")
+                row = conn.execute(
+                    "SELECT value_json FROM memory_settings WHERE name=?;", (name,),
+                ).fetchone()
+                try:
+                    current = json.loads(row["value_json"]) if row is not None else None
+                    current_json = json.dumps(current, allow_nan=False, sort_keys=True)
+                except (TypeError, ValueError):
+                    return False
+                if current_json != expected_json:
+                    return False
+                conn.execute(
+                    "INSERT INTO memory_settings(name,value_json) VALUES (?,?) "
+                    "ON CONFLICT(name) DO UPDATE SET value_json=excluded.value_json;",
+                    (name, encoded),
+                )
+                return True
+
     def find_memories_containing(self, text: str, limit: int = 2) -> list[MemoryItem]:
         """Find literal durable matches across all records before applying a bounded limit.
 
@@ -599,6 +832,7 @@ class MemoryStore:
         """
         if not text.strip() or limit <= 0:
             return []
+        self.sync_workspace()
         with self._lock:
             rows = self._get_connection().execute(
                 "SELECT * FROM memories WHERE memory_type!=? "
@@ -617,6 +851,7 @@ class MemoryStore:
         exclude_types: tuple[MemoryType, ...] = (),
     ) -> list[MemoryItem]:
         """Search memory content using case-insensitive substring / keyword matching."""
+        self.sync_workspace()
         with self._lock:
             conn = self._get_connection()
             words = [w.strip() for w in query.split() if w.strip()]
@@ -655,6 +890,7 @@ class MemoryStore:
         limit: int = 50,
     ) -> list[MemoryItem]:
         """List the most recent memory items."""
+        self.sync_workspace()
         with self._lock:
             conn = self._get_connection()
             if memory_type is not None:
@@ -676,17 +912,24 @@ class MemoryStore:
 
     def delete_memory(self, memory_id: int) -> bool:
         """Delete a memory item by ID."""
-        with self._lock:
+        with self._workspace_transaction(), self._lock:
             conn = self._get_connection()
             with conn:
+                self._remove_workspace_item(conn, memory_id)
                 cursor = conn.execute("DELETE FROM memories WHERE id = ?;", (memory_id,))
                 return cursor.rowcount > 0
 
     def delete_by_pattern(self, pattern: str) -> int:
         """Delete memories matching a search pattern (case-insensitive). Returns count deleted."""
-        with self._lock:
+        with self._workspace_transaction(), self._lock:
             conn = self._get_connection()
             with conn:
+                rows = conn.execute(
+                    "SELECT id FROM memories WHERE content LIKE ?;",
+                    (f"%{pattern}%",),
+                ).fetchall()
+                for row in rows:
+                    self._remove_workspace_item(conn, row["id"])
                 cursor = conn.execute(
                     "DELETE FROM memories WHERE content LIKE ?;",
                     (f"%{pattern}%",),
@@ -695,6 +938,7 @@ class MemoryStore:
 
     def count_memories(self, memory_type: MemoryType | None = None) -> int:
         """Return total count of memories stored."""
+        self.sync_workspace()
         with self._lock:
             conn = self._get_connection()
             if memory_type is not None:
@@ -963,7 +1207,49 @@ class MemoryStore:
                     f"AND ({_SESSION_ID_SQL}) IN ({placeholders});",
                     [MemoryType.CONVERSATION.value, *affected],
                 )
+                self._clear_session_observations(conn, session_id, affected)
                 return cleared
+
+    @staticmethod
+    def _clear_session_observations(
+        connection: sqlite3.Connection, session_id: str, affected: list[str],
+    ) -> None:
+        """Erase reset dialogue derivatives while retaining independent facts and daily notes."""
+        tables = {row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table';",
+        )}
+        selected: set[str] = set()
+        if "memory_observations" in tables:
+            selected = {row[0] for row in connection.execute(
+                "SELECT entry_id FROM memory_observations WHERE session_id=?", (session_id,),
+            )}
+            for table in ("memory_recall_signals", "memory_phase_signals"):
+                if table in tables:
+                    connection.executemany(f"DELETE FROM {table} WHERE entry_id=?",
+                                           [(identity,) for identity in selected])
+            connection.execute("DELETE FROM memory_observations WHERE session_id=?", (session_id,))
+        if "memory_reflections" not in tables:
+            return
+        invalidated = []
+        affected_set = set(affected)
+        for row in connection.execute("SELECT * FROM memory_reflections"):
+            try:
+                evidence = json.loads(row["evidence_json"])
+                guard = json.loads(row["guard_json"]) if "guard_json" in row.keys() else []
+                related_source = isinstance(evidence, list) and any(
+                    isinstance(item, dict) and (
+                        item.get("id") in selected or item.get("session_id") == session_id
+                    ) for item in evidence
+                )
+                related_guard = isinstance(guard, list) and any(
+                    isinstance(item, list) and len(item) == 2 and item[0] in affected_set
+                    for item in guard
+                )
+            except (TypeError, ValueError):
+                related_source = related_guard = False
+            if row["scope"] in affected_set or related_source or related_guard:
+                invalidated.append((row["run_id"],))
+        connection.executemany("DELETE FROM memory_reflections WHERE run_id=?", invalidated)
 
     # -------------------------------------------------------------------------
     # Helper / Conversion Methods

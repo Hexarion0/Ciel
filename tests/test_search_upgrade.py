@@ -16,6 +16,7 @@ from ciel.internet import (
 )
 from ciel.providers.base import ChatMessage, LLMResponse
 from ciel.web_answers import verified_web_answer
+from tests.test_controller import _web_model_responses
 
 
 def service_with_results(monkeypatch, results, *, pages=0):
@@ -105,6 +106,7 @@ def test_controller_search_uses_explicit_corrected_scope_before_fetching():
     router.send.return_value = LLMResponse(json.dumps({"claims": [{
         "text": quote, "source": 1, "quote": quote,
     }]}), "test", "test")
+    router.send.side_effect = _web_model_responses([router.send.return_value])
     controller = AIController(router, ControllerConfig())
     internet = Mock(config=InternetConfig())
     internet.lookup.return_value = InternetResult(sources=[InternetSource(

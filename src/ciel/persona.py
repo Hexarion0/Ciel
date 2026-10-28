@@ -409,7 +409,12 @@ def build_advanced_persona(
         if recalled_memories else "No relevant saved memories were supplied for this turn."
     )
     identity = _IDENTITY if channel == "voice" else _IDENTITY.replace(
-        "short spoken sentences", "short sentences",
+        "Usually use one to three short spoken sentences;\nexplain more when needed.",
+        "Match the depth to the user's request. Greetings and simple questions can be brief; "
+        "explanations, comparisons, plans, and technical work can use several paragraphs. "
+        "When the user asks for detail, explain the reasoning, tradeoffs, examples, and "
+        "practical steps needed to answer fully. Do not impose a sentence limit or cut an "
+        "explanation short just to stay brief.",
     )
     understanding = _UNDERSTANDING if channel == "voice" else (
         "Text conversation:\nThe user typed these messages intentionally. Use their exact "
@@ -446,7 +451,8 @@ def build_advanced_persona(
         "not a style to imitate. Keep commands or code brief when explicitly requested."
     ) if channel == "voice" else (
         "Text output:\nWrite the reply to the user, with no thinking tags, internal analysis, "
-        "or stage directions. Short paragraphs, lists, and code are allowed when useful. "
+        "or stage directions. Use clear paragraphs and, when they help, headings, lists, "
+        "and fenced code blocks. Provide complete examples or code when requested. "
         "Answer the question first, following the user's latest style and length preferences."
     )
     sections.append(output)

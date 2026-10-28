@@ -12,9 +12,15 @@ from ciel.chat.state import ChatState
 from ciel.config import Settings
 from ciel.internet import InternetResult, InternetSource
 from ciel.memory import ConversationManager, MemoryStore
-from ciel.memory.bridge import desktop_conversation_id, telegram_conversation_id
-from ciel.providers.base import LLMResponse
+from ciel.memory.bridge import (
+    conversation_context,
+    current_conversation_id,
+    desktop_conversation_id,
+    telegram_conversation_id,
+)
+from ciel.providers.base import LLMResponse, ToolCall
 from tests.test_ambient import run_callbacks
+from tests.test_controller import _web_model_responses
 from tests.test_internet_runtime import stub_internet
 
 QUOTE = "The example project supports private text chat."
@@ -62,11 +68,23 @@ def revoke_permission(tmp_path, change):
     else:
         other_store = MemoryStore(tmp_path / "memory.db")
         try:
-            other_store.set_setting(f"web_pause:{telegram_conversation_id(123, 42)}", {
+            settings = Settings(_env_file=None, memory_db_path=other_store.db_path_str)
+            session_id = current_conversation_id(
+                settings, telegram_conversation_id(123, 42), store=other_store,
+            )
+            other_store.set_setting(f"web_pause:{session_id}", {
                 "paused": True, "updated_at": time.time_ns(),
             })
         finally:
             other_store.close()
+
+
+def initialize_paired_conversation(store: MemoryStore, session_id: str) -> None:
+    """Seed paired history into the foreground launch's current shared owner scope."""
+    settings = Settings(_env_file=None, memory_db_path=store.db_path_str)
+    context = conversation_context(settings, session_id, store=store)
+    paired_session_id, = [member for member in context.session_ids if member != session_id]
+    ConversationManager(store, session_id=paired_session_id).add_turn("user", OWNER_MARKER)
 
 
 def test_legacy_voice_checks_other_channel_pause_after_initial_retrieval(
@@ -84,6 +102,7 @@ def test_legacy_voice_checks_other_channel_pause_after_initial_retrieval(
     _, tts, _, store, turns = run_callbacks(
         tmp_path, monkeypatch, [("Search the example project", {"input_source": "keyboard"})],
         router=router, controller=False,
+        initialize_conversation=initialize_paired_conversation,
     )
     try:
         router.send.assert_not_called()
@@ -110,6 +129,7 @@ def test_legacy_voice_refreshes_permissions_before_saving_and_speaking_report(
     _, tts, _, store, turns = run_callbacks(
         tmp_path, monkeypatch, [("Search the example project", {"input_source": "keyboard"})],
         router=router, controller=False,
+        initialize_conversation=initialize_paired_conversation,
     )
     try:
         router.send.assert_called_once()
@@ -138,6 +158,7 @@ def test_legacy_voice_captures_scope_before_replaying_owner_history(
     _, tts, _, store, turns = run_callbacks(
         tmp_path, monkeypatch, [("Search the example project", {"input_source": "keyboard"})],
         router=router, controller=False,
+        initialize_conversation=initialize_paired_conversation,
     )
     try:
         service.prepare.assert_not_called()
@@ -165,6 +186,7 @@ def test_default_voice_captures_scope_before_reading_gate_history(
     _, tts, _, store, turns = run_callbacks(
         tmp_path, monkeypatch, [("Search the example project", {"input_source": "keyboard"})],
         router=router, controller=True,
+        initialize_conversation=initialize_paired_conversation,
     )
     try:
         service.lookup.assert_not_called()
@@ -175,7 +197,9 @@ def test_default_voice_captures_scope_before_reading_gate_history(
         store.close()
 
 
-def test_legacy_voice_uses_shared_research_beyond_three_progressing_attempts(tmp_path, monkeypatch):
+def test_legacy_typed_chat_uses_shared_research_beyond_three_progressing_attempts(
+    tmp_path, monkeypatch,
+):
     initial = InternetResult(attempted=True, query="example project reference 1", sources=[
         InternetSource(
             "Project guide 1", "https://example.org/1", content="Project reference one.",
@@ -199,18 +223,21 @@ def test_legacy_voice_uses_shared_research_beyond_three_progressing_attempts(tmp
         ])
     replies.append(response())
     router = MagicMock()
-    router.send.side_effect = replies
+    router.send.side_effect = _web_model_responses(replies)
     _, tts, _, store, turns = run_callbacks(
         tmp_path, monkeypatch, [("Search the example project", {"input_source": "keyboard"})],
         router=router, controller=False,
     )
     try:
         assert service.lookup.call_count == 4
+        tts.speak.assert_called_once()
         assert tts.speak.call_args.args[0] == QUOTE
+        tts.begin_stream.assert_not_called()
         final = [turn for turn in turns if turn.role == "assistant"][-1]
-        assert final.content == QUOTE
-        assert len(final.web_evidence["sources"]) == 5
+        assert final.content == QUOTE + " [1]"
+        assert len(final.web_evidence["sources"]) == 1
         assert final.web_evidence["sources"][0]["content"] == QUOTE
+        assert final.web_evidence["sources"][0]["url"] == "https://example.org/5"
         assert final.sources[0]["url"] == "https://example.org/5"
     finally:
         store.close()
@@ -247,17 +274,22 @@ def test_chat_refreshes_permissions_after_report_before_writing(tmp_path, paired
                         ciel_persona_file="", internet_enabled=True)
     router = MagicMock()
 
-    def complete(*args, **kwargs):
+    def complete(messages, **kwargs):
+        if not any(message.role == "tool" for message in messages):
+            return LLMResponse("", "test-model", "test-provider", tool_calls=(
+                ToolCall("public_lookup", "web_search", '{"query":"example project"}'),
+            ))
         revoke_permission(tmp_path, change)
         return response()
 
     router.send.side_effect = complete
     session = ChatSession(settings, channel="desktop", session_id=desktop_conversation_id(),
                           router=router)
-    session.internet.prepare = MagicMock(return_value=lookup())
+    session.internet.lookup = MagicMock(return_value=lookup())
     try:
         assert session.reply("Search the example project") == ""
-        router.send.assert_called_once()
+        assert router.send.call_count == 2
+        session.internet.lookup.assert_called_once()
         assert not any(turn.role == "assistant" for turn in session.conversation.get_recent_turns())
     finally:
         session.close()

@@ -8,10 +8,14 @@ import pytest
 from pydantic import ValidationError
 
 from ciel.config import (
+    DEFAULT_CONTROLLER_MODEL,
+    DEFAULT_NIM_COMPLEX_MODEL,
+    DEFAULT_NIM_FALLBACK_MODEL,
     DEFAULT_NIM_MODEL,
     AudioConfig,
     ControllerConfig,
     InternetConfig,
+    MemoryConfig,
     ProviderConfig,
     Settings,
 )
@@ -30,6 +34,34 @@ def test_default_settings():
     assert settings.audio.wake_word == "ciel"
     assert settings.audio.sample_rate == 16000
     assert settings.providers.nim_api_key is None
+
+
+def test_memory_workspace_defaults_match_documented_settings():
+    example = Path(__file__).resolve().parents[1] / ".env.example"
+    with patch.dict(os.environ, {}, clear=True):
+        configurations = (MemoryConfig(), Settings(_env_file=None).memory,
+                          Settings(_env_file=example).memory)
+    for memory in configurations:
+        assert memory.workspace_enabled and memory.workspace_path == ""
+        assert memory.daily_capture_enabled and memory.flush_enabled
+        assert memory.consolidation_enabled and memory.consolidation_time == "03:00"
+        assert memory.search_max_results == 6 and memory.search_min_score == 0.35
+
+
+def test_memory_environment_options_reach_runtime_configuration():
+    with patch.dict(os.environ, {
+        "MEMORY_WORKSPACE_ENABLED": "false", "MEMORY_WORKSPACE_PATH": "/tmp/custom-notes",
+        "MEMORY_WORKSPACE_BOOTSTRAP_MAX_CHARS": "2400",
+        "MEMORY_DAILY_CAPTURE_ENABLED": "false", "MEMORY_FLUSH_ENABLED": "false",
+        "MEMORY_CONSOLIDATION_ENABLED": "false", "MEMORY_CONSOLIDATION_TIME": "04:25",
+        "MEMORY_SEARCH_MAX_RESULTS": "4", "MEMORY_SEARCH_MIN_SCORE": "0.6",
+    }, clear=True):
+        memory = Settings(_env_file=None).memory
+    assert not memory.workspace_enabled and memory.workspace_path == "/tmp/custom-notes"
+    assert memory.workspace_bootstrap_max_chars == 2400
+    assert not memory.daily_capture_enabled and not memory.flush_enabled
+    assert not memory.consolidation_enabled and memory.consolidation_time == "04:25"
+    assert memory.search_max_results == 4 and memory.search_min_score == 0.6
 
 
 @pytest.mark.parametrize("configuration", [Settings, AudioConfig])
@@ -120,8 +152,8 @@ def test_example_configuration_starts_with_cpu_pocket():
     assert audio.stt_retry_model == "medium.en"
 
 
-def test_fresh_nim_configuration_uses_the_available_model_consistently():
-    """Every default route must use the model verified by real inference requests."""
+def test_fresh_nim_configuration_uses_super_and_ultra_consistently():
+    """Direct settings and the example retain the intended conversation model sizes."""
     example = Path(__file__).resolve().parents[1] / ".env.example"
     with patch.dict(os.environ, {}, clear=True):
         fresh = Settings(_env_file=None)
@@ -130,14 +162,15 @@ def test_fresh_nim_configuration_uses_the_available_model_consistently():
             ControllerConfig(), fresh.controller, documented.controller,
         )
         providers = (ProviderConfig(), fresh.providers, documented.providers)
-    assert DEFAULT_NIM_MODEL == "nvidia/nemotron-3.5-lightning-30b-a3b"
+    assert DEFAULT_NIM_MODEL == "nvidia/nemotron-3.5-super-vl-120b-a12b"
+    assert DEFAULT_NIM_COMPLEX_MODEL == "nvidia/nemotron-3-ultra-550b-a55b"
     for controller in controllers:
-        assert controller.model == DEFAULT_NIM_MODEL
+        assert controller.model == DEFAULT_CONTROLLER_MODEL
         assert controller.timeout_seconds == 8.0
     for provider in providers:
         assert provider.nim_model == DEFAULT_NIM_MODEL
-        assert provider.nim_complex_model == DEFAULT_NIM_MODEL
-        assert provider.nim_fallback_model == DEFAULT_NIM_MODEL
+        assert provider.nim_complex_model == DEFAULT_NIM_COMPLEX_MODEL
+        assert provider.nim_fallback_model == DEFAULT_NIM_FALLBACK_MODEL
 
 
 def test_saved_nim_model_overrides_are_preserved(tmp_path):
@@ -316,7 +349,7 @@ def test_internet_defaults_allow_free_automatic_search_without_assuming_a_city()
         internet = Settings(_env_file=None).internet
     assert internet == InternetConfig()
     assert internet.enabled and internet.automatic
-    assert internet.provider == "ddgs"
+    assert internet.provider == "parallel"
     assert internet.brave_api_key is None and internet.tavily_api_key is None
     assert internet.home_city == ""
     assert (internet.timeout_seconds, internet.research_timeout_seconds) == (8.0, 20.0)
@@ -364,7 +397,7 @@ def test_internet_process_environment_overrides_env_file(tmp_path):
     assert internet.home_city == "Dublin, Ireland"
 
 
-@pytest.mark.parametrize("provider", ["ddgs", "brave", "tavily"])
+@pytest.mark.parametrize("provider", ["parallel", "ddgs", "brave", "tavily"])
 def test_selected_search_provider_and_secret_keys_reach_structured_config(tmp_path, provider):
     """Saved keys stay masked and do not change the chosen search provider."""
     env_file = tmp_path / ".env"
@@ -380,6 +413,23 @@ def test_selected_search_provider_and_secret_keys_reach_structured_config(tmp_pa
     for configuration in (settings, settings.internet):
         assert "synthetic-brave-key" not in repr(configuration)
         assert "synthetic-tavily-key" not in configuration.model_dump_json()
+
+
+def test_example_configuration_uses_parallel_without_a_key():
+    """Fresh installs use the anonymous search service without enabling saved paid keys."""
+    example = Path(__file__).resolve().parents[1] / ".env.example"
+    with patch.dict(os.environ, {}, clear=True):
+        internet = Settings(_env_file=example).internet
+        saved_keys = Settings(
+            _env_file=None,
+            brave_search_api_key="synthetic-unused-brave-key",
+            tavily_api_key="synthetic-unused-tavily-key",
+        ).internet
+    assert internet.provider == saved_keys.provider == "parallel"
+    assert internet.brave_api_key is None or not internet.brave_api_key.get_secret_value()
+    assert internet.tavily_api_key is None or not internet.tavily_api_key.get_secret_value()
+    assert saved_keys.brave_api_key.get_secret_value() == "synthetic-unused-brave-key"
+    assert saved_keys.tavily_api_key.get_secret_value() == "synthetic-unused-tavily-key"
 
 
 def test_unknown_search_provider_is_rejected():

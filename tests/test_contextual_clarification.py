@@ -1,4 +1,4 @@
-"""Only valid model clarifications can use the existing conversational response stage."""
+"""Legacy controller guards and direct main-model contextual clarifications."""
 
 import json
 from threading import Event
@@ -9,7 +9,6 @@ import pytest
 from ciel.config import ControllerConfig
 from ciel.controller import AIController, ControllerDecision
 from ciel.memory import MemoryItem, MemoryStore, MemoryType
-from ciel.memory.bridge import desktop_conversation_id
 from ciel.providers.base import ChatMessage, LLMResponse, LLMStreamChunk
 from ciel.providers.router import ModelRouter
 from tests.test_ambient import run_callbacks
@@ -162,53 +161,57 @@ def test_model_clarification_uses_full_history_without_any_tool_authority(
     monkeypatch.setattr(ActionRegistry, "handle", action_handle)
     monkeypatch.setattr(InternetService, "lookup", lookup)
     question = "How long did the sample prototype take?"
-    if private:
-        seed = MemoryStore(tmp_path / "memory.db")
-        try:
-            seed.save_memory(MemoryItem(
-                content="A private conversation from an earlier release.",
-                memory_type=MemoryType.CONVERSATION,
-                metadata={"session_id": desktop_conversation_id(), "local_only": True},
-            ))
-        finally:
-            seed.close()
+
+    def initialize_conversation(store: MemoryStore, session_id: str) -> None:
+        """Seed protected legacy history for the current launch session."""
+        store.save_memory(MemoryItem(
+            content="A private conversation from an earlier release.",
+            memory_type=MemoryType.CONVERSATION,
+            metadata={"session_id": session_id, "local_only": True},
+        ))
+
     original = "The prototype took 18 days."
     resolved = "Yes, just over two weeks of work."
     router, tts = MagicMock(), MagicMock()
     tts.supports_sentence_pipeline = False
     generations = iter([original, resolved])
-    gate_requests, reply_requests = [], []
+    reply_requests = []
 
     def generate(messages):
         reply_requests.append(messages)
         return next(generations)
 
     def send(messages, **kwargs):
-        if kwargs.get("purpose") == "controller":
-            gate_requests.append(messages)
-            return _decision("answer") if len(gate_requests) == 1 else _decision()
+        assert kwargs["purpose"] == "conversation"
         return LLMResponse(generate(messages), "test-chat", "test")
 
     router.send.side_effect = send
-    router.stream.side_effect = lambda messages, **_kwargs: iter([
-        LLMStreamChunk(generate(messages), "test-chat", "test"),
-    ])
+
+    def stream(messages, **kwargs):
+        assert kwargs["purpose"] == "conversation"
+        yield LLMStreamChunk(generate(messages), "test-chat", "test")
+
+    router.stream.side_effect = stream
     _, _, _, store, turns = run_callbacks(
         tmp_path, monkeypatch,
         [(question, {"input_source": "keyboard"}), ("That's a big number.", {})],
         router=router, tts=tts, controller=True, streaming=streaming,
         persona_file=persona_file,
+        initialize_conversation=initialize_conversation if private else None,
     )
     try:
-        assert len(gate_requests) == len(reply_requests) == 2
+        assert len(reply_requests) == 2
+        assert router.send.call_count == (0 if streaming else 2)
+        assert router.stream.call_count == (2 if streaming else 0)
         assert [turn.content for turn in turns if turn.role == "assistant"] == [original, resolved]
         assert [(message.role, message.content) for message in reply_requests[-1]
                 if message.role != "system"] == [
             ("user", question), ("assistant", original), ("user", "That's a big number."),
         ]
-        assert "Which number do you mean?" in reply_requests[-1][0].content
+        assert "Ask a brief" in reply_requests[-1][-1].content
+        assert "clarification" in reply_requests[-1][-1].content
         assert all(ModelRouter.requires_local(messages) is private
-                   for messages in [*gate_requests, *reply_requests])
+                   for messages in reply_requests)
         assert turns[-1].provider == "test"
         memory_handle.assert_not_called()
         action_handle.assert_not_called()
@@ -221,7 +224,7 @@ def test_model_clarification_uses_full_history_without_any_tool_authority(
 def test_canceling_contextual_answer_does_not_speak_or_save_stale_model_output(
     tmp_path, monkeypatch,
 ):
-    """A clarification's delegated answer retains the original turn's cancellation token."""
+    """A contextual answer retains the original turn's cancellation ownership."""
     persona_file = tmp_path / "persona.txt"
     persona_file.write_text("", encoding="utf-8")
     canceled = Event()
@@ -230,14 +233,13 @@ def test_canceling_contextual_answer_does_not_speak_or_save_stale_model_output(
 
     def send(messages, **kwargs):
         calls.append((messages, kwargs))
+        assert kwargs["purpose"] == "conversation"
         if len(calls) == 1:
-            return _decision("answer")
-        if len(calls) == 2:
             return LLMResponse("The prototype took 18 days.", "test-chat", "test")
-        if len(calls) == 3:
-            return _decision()
-        assert kwargs["cancel_event"] is canceled
+        assert len(calls) == 2
+        assert not kwargs["cancel_event"].is_set()
         canceled.set()
+        assert kwargs["cancel_event"].is_set()
         return LLMResponse("This canceled answer must not be saved.", "test-chat", "test")
 
     router.send.side_effect = send
@@ -248,11 +250,13 @@ def test_canceling_contextual_answer_does_not_speak_or_save_stale_model_output(
         router=router, controller=True, persona_file=persona_file,
     )
     try:
-        assert len(calls) == 4
+        assert len(calls) == 2
         assert [turn.content for turn in turns if turn.role == "assistant"] == [
             "The prototype took 18 days.",
         ]
+        # Only the completed typed answer speaks; the canceled follow-up stays silent.
         tts.speak.assert_called_once()
+        assert tts.speak.call_args.args[0] == "The prototype took 18 days."
         assert store.count_memories() == 0
     finally:
         store.close()
@@ -264,8 +268,8 @@ def test_failed_contextual_answer_falls_back_without_claiming_a_result(tmp_path,
     persona_file.write_text("", encoding="utf-8")
     router = MagicMock()
     router.send.side_effect = [
-        _decision("answer"), LLMResponse("The prototype took 18 days.", "test-chat", "test"),
-        _decision(), ConnectionError("synthetic response-stage outage"),
+        LLMResponse("The prototype took 18 days.", "test-chat", "test"),
+        ConnectionError("synthetic response-stage outage"),
     ]
     _, tts, _, store, turns = run_callbacks(
         tmp_path, monkeypatch,
@@ -274,10 +278,14 @@ def test_failed_contextual_answer_falls_back_without_claiming_a_result(tmp_path,
         router=router, controller=True, persona_file=persona_file,
     )
     try:
-        assert router.send.call_count == 4
+        assert router.send.call_count == 2
+        assert all(call.kwargs["purpose"] == "conversation"
+                   for call in router.send.call_args_list)
         assert turns[-1].provider == "local"
-        assert turns[-1].content == "Which number do you mean?"
-        assert tts.speak.call_count == 2
+        assert turns[-1].content == "I couldn't finish that request. Could you try again?"
+        assert [call.args[0] for call in tts.speak.call_args_list] == [
+            "The prototype took 18 days.", turns[-1].content,
+        ]
         assert store.count_memories() == 0
     finally:
         store.close()

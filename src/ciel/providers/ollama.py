@@ -9,8 +9,21 @@ import httpx
 
 from ciel.config import get_settings
 from ciel.logging import get_logger
-from ciel.providers.base import ChatMessage, LLMProvider, LLMResponse, LLMStreamChunk
+from ciel.providers.base import (
+    ChatMessage,
+    LLMProvider,
+    LLMResponse,
+    LLMStreamChunk,
+    ToolCallAccumulator,
+    require_text_messages,
+)
 from ciel.providers.streaming import streaming_client
+from ciel.providers.tool_calls import (
+    ollama_tool_calls,
+    ollama_tool_deltas,
+    reply_content,
+    response_object,
+)
 
 logger = get_logger("providers.ollama")
 
@@ -40,6 +53,19 @@ class OllamaProvider(LLMProvider):
             logger.debug("Ollama health check failed: %s", err)
             return False
 
+    @staticmethod
+    def _messages_payload(messages: list[ChatMessage]) -> list[dict[str, Any]]:
+        """Associate native tool results with their declared Ollama function names."""
+        names: dict[str, str] = {}
+        payload = []
+        for message in messages:
+            serialized = message.to_ollama_dict()
+            names.update((call.id, call.name) for call in message.tool_calls)
+            if message.role == "tool" and message.tool_call_id in names:
+                serialized["tool_name"] = names[message.tool_call_id]
+            payload.append(serialized)
+        return payload
+
     def send(
         self,
         messages: list[ChatMessage] | str,
@@ -50,11 +76,12 @@ class OllamaProvider(LLMProvider):
     ) -> LLMResponse:
         """Send chat request to Ollama."""
         msgs = self.normalize_messages(messages)
+        require_text_messages(msgs)
         target_model = model or self.default_model
 
         payload = {
             "model": target_model,
-            "messages": [m.to_ollama_dict() for m in msgs],
+            "messages": self._messages_payload(msgs),
             "options": {
                 "temperature": temperature,
                 "num_predict": max_tokens,
@@ -73,7 +100,10 @@ class OllamaProvider(LLMProvider):
             data = resp.json()
 
         latency = time.time() - start_t
-        content = data.get("message", {}).get("content", "")
+        data = response_object(data, "Ollama response")
+        message = response_object(data.get("message", {}), "Ollama message")
+        content = reply_content(message.get("content"))
+        tool_calls = ollama_tool_calls(message.get("tool_calls"))
 
         return LLMResponse(
             content=content,
@@ -84,6 +114,7 @@ class OllamaProvider(LLMProvider):
                 "eval_count": data.get("eval_count", 0),
             },
             latency=latency,
+            tool_calls=tool_calls,
         )
 
     def stream(
@@ -99,11 +130,12 @@ class OllamaProvider(LLMProvider):
         if cancel_event is not None and cancel_event.is_set():
             return
         msgs = self.normalize_messages(messages)
+        require_text_messages(msgs)
         target_model = model or self.default_model
 
         payload = {
             "model": target_model,
-            "messages": [m.to_ollama_dict() for m in msgs],
+            "messages": self._messages_payload(msgs),
             "options": {
                 "temperature": temperature,
                 "num_predict": max_tokens,
@@ -112,6 +144,8 @@ class OllamaProvider(LLMProvider):
             **kwargs,
         }
 
+        calls = ToolCallAccumulator()
+        next_tool_index = 0
         with streaming_client(self.timeout, cancel_event) as client:
             with client.stream(
                 "POST",
@@ -126,16 +160,29 @@ class OllamaProvider(LLMProvider):
                     if not line:
                         continue
                     try:
-                        chunk_json = json.loads(line)
-                        delta = chunk_json.get("message", {}).get("content", "")
+                        chunk_json = response_object(json.loads(line), "Ollama event")
+                        message = response_object(chunk_json.get("message", {}), "Ollama message")
+                        delta = reply_content(message.get("content"))
+                        tool_calls = ollama_tool_deltas(message.get("tool_calls"), next_tool_index)
+                        calls.add(tool_calls)
+                        if tool_calls:
+                            next_tool_index = max(next_tool_index, max(
+                                call.index for call in tool_calls
+                            ) + 1)
                         is_done = chunk_json.get("done", False)
+                        if not isinstance(is_done, bool):
+                            raise ValueError("Ollama done field must be boolean")
+                        if is_done:
+                            calls.finish()
                         yield LLMStreamChunk(
                             delta=delta,
                             model=target_model,
                             provider=self.name,
                             is_final=is_done,
+                            tool_calls=tool_calls,
                         )
                         if is_done:
                             break
                     except json.JSONDecodeError:
                         continue
+                calls.finish()

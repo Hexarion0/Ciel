@@ -7,14 +7,70 @@ from typing import Any
 
 import httpx
 
-from ciel.config import DEFAULT_NIM_MODEL, ProviderConfig, get_settings
+from ciel.config import DEFAULT_NIM_FALLBACK_MODEL, ProviderConfig, get_settings
 from ciel.latency import http_extensions, mark
 from ciel.logging import get_logger
-from ciel.providers.base import ChatMessage, LLMProvider, LLMResponse, LLMStreamChunk
+from ciel.providers.base import (
+    ChatMessage,
+    LLMProvider,
+    LLMResponse,
+    LLMStreamChunk,
+    ToolCall,
+    ToolCallAccumulator,
+    require_text_messages,
+)
 from ciel.providers.streaming import streaming_client
+from ciel.providers.tool_calls import (
+    openai_choice,
+    openai_tool_calls,
+    openai_tool_deltas,
+    reply_content,
+    response_object,
+)
 
 logger = get_logger("providers.nim")
 STREAM_READ_TIMEOUT_SECONDS = 12.0
+MIN_REASONING_COMPLETION_TOKENS = 8192
+
+
+class _FinalAnswerStream:
+    """Discard exterior thinking tags even when a server splits them across events."""
+
+    _TAGS = ("think", "thought", "reasoning", "reflection")
+
+    def __init__(self) -> None:
+        self._pending = ""
+        self._closing = ""
+        self._visible = False
+
+    def feed(self, text: str) -> str:
+        """Return visible text while retaining only a possible boundary tag prefix."""
+        if self._visible:
+            return text
+        self._pending += text
+        while True:
+            if self._closing:
+                end = self._pending.lower().find(self._closing)
+                if end < 0:
+                    self._pending = self._pending[-(len(self._closing) - 1):]
+                    return ""
+                self._pending = self._pending[end + len(self._closing):].lstrip()
+                self._closing = ""
+            candidate = self._pending.lstrip().lower()
+            for tag in self._TAGS:
+                opening = f"<{tag}>"
+                if candidate.startswith(opening):
+                    self._pending = self._pending.lstrip()[len(opening):]
+                    self._closing = f"</{tag}>"
+                    break
+            else:
+                if not candidate or any(f"<{tag}>".startswith(candidate) for tag in self._TAGS):
+                    return ""
+                # Once a final answer or JSON starts, preserve it verbatim. A JSON
+                # string may legitimately contain literal thinking tags.
+                self._visible = True
+                visible, self._pending = self._pending, ""
+                return visible
 
 
 class NimProvider(LLMProvider):
@@ -42,7 +98,7 @@ class NimProvider(LLMProvider):
 
         self.default_model = model or providers.nim_model or self.default_model
         self.complex_model = providers.nim_complex_model
-        self.fallback_model = providers.nim_fallback_model or DEFAULT_NIM_MODEL
+        self.fallback_model = providers.nim_fallback_model or DEFAULT_NIM_FALLBACK_MODEL
         self.timeout = timeout
 
     def is_configured(self) -> bool:
@@ -70,28 +126,45 @@ class NimProvider(LLMProvider):
             logger.debug("NIM health check failed: %s", err)
             return False
 
-    RELIABLE_BACKUP_MODEL: str = DEFAULT_NIM_MODEL
+    RELIABLE_BACKUP_MODEL: str = DEFAULT_NIM_FALLBACK_MODEL
 
     @staticmethod
     def _model_payload(payload: dict[str, Any], model: str) -> dict[str, Any]:
-        """Use final-answer mode for Nemotron 3 unless the caller explicitly opts in."""
+        """Translate the routing snapshot into supported Nemotron template options."""
         prepared = {**payload, "model": model}
+        reasoning_enabled = prepared.pop("reasoning_enabled", None)
         if model.startswith(("nvidia/nemotron-3-", "nvidia/nemotron-3.5-")):
             template = prepared.get("chat_template_kwargs") or {}
             prepared["chat_template_kwargs"] = {"enable_thinking": False, **template}
-        elif model != payload["model"]:
-            # A model-specific flag must not break the non-Nemotron fallback.
+            if reasoning_enabled is not None:
+                prepared["chat_template_kwargs"]["enable_thinking"] = reasoning_enabled
+            if prepared["chat_template_kwargs"]["enable_thinking"]:
+                # NIM counts hidden reasoning against the completion limit. A short
+                # voice-answer budget must still leave space for the final answer.
+                prepared["max_tokens"] = max(
+                    prepared.get("max_tokens", 0), MIN_REASONING_COMPLETION_TOKENS,
+                )
+        else:
+            # Nemotron-specific flags must not break another model or its fallback.
             prepared.pop("chat_template_kwargs", None)
         return prepared
 
     @classmethod
     def _reply_text(cls, data: dict[str, Any]) -> str:
-        choices = data.get("choices") or []
-        if not choices or not isinstance(choices[0], dict):
+        choice = openai_choice(data)
+        if choice is None:
             return ""
-        message = choices[0].get("message") or {}
+        message = response_object(choice.get("message", {}), "NIM message")
         # Never promote reasoning_content/reasoning into the spoken answer.
         return cls.clean_reasoning(message.get("content"))
+
+    @staticmethod
+    def _reply_tool_calls(data: dict[str, Any]) -> tuple[ToolCall, ...]:
+        choice = openai_choice(data)
+        if choice is None:
+            return ()
+        message = response_object(choice.get("message", {}), "NIM message")
+        return openai_tool_calls(message.get("tool_calls"))
 
     def send(
         self,
@@ -102,6 +175,8 @@ class NimProvider(LLMProvider):
         **kwargs: Any,
     ) -> LLMResponse:
         """Request a visible answer, retry transient errors, and try one backup model."""
+        msgs = self.normalize_messages(messages)
+        require_text_messages(msgs)
         target_model = model or self.default_model
         allow_model_fallback = kwargs.pop("allow_model_fallback", True)
         max_attempts = kwargs.pop("max_attempts", 3)
@@ -113,7 +188,7 @@ class NimProvider(LLMProvider):
         )
         payload = {
             "model": target_model,
-            "messages": [m.to_dict() for m in self.normalize_messages(messages)],
+            "messages": [m.to_dict() for m in msgs],
             "temperature": temperature,
             "max_tokens": max_tokens,
             "stream": False,
@@ -166,7 +241,8 @@ class NimProvider(LLMProvider):
                 data = complete(target_model, 1)
 
             content = self._reply_text(data)
-            if not content and target_model != fallback_model:
+            tool_calls = self._reply_tool_calls(data)
+            if not content and not tool_calls and target_model != fallback_model:
                 logger.warning(
                     "NIM '%s' returned no visible answer; trying '%s'.",
                     target_model,
@@ -175,7 +251,8 @@ class NimProvider(LLMProvider):
                 target_model = fallback_model
                 data = complete(target_model, 1)
                 content = self._reply_text(data)
-            if not content:
+                tool_calls = self._reply_tool_calls(data)
+            if not content and not tool_calls:
                 raise RuntimeError(f"NIM '{target_model}' returned no user-visible answer")
 
         return LLMResponse(
@@ -184,6 +261,7 @@ class NimProvider(LLMProvider):
             provider=self.name,
             usage=data.get("usage") or {},
             latency=time.monotonic() - start_t,
+            tool_calls=tool_calls,
         )
 
     @staticmethod
@@ -304,6 +382,7 @@ class NimProvider(LLMProvider):
         if cancel_event is not None and cancel_event.is_set():
             return
         msgs = self.normalize_messages(messages)
+        require_text_messages(msgs)
         target_model = model or self.default_model
         fallback_model = (
             self.fallback_model or self.RELIABLE_BACKUP_MODEL
@@ -326,6 +405,8 @@ class NimProvider(LLMProvider):
 
         def _iter_stream(client: httpx.Client, active_model: str) -> Iterator[LLMStreamChunk]:
             nonlocal emitted
+            calls = ToolCallAccumulator()
+            final_answer = _FinalAnswerStream()
             mark("provider_request_started", provider=self.name, model=active_model)
             with client.stream(
                 "POST",
@@ -346,6 +427,7 @@ class NimProvider(LLMProvider):
                     data_str = line[len("data:") :].strip()
                     mark("provider_first_sse")
                     if data_str == "[DONE]":
+                        calls.finish()
                         if emitted:
                             yield LLMStreamChunk(
                                 delta="", model=active_model, provider=self.name, is_final=True
@@ -353,23 +435,29 @@ class NimProvider(LLMProvider):
                         break
                     try:
                         chunk_json = json.loads(data_str)
-                        choices = chunk_json.get("choices") or []
-                        if not choices:
+                        choice = openai_choice(chunk_json)
+                        if choice is None:
                             continue  # Usage-only SSE event.
-                        choice = choices[0]
-                        raw_delta = choice.get("delta") or {}
+                        raw_delta = response_object(choice.get("delta", {}), "NIM delta")
                         if raw_delta.get("reasoning_content") or raw_delta.get("reasoning"):
                             mark("provider_first_model_token", kind="reasoning")
                             mark("provider_first_reasoning")
-                        delta = (choice.get("delta") or {}).get("content", "")
+                        delta = final_answer.feed(reply_content(raw_delta.get("content")))
+                        tool_calls = openai_tool_deltas(raw_delta.get("tool_calls"))
+                        calls.add(tool_calls)
                         if delta:
                             mark("provider_first_model_token", kind="content")
                             mark("provider_first_content")
+                        if tool_calls:
+                            mark("provider_first_model_token", kind="tool")
+                        if delta or tool_calls:
                             emitted = True
                             yield LLMStreamChunk(
-                                delta=delta, model=active_model, provider=self.name, is_final=False
+                                delta=delta, model=active_model, provider=self.name, is_final=False,
+                                tool_calls=tool_calls,
                             )
                         if choice.get("finish_reason") is not None:
+                            calls.finish()
                             if emitted:
                                 yield LLMStreamChunk(
                                     delta="", model=active_model, provider=self.name, is_final=True
@@ -377,6 +465,7 @@ class NimProvider(LLMProvider):
                             return
                     except json.JSONDecodeError:
                         continue
+                calls.finish()
 
         stream_timeout = httpx.Timeout(
             self.timeout,

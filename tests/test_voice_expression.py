@@ -183,7 +183,7 @@ def test_batch_history_is_plain_but_voice_retains_cues(tmp_path, monkeypatch):
     tts.enabled = True
     router.send.return_value = LLMResponse("[chuckle] You got me.", "fake", "fake")
     _, _, _, memory, turns = run_callbacks(
-        tmp_path, monkeypatch, [("Tell me a joke", {"input_source": "keyboard"})],
+        tmp_path, monkeypatch, [("Tell me a joke", {"wake_verified": True})],
         ambient=False, router=router, tts=tts, persona_file=tmp_path / "persona.txt",
     )
     try:
@@ -206,7 +206,7 @@ def test_batch_stage_directions_do_not_reach_voice_or_saved_history(tmp_path, mo
         "[brief pause — quiet, not dismissive, just present] I can check.", "fake", "fake",
     )
     _, _, _, memory, turns = run_callbacks(
-        tmp_path, monkeypatch, [("Explain that", {"input_source": "keyboard"})],
+        tmp_path, monkeypatch, [("Explain that", {"wake_verified": True})],
         ambient=False, router=router, tts=tts, persona_file=tmp_path / "persona.txt",
     )
     try:

@@ -9,6 +9,7 @@ import pytest
 
 from ciel.chat.state import ChatState
 from ciel.config import Settings
+from ciel.internet import InternetResult, InternetSource
 from ciel.memory import ConversationManager, ConversationTurn, MemoryStore
 from ciel.memory.bridge import (
     conversation_context,
@@ -16,6 +17,7 @@ from ciel.memory.bridge import (
     telegram_conversation_id,
 )
 from ciel.memory.web_evidence import MAX_WEB_EVIDENCE_JSON_CHARS, normalize_web_evidence
+from ciel.research import evidence_payload, observed_findings, previous_observations
 
 
 def evidence(query="Mongolia news", url="https://news.example.com/article"):
@@ -243,7 +245,7 @@ def test_evidence_is_bounded_allowlisted_copied_and_redacts_known_secrets(store)
     for item in normalized["sources"]:
         assert set(item) == {
             "title", "url", "snippet", "content", "published_at", "date_kind", "fetched_at",
-            "publisher",
+            "publisher", "content_kind",
         }
         assert len(item["title"]) == len(item["publisher"]) == 300
         assert len(item["content"]) == 9000
@@ -251,6 +253,7 @@ def test_evidence_is_bounded_allowlisted_copied_and_redacts_known_secrets(store)
         assert len(item["published_at"]) == len(item["fetched_at"]) == 100
         assert item["content"].startswith("[REDACTED_SECRET]")
         assert item["date_kind"] == "published"
+        assert item["content_kind"] == ""
     assert "synthetic-secret" not in json.dumps(normalized)
     normalized["sources"][0]["content"] = "Mutated returned copy"
     content = conversation.latest_web_evidence()["sources"][0]["content"]
@@ -274,3 +277,78 @@ def test_unknown_date_kind_is_not_replayed_as_a_publication_claim(store):
     conversation = ConversationManager(store)
     conversation.add_turn("assistant", "Lookup", web_evidence=source)
     assert conversation.latest_web_evidence()["sources"][0]["date_kind"] == ""
+
+
+@pytest.mark.parametrize("content_kind", ["", "provider_excerpt"])
+def test_evidence_keeps_provider_excerpt_provenance(store, content_kind):
+    source = evidence()
+    source["sources"][0]["content_kind"] = content_kind
+    conversation = ConversationManager(store)
+    conversation.add_turn("assistant", "Lookup", web_evidence=source)
+    assert conversation.latest_web_evidence()["sources"][0]["content_kind"] == content_kind
+
+
+@pytest.mark.parametrize("content_kind", ["locally_read", "provider_excerpt extra", [], {}, None])
+def test_unknown_content_kind_cannot_claim_provider_provenance(store, content_kind):
+    source = evidence()
+    source["sources"][0]["content_kind"] = content_kind
+    conversation = ConversationManager(store)
+    conversation.add_turn("assistant", "Lookup", web_evidence=source)
+    restored = conversation.latest_web_evidence()["sources"][0]
+    assert restored["content_kind"] == ""
+    assert restored["content"] == source["sources"][0]["content"]
+
+
+def test_provider_excerpt_provenance_survives_restart_and_observation_followup(tmp_path):
+    path = tmp_path / "memory.db"
+    lookup = InternetResult(
+        attempted=True,
+        query="Parallel search provenance",
+        sources=[InternetSource(
+            title="Parallel documentation", url="https://docs.example.com/search",
+            snippet="Search preview.", content="Provider-supplied excerpt of a source.",
+            content_kind="provider_excerpt",
+        )],
+    )
+    payload = evidence_payload(lookup)
+    assert payload["sources"][0]["content_kind"] == "provider_excerpt"
+    memory = MemoryStore(path)
+    ConversationManager(memory).add_turn("assistant", "Search answer", web_evidence=payload)
+    memory.close()
+
+    restarted = MemoryStore(path)
+    try:
+        conversation = ConversationManager(restarted)
+        restored = previous_observations("show me the findings", conversation)
+        assert restored is not None
+        assert restored.sources[0].content_kind == "provider_excerpt"
+        assert restored.sources[0].content == "Provider-supplied excerpt of a source."
+        assert "provider_excerpt" in restored.context
+        assert "previously retrieved observations" in restored.context
+        answer = observed_findings(restored, channel="text")
+        assert "the source excerpt included" in answer
+        assert "page text" not in answer
+        assert "[1]" in answer
+        assert restarted.count_memories() == 0
+    finally:
+        restarted.close()
+
+
+def test_historical_evidence_without_content_kind_keeps_legacy_page_text_label(store):
+    conversation = ConversationManager(store)
+    conversation.add_turn("assistant", "Earlier lookup", web_evidence=evidence())
+    lookup = previous_observations("show me the findings", conversation)
+    assert lookup is not None
+    assert lookup.sources[0].content_kind == ""
+    assert "the page text included" in observed_findings(lookup)
+
+
+def test_provider_excerpt_kind_does_not_turn_preview_only_text_into_page_content():
+    lookup = InternetResult(
+        attempted=True, query="Preview",
+        sources=[InternetSource(
+            title="Preview", url="https://docs.example.com/preview",
+            snippet="Only a preview was supplied.", content_kind="provider_excerpt",
+        )],
+    )
+    assert "the search preview included" in observed_findings(lookup)

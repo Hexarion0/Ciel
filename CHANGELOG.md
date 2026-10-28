@@ -2,6 +2,107 @@
 
 ## Unreleased — 0.3.6 development
 
+- Preserve private restrictions across archived paired-session memory recall, including
+  transitive channel projections without a summary. Require observation requests for
+  native screen captures and honor strict ambient admission before saving inferred speech.
+  Cancel translation verification work when its own time budget ends.
+- Speak desktop typed replies and corrections as well as voice replies. Keep full
+  written answers and code visible, with a deterministic spoken excerpt for long text.
+  Search acknowledgements are audible for typed requests too. Keep cancellation,
+  explicit disabled speech, and paired chat workers' text delivery intact.
+- Treat a novel or manga continuation request after a latest-episode lookup as a new
+  outcome for the same series. Drop the completed episode question, interpret contextual
+  “light node” as light novel for the lookup, and preserve the raw transcript. Avoid
+  asking users to repeat a named or numbered episode after an unverified reading-point
+  lookup; retain clarification when the request does not identify an episode.
+- Keep short “why?” follow-ups attached to the pending task and explain known
+  verification failures without inventing missing page content. Interpret explicit
+  spoken scope repairs without retaining abandoned chapter/episode guesses.
+- Separate latest-episode questions from novel reading points. Block invented initial
+  season scope and unrelated premiere answers; check episode tables, date abbreviations,
+  and modified ordinals while retaining source and numeric validation. Allow one
+  bounded report repair when generated quotations fail those checks.
+- Carry the owner's current task through retries, continuations, title and medium
+  corrections, and voice/text changes. Keep raw dialogue, distinguish wait from
+  cancel, and discard old task context at unrelated topics and history boundaries.
+- Give broad searches useful overviews, keep multipart research goals, and name
+  unverified requested details alongside supported findings. Reserve a final answer
+  after bounded tool work; deduplicate equivalent reads and retain evidence when
+  another lookup fails. Default native research shares a 30-second budget, including
+  answer generation and checking, with late results discarded.
+- Treat explicit subject repairs such as `Tensura*` as completion of a pending
+  search. Keep the corrected name and requested scope, reuse equivalent lookups,
+  and retain one spoken search acknowledgement for a recent voice request.
+- Use temporary, conversation-scoped spelling hints for explicitly corrected
+  names in STT. Keep raw transcripts and confidence safeguards unchanged.
+- Keep web evidence checks on the normal response model with reasoning disabled;
+  distinguish a failed or timed-out check from insufficient source evidence.
+- Prevent an interrupted speech reply from waiting on a full synthesis queue;
+  let cancellation return promptly while active synthesis retains its resources.
+- Select NIM Super 3.5 VL 120B for ordinary conversation and Ultra 550B for complex work,
+  with an explicit Ultra fallback when the requested Super endpoint is unavailable.
+  Add session `/reasoning auto|on|off` controls and keep internal reasoning private.
+- Keep spoken replies brief while typed desktop and paired chat can give detailed
+  explanations and complete code. Stream typed desktop answers and speak a brief excerpt.
+- Clear the interactive terminal on launch and show a boxed status panel, an
+  editable ruled composer, readable paragraphs, copyable code, and actual
+  model/status reporting.
+- Merge default foreground tool selection into the main response model. Ordinary
+  chat answers without a separate decision call; native web, memory, and screen
+  tools continue with actual results. Validate tool schemas, bound repeated calls,
+  preserve cancellation and private routing, and verify web claims before speech.
+- Add native tool request/result support to NIM, Groq, OpenRouter, and Ollama,
+  including streamed argument assembly and tool-only provider responses.
+- Reduce controller output to the fields needed for its chosen action; preserve
+  strict tool validation and the shared decision/repair deadline. Record elapsed
+  decision time, keep current follow-ups separate from historical context, and
+  reuse recalled memory when preparing a controlled screen request.
+- Add OpenClaw-inspired Markdown memory: curated `MEMORY.md`, optional `USER.md`,
+  dated working notes, and an owner-facing `DREAMS.md` reflection log. Migrate
+  durable SQLite facts once while preserving conversation archives, settings,
+  revision history, and existing owner prose. Back up SQLite and sibling Markdown
+  together, including provenance and private preimages.
+- Add bounded `memory_search`/`memory_get` with real paths and line evidence across
+  voice and paired chat. Keep fresh-launch bootstrap limited to trusted curated
+  sources; retrieve detailed notes and same-owner past conversations on demand.
+  Reconcile derived FTS5 indexes after edits/deletes and retain keyword access during
+  slow optional local embedding work. Reuse unchanged text/hash caches and avoid
+  archive scans for structured fact checks.
+- Add authenticated owner-note checkpoints before compaction and on clean close,
+  plus local 03:00 reflection while CIEL runs. Require recall-count, query-diversity,
+  recency, relevance, and source-authority gates before model-assisted promotion.
+  Queue conflicts, merges, and supersessions for explicit owner `review`/`apply`;
+  preserve current facts, guarded preimages, private routing, and reset generations.
+- Extend targeted forgetting to working notes, reflection logs/preimages, staged
+  observations, and pending plans. Preserve the documented limits for raw chat
+  archives, prior backups, paraphrases, and storage-level erasure.
+- Preserve the original research question through short corrections and title
+  clarifications, separately from search keywords. Keep known subjects, normalize
+  reading-point wording, honor corrected scope, and reject guessed episode numbers.
+- Check whether quoted web claims answer the requested task before playback.
+  Keep useful supported partial answers, show only cited sources with consistent
+  numbering, and retain private routing through report and relevance checks.
+- Keep interactive terminal and web sessions available for typed chat when the
+  microphone cannot open. Report unavailable input, retain enabled speech output,
+  and require a restart after reconnecting or selecting a microphone for voice.
+- Default public search to Parallel's free anonymous service, with no API key.
+  Keep DuckDuckGo/public Brave, Brave Search, and Tavily as explicit setup choices;
+  preserve saved keys without enabling automatic provider fallback.
+- Retain active screen tasks through speech corrections, clarification, and
+  interruptions. Interpret varied follow-ups with a bounded contextual decision;
+  keep direct retries immediate and answer from fresh views with relevant changes.
+  Reject late results after task cancellation and preserve corrected visual focus.
+- Start a fresh conversation on each foreground launch while preserving saved
+  personal memories and archived dialogue. Move paired Telegram into the new
+  conversation without carrying over pending confirmations or screen tasks.
+- Retain complete typed conversation summaries within the total context budget
+  instead of rejecting them for small per-field length overruns or truncating notes.
+- Route immediate screen retries back to the original visual request across voice
+  and chat, preserving historical-image scope instead of falling through to a
+  text-only reply. Select the verified Nemotron 3.5 Super VL screen default and
+  use final-answer mode for NIM vision requests.
+- Delay failed background summaries for 30 seconds while retaining pending turns.
+  Report content-free failure categories and preserve reset and foreground priority.
 - Automatically start selected chat services after setup/pairing, on Ciel launch,
   and at login. Remove manual-start choices and coordinate pairing with the worker.
 - Bridge recent voice/chat conversation and summaries for the paired owner while

@@ -55,6 +55,25 @@ class ResearchCancellation(threading.Event):
         return self.is_set()
 
 
+class DeadlineCancellation(threading.Event):
+    """Cancel one stage at its deadline without revoking the owner's whole turn."""
+
+    def __init__(self, parent: threading.Event | None, deadline: float) -> None:
+        super().__init__()
+        self.parent, self.deadline = parent, deadline
+
+    def is_set(self) -> bool:
+        return (super().is_set() or time.monotonic() >= self.deadline
+                or bool(self.parent and self.parent.is_set()))
+
+    def wait(self, timeout: float | None = None) -> bool:
+        until = min(self.deadline, time.monotonic() + timeout) if timeout is not None \
+            else self.deadline
+        while not self.is_set() and time.monotonic() < until:
+            super().wait(min(0.02, max(0, until - time.monotonic())))
+        return self.is_set()
+
+
 def evidence_followup(text: str) -> bool:
     """Recognize references to observed evidence without reviving unrelated old research."""
     return bool(_OBSERVATION.fullmatch(re.sub(r"^/(?:local|fast|strong|deep)\s+", "",
@@ -66,7 +85,7 @@ def evidence_payload(lookup: InternetResult | None) -> dict:
     if lookup is None or not lookup.attempted:
         return {}
     fields = ("title", "url", "snippet", "content", "published_at", "fetched_at",
-              "publisher", "date_kind")
+              "publisher", "date_kind", "content_kind")
     return {
         "query": lookup.query, "kind": getattr(lookup, "kind", "web"),
         "retrieved_at": lookup.retrieved_at or datetime.now(timezone.utc).isoformat(
@@ -79,8 +98,16 @@ def evidence_payload(lookup: InternetResult | None) -> dict:
 
 def previous_observations(text: str, conversation) -> InternetResult | None:
     """Read actual evidence through the manager's owner-scoped, fresh database view."""
+    continuation = False
     if not evidence_followup(text):
-        return None
+        from ciel.providers.base import ChatMessage
+        from ciel.task_context import resolve_task_context
+
+        turns = conversation.get_recent_turns(limit=64)
+        task = resolve_task_context(text, [ChatMessage(turn.role, turn.content) for turn in turns])
+        continuation = task.kind == "continue" and task.task_type == "web"
+        if not continuation:
+            return None
     scope = conversation.context_session_ids()
     data = conversation.latest_web_evidence()
     if not data:
@@ -93,7 +120,9 @@ def previous_observations(text: str, conversation) -> InternetResult | None:
             break
         if turn.role == "user" and turn.content.strip() != text.strip():
             if not evidence_followup(turn.content) and not re.fullmatch(
-                r"(?:ok(?:ay)?|thanks|thank you|yes|sure)[.! ]*", turn.content.strip(), re.I,
+                r"(?:ok(?:ay)?|thanks|thank you|yes|sure"
+                + (r"|wait|hold on|pause|continue|go on|finish" if continuation else "")
+                + r")[.! ]*", turn.content.strip(), re.I,
             ):
                 return None
     else:
@@ -139,7 +168,10 @@ def observed_findings(lookup: InternetResult, *, channel: str = "voice") -> str:
         excerpt = " ".join((source.content or source.snippet).split()[:22])
         if not excerpt:
             continue
-        label = "page text" if source.content else "search preview"
+        if source.content and source.content_kind == "provider_excerpt":
+            label = "source excerpt"
+        else:
+            label = "page text" if source.content else "search preview"
         title = _clean(source.title, 120)
         reference = f" [{index}]" if channel == "text" else ""
         parts.append(f'From “{title}”{reference}, the {label} included: “{excerpt}”.')

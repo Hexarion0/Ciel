@@ -18,7 +18,7 @@ _PROFILE_KEYS = (
     "home_city", "timezone", "preferred_language", "response_style", "favorite_food",
     "favorite_color", "favorite_drink", "favorite_movie", "favorite_language",
 )
-_PROFILE_SOURCES = {"user_explicit", "user_confirmed", "user_statement"}
+_PROFILE_SOURCES = {"user_explicit", "user_confirmed", "user_statement", "user_edited"}
 _PAUSED = "Saved-memory recall is paused. Say 'resume memory recall' to use saved facts."
 _CONTROL = re.compile(
     r"^(?:please\s+)?(?:pause|disable|resume|enable)\s+(?:saved[- ]memory|memory)\s+"
@@ -118,14 +118,15 @@ def memory_read_intent(
     return None
 
 
-def _profile_overview(store: MemoryStore) -> str:
+def _profile_overview(store: MemoryStore, *, local_only: bool = False) -> str:
     """Read bounded current profile values without summaries, old revisions, or model guesses."""
     prefix = "Here are some current saved details about you: "
     details = []
     size = len(prefix)
     for key in _PROFILE_KEYS:
         item = store.get_fact(f"user:{key}")
-        if item is None or item.source not in _PROFILE_SOURCES:
+        if (item is None or item.source not in _PROFILE_SOURCES
+                or item.metadata.get("local_only") and not local_only):
             continue
         content = store.redact_forgotten(item.content).strip()
         if not content or len(content) > 240 or size + len(content) + 1 > 1500:
@@ -142,7 +143,7 @@ def _profile_overview(store: MemoryStore) -> str:
 def answer_memory_read(
     store: MemoryStore, text: str, now: datetime | None = None,
     *, recent_messages: list[ChatMessage] | None = None,
-    recall_enabled: bool = True,
+    recall_enabled: bool = True, local_only: bool = False,
 ) -> str | None:
     """Answer from application evidence or supplied user dialogue, without saving a fact."""
     kind = memory_read_intent(text, recent_messages)
@@ -161,13 +162,15 @@ def answer_memory_read(
     if kind == "overview":
         if not enabled:
             return _PAUSED
-        reply = _profile_overview(store)
+        reply = _profile_overview(store, local_only=local_only)
         return _PAUSED if store.get_setting("recall_enabled", recall_enabled) is False else reply
     if kind != "timeline":
         return None
     if not enabled:
         return _PAUSED
     start = store.get_fact("ciel:project_start_date")
+    if start is not None and start.metadata.get("local_only") and not local_only:
+        return "That saved detail requires a local-only conversation."
     try:
         start_date = date.fromisoformat(str(start.metadata["value"])) if start else None
     except (KeyError, ValueError):

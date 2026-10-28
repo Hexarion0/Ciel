@@ -14,7 +14,8 @@ from ciel.providers.base import ChatMessage, LLMResponse
 from ciel.providers.vision import VisionError
 from ciel.screen.cache import CaptureCache, clear_runtime_caches
 from ciel.screen.capture import Capture, Cursor, Monitor, ScreenImage
-from ciel.screen.service import ScreenService, resolve_request
+from ciel.screen.intent import ScreenIntent
+from ciel.screen.service import ScreenRequest, ScreenService, resolve_request
 
 
 def png(color="red", size=(600, 400)):
@@ -80,10 +81,10 @@ def ask(service, query="Look at my screen"):
     return service.answer(service.resolve(query), messages())
 
 
-def mark(service, result):
+def mark(service, result, request=None):
     turn_id = service.conversation.add_turn("assistant", result.text, model=result.model,
                                             provider=result.provider)
-    service.mark(turn_id)
+    service.mark(turn_id, request=request)
 
 
 def test_one_image_payload_has_metadata_and_cursor_detail_without_mutating_history(service):
@@ -105,19 +106,26 @@ def test_one_image_payload_has_metadata_and_cursor_detail_without_mutating_histo
     assert result.image is None
 
 
-def test_contextual_followup_fresh_previous_reuse_and_topic_change(service):
-    first = ask(service)
-    mark(service, first)
+def test_contextual_followup_fresh_previous_reuse_and_topic_change(service, monkeypatch):
+    first_request = service.resolve("Look at my screen")
+    first = service.answer(first_request, messages())
+    mark(service, first, first_request)
     assert service.active()
     service.backend.capture.return_value = capture("second", "blue")
-    second = ask(service, "What about now?")
-    mark(service, second)
+    second_request = service.resolve("What about now?")
+    second = service.answer(second_request, messages())
+    mark(service, second, second_request)
     assert service.backend.capture.call_count == 2
     assert [c.id for c in service._cache.recent()] == ["first", "second"]
     assert ask(service, "Explain the previous screenshot").capture_id == "second"
     assert service.backend.capture.call_count == 2
-    service.conversation.add_turn("assistant", "Let's talk about music.")
+    query = "Let's talk about music."
+    service.conversation.add_turn("user", query)
+    monkeypatch.setattr("ciel.screen.service.interpret_screen_intent",
+                        MagicMock(return_value=ScreenIntent("new_topic", 0.99)))
+    assert service.interpret(query, MagicMock(), messages()).request is None
     assert service.resolve("What about now?") is None
+    assert service.backend.capture.call_count == 2
 
 
 def test_expired_or_restarted_previous_capture_never_recaptures(service):
@@ -203,3 +211,96 @@ def test_model_failure_returns_actionable_text_without_raw_payload(service):
     result = ask(service)
     assert result.text == "The selected screen model timed out."
     assert result.image is None
+
+
+@pytest.mark.parametrize("retry", ["Try again", "retry", "Please try again."])
+def test_failed_visual_request_retry_preserves_question_and_captures_fresh(service, retry):
+    query = "What does this error mean?"
+    service.vision.send.side_effect = VisionError("The selected screen model timed out.")
+    original = service.resolve(query)
+    result = service.answer(original, messages())
+    mark(service, result, original)
+    request = service.resolve(retry)
+    assert request is not None
+    assert request.query == query
+    assert not request.previous
+    service.backend.capture.return_value = capture("retry", "blue")
+    service.vision.send.side_effect = None
+    retried = service.answer(request, messages())
+    assert retried.capture_id == "retry"
+    assert service.backend.capture.call_count == 2
+    assert service.vision.send.call_count == 2
+
+
+def test_retry_of_unavailable_historical_image_does_not_capture_current_screen(service):
+    original = service.resolve("Explain the previous screenshot")
+    result = service.answer(original, messages())
+    mark(service, result, original)
+    request = service.resolve("Try again")
+    assert request is not None
+    assert request.previous
+    assert request.query == "Explain the previous screenshot"
+    retried = service.answer(request, messages())
+    assert "no longer available" in retried.text
+    service.backend.capture.assert_not_called()
+    service.vision.send.assert_not_called()
+
+
+@pytest.mark.parametrize("query", [
+    "Try again", "Retry", "Please try again", "Don't retry", 'He said "try again".',
+])
+def test_retry_without_active_visual_context_cannot_capture(service, query):
+    assert service.resolve(query) is None
+
+
+@pytest.mark.parametrize("active", [False, True])
+def test_bare_retry_never_authorizes_pixels_without_original_request(active):
+    assert resolve_request("Try again", active=active) is None
+
+
+def test_retry_chain_preserves_original_visual_request_and_delivery_mode(service):
+    original = service.resolve("Send me the previous screenshot")
+    result = service.answer(original, messages())
+    mark(service, result, original)
+    for _ in range(4):
+        retry = service.resolve("Retry")
+        assert retry == original
+        result = service.answer(retry, messages())
+        mark(service, result, retry)
+    service.backend.capture.assert_not_called()
+    service.vision.send.assert_not_called()
+
+
+def test_legacy_visual_marker_without_original_request_does_not_grant_retry(service):
+    mark(service, ask(service))
+    assert service.active()
+    assert service.resolve("Try again") is None
+
+
+def test_visual_retry_cannot_reuse_another_conversation_owner(service):
+    original = service.resolve("Look at my screen")
+    mark(service, service.answer(original, messages()), original)
+    service.conversation = ConversationManager(
+        store=service.conversation.store, session_id="another-screen-owner",
+    )
+    assert service.resolve("Try again") is None
+
+
+@pytest.mark.parametrize("query", ["Don't retry", 'He said "try again".', '"try again"'])
+def test_negative_or_quoted_retry_does_not_capture_with_visual_context(service, query):
+    mark(service, ask(service), ScreenRequest("Look at my screen"))
+    assert service.resolve(query) is None
+
+
+@pytest.mark.parametrize("change", ["topic", "reset"])
+def test_visual_retry_does_not_survive_topic_change_or_history_reset(service, change, monkeypatch):
+    mark(service, ask(service), ScreenRequest("Look at my screen"))
+    if change == "topic":
+        query = "Let's talk about music."
+        service.conversation.add_turn("user", query)
+        monkeypatch.setattr("ciel.screen.service.interpret_screen_intent",
+                            MagicMock(return_value=ScreenIntent("new_topic", 0.99)))
+        assert service.interpret(query, MagicMock(), messages()).request is None
+    else:
+        service.conversation.clear_session()
+    assert service.resolve("Try again") is None

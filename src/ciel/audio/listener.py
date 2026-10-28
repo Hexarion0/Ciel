@@ -89,6 +89,7 @@ class WakeListenerLoop:
         self._last_wake_info: dict[str, Any] = {}
         self._lock = threading.Lock()
         self._running = False
+        self._text_only = False
         self._microphone_muted = False
         self._microphone_epoch = 0
         self._stop_event = threading.Event()
@@ -143,6 +144,10 @@ class WakeListenerLoop:
             self._state = state
             self._notify(self.on_state_change, state)
 
+    def _standby_state(self) -> ListenerState:
+        """Keep a running text session distinct from active microphone capture."""
+        return ListenerState.IDLE if self._text_only else ListenerState.LISTENING_WAKE
+
     def _notification_worker(self) -> None:
         while not self._stop_event.is_set():
             try:
@@ -181,7 +186,7 @@ class WakeListenerLoop:
         self._recent_audio.clear()
         self._speech_streak = 0
         self.detector.reset(set_cooldown=False)
-        self._set_state(ListenerState.LISTENING_WAKE)
+        self._set_state(self._standby_state())
         self._stop_output()
 
     def toggle_microphone_mute(self) -> bool:
@@ -195,6 +200,9 @@ class WakeListenerLoop:
             return self._set_microphone_mute_locked(muted)
 
     def _set_microphone_mute_locked(self, muted: bool) -> bool:
+        if self._text_only:
+            self._microphone_muted = True
+            return True
         if self._microphone_muted == muted:
             return self._microphone_muted
         self._microphone_muted = muted
@@ -211,7 +219,7 @@ class WakeListenerLoop:
         if self._state == ListenerState.RECORDING:
             self.recorder.cancel()
             self._recording_generation += 1
-            self._set_state(ListenerState.LISTENING_WAKE)
+            self._set_state(self._standby_state())
         return self._microphone_muted
 
     def _discard_voice_request(self, generation: int) -> None:
@@ -221,7 +229,7 @@ class WakeListenerLoop:
                 self._running and generation == self._recording_generation
                 and self._state == ListenerState.PROCESSING
             ):
-                self._set_state(ListenerState.LISTENING_WAKE)
+                self._set_state(self._standby_state())
 
     def submit_text(self, text: str) -> bool:
         """Replace the current request with directly addressed keyboard input."""
@@ -261,7 +269,7 @@ class WakeListenerLoop:
 
     def set_ambient(self, enabled: bool) -> None:
         """Switch capture mode; background speech is never treated as a wake trigger."""
-        if enabled and self._speech_detector is None:
+        if enabled and not self._text_only and self._speech_detector is None:
             if self.sample_rate != 16000:
                 raise ValueError("Ambient speech detection requires 16000 Hz audio")
             from ciel.audio.activity import SpeechActivity
@@ -357,7 +365,7 @@ class WakeListenerLoop:
                 with self._lock:
                     if self._running:
                         self.detector.reset(set_cooldown=False)
-                        self._set_state(ListenerState.LISTENING_WAKE)
+                        self._set_state(self._standby_state())
             finally:
                 self._frame_queue.task_done()
 
@@ -584,13 +592,13 @@ class WakeListenerLoop:
                     else:
                         self._recent_audio.clear()
                         self.detector.reset(set_cooldown=not self.ambient)
-                        self._set_state(ListenerState.LISTENING_WAKE)
+                        self._set_state(self._standby_state())
             except Exception:
                 logger.exception("Utterance processing failed")
                 with self._lock:
                     if self._running and generation == self._recording_generation:
                         self.detector.reset(set_cooldown=False)
-                        self._set_state(ListenerState.LISTENING_WAKE)
+                        self._set_state(self._standby_state())
             finally:
                 if trace is not None:
                     trace.mark("turn_finished")
@@ -598,7 +606,11 @@ class WakeListenerLoop:
                 active_trace.reset(trace_token)
                 self._processing_queue.task_done()
 
-    def start(self) -> None:
+    def start_text_only(self) -> None:
+        """Start typed requests without opening capture or loading wake detection."""
+        self.start(text_only=True)
+
+    def start(self, *, text_only: bool = False) -> None:
         if self._running:
             return
         if any(thread.is_alive() for thread in self._threads):
@@ -609,34 +621,40 @@ class WakeListenerLoop:
         self._recent_audio.clear()
         self.dropped_frames = 0
         self._stop_event = threading.Event()
-        if (
-            self.ambient or self.monitor_resumed_speech or self.barge_in_mode == "speech"
-        ) and self._speech_detector is None:
-            if self.sample_rate != 16000:
-                raise ValueError("Ambient speech detection requires 16000 Hz audio")
-            from ciel.audio.activity import SpeechActivity
+        self._text_only = text_only
+        if text_only:
+            self._microphone_muted = True
+        else:
+            if (
+                self.ambient or self.monitor_resumed_speech or self.barge_in_mode == "speech"
+            ) and self._speech_detector is None:
+                if self.sample_rate != 16000:
+                    raise ValueError("Ambient speech detection requires 16000 Hz audio")
+                from ciel.audio.activity import SpeechActivity
 
-            self._speech_detector = SpeechActivity()
-        reset_activity = getattr(self._speech_detector, "reset", None)
-        if reset_activity:
-            reset_activity()
-        if self._speech_detector is not None:
-            self.recorder.speech_detector = self._speech_detector
-        start_detector = getattr(self.detector, "start", None)
-        if start_detector:
-            start_detector()
+                self._speech_detector = SpeechActivity()
+            reset_activity = getattr(self._speech_detector, "reset", None)
+            if reset_activity:
+                reset_activity()
+            if self._speech_detector is not None:
+                self.recorder.speech_detector = self._speech_detector
+            start_detector = getattr(self.detector, "start", None)
+            if start_detector:
+                start_detector()
         self._running = True
-        self._set_state(ListenerState.LISTENING_WAKE)
+        self._set_state(self._standby_state())
+        workers = (self._process_worker, self._notification_worker)
+        if not text_only:
+            workers = (self._frame_worker, *workers)
         self._threads = [
             threading.Thread(target=target, daemon=True)
-            for target in (
-                self._frame_worker,
-                self._process_worker,
-                self._notification_worker,
-            )
+            for target in workers
         ]
         for thread in self._threads:
             thread.start()
+        if text_only:
+            logger.info("Text chat active; microphone capture is unavailable.")
+            return
         try:
             self.backend.start_stream(
                 callback=self._audio_callback,

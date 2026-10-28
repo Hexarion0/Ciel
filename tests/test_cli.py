@@ -242,10 +242,7 @@ def test_web_mode_reuses_voice_callbacks_and_controls(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "get_settings", lambda: settings)
     monkeypatch.setattr(platform, "get_audio_backend", MagicMock())
     router = MagicMock()
-    router.send.side_effect = [
-        LLMResponse('{"action":"answer","confidence":0.99}', "light", "nim"),
-        LLMResponse("Hi there.", "test", "test"),
-    ]
+    router.send.return_value = LLMResponse("Hi there.", "test", "test")
     monkeypatch.setattr(providers, "get_model_router", lambda: router)
     for component in ("WakeWordDetector", "SpeechToText", "VoiceRecorder"):
         monkeypatch.setattr(audio, component, MagicMock())
@@ -322,10 +319,7 @@ def test_listen_archives_legacy_style_but_keeps_saved_facts(tmp_path, monkeypatc
     monkeypatch.setattr(config, "get_settings", lambda: settings)
     monkeypatch.setattr(platform, "get_audio_backend", MagicMock())
     router = MagicMock()
-    router.send.side_effect = [
-        LLMResponse('{"action":"answer","confidence":0.99}', "light", "nim"),
-        LLMResponse("I'm here to help.", "test", "test"),
-    ]
+    router.send.return_value = LLMResponse("I'm here to help.", "test", "test")
     monkeypatch.setattr(providers, "get_model_router", lambda: router)
     for component in ("WakeWordDetector", "SpeechToText", "VoiceRecorder", "TextToSpeech"):
         monkeypatch.setattr(audio, component, MagicMock())
@@ -350,14 +344,17 @@ def test_listen_archives_legacy_style_but_keeps_saved_facts(tmp_path, monkeypatc
 
     assert __main__.main() == 0
     messages = router.send.call_args.args[0]
-    assert [message.role for message in messages] == ["system", "user"]
+    assert [message.role for message in messages if message.role != "system"] == ["user"]
+    assert router.send.call_count == 1
+    assert router.send.call_args.kwargs["purpose"] == "conversation"
     assert fact in messages[0].content
     assert legacy_answer not in messages[0].content
     assert messages[1].content == "What do you remember about patient explanations?"
     restored = MemoryStore(settings.memory.db_path)
     try:
         assert len(restored.get_recent_turns("desktop_session")) == 2
-        current = f"desktop_session:{PERSONA_CONTEXT_VERSION}"
+        current = restored.get_setting(f"active_desktop_conversation:{PERSONA_CONTEXT_VERSION}")
+        assert current.startswith(f"desktop_session:{PERSONA_CONTEXT_VERSION}:run:")
         assert len(restored.get_recent_turns(current)) == 2
         assert restored.get_session_summary("desktop_session") is not None
     finally:

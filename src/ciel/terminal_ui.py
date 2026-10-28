@@ -1,4 +1,4 @@
-"""Small celestial console presentation with portable, accessible input fallbacks."""
+"""Quiet terminal conversation and setup with portable input fallbacks."""
 
 from __future__ import annotations
 
@@ -13,9 +13,10 @@ from itertools import zip_longest
 from typing import TextIO
 
 _ESCAPE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-_])")
-_COLORS = {"cyan": "\x1b[38;5;87m", "violet": "\x1b[38;5;183m", "muted": "\x1b[38;5;245m"}
+_COLORS = {"cyan": "\x1b[38;5;110m", "violet": "\x1b[38;5;189m", "muted": "\x1b[38;5;245m"}
 _ASCII_SYMBOLS = str.maketrans({"✦": "*", "◇": "*", "✓": "+", "·": ".", "›": ">",
-                               "—": "-", "–": "-", "…": "...", "’": "'", "“": '"', "”": '"'})
+                               "❯": ">", "—": "-", "–": "-", "…": "...", "’": "'",
+                               "“": '"', "”": '"'})
 
 
 def _cells(text: str) -> int:
@@ -71,11 +72,15 @@ class ConsoleUI:
             self._unicode = False
 
     def _text(self, value: str) -> str:
+        return " ".join(self._line(value).split())
+
+    def _line(self, value: str) -> str:
+        """Sanitize one display line while preserving spaces and tab indentation."""
         text = _ESCAPE.sub("", str(value))
+        text = text.expandtabs(4)
         text = "".join(" " if char.isspace() else char for char in text)
         text = "".join(char for char in text
                        if unicodedata.category(char) not in {"Cc", "Cf", "Cs"})
-        text = " ".join(text.split())
         if not self._unicode:
             text = unicodedata.normalize("NFKD", text.translate(_ASCII_SYMBOLS))
             text = text.encode("ascii", errors="replace").decode("ascii")
@@ -91,13 +96,14 @@ class ConsoleUI:
         return shutil.get_terminal_size(fallback=(80, 24))
 
     def _width(self) -> int:
-        return max(1, min(60, self._size().columns))
+        return max(1, min(88, self._size().columns - 1))
 
     def _paint(self, text: str, color: str) -> str:
         return _COLORS[color] + text + "\x1b[0m" if self._color else text
 
     def _write(self, text: str) -> None:
-        self.stream.write(text)
+        writer = getattr(self.stream, "write_ui", self.stream.write)
+        writer(text)
         self.stream.flush()
 
     def _message(self, marker: str, text: str, color: str) -> None:
@@ -110,14 +116,67 @@ class ConsoleUI:
                                " " * _cells(prefix) + line
                                for index, line in enumerate(lines)) + "\n")
 
+    def clear(self) -> None:
+        """Start a supported interactive terminal with an empty visible screen."""
+        if self._terminal:
+            self._write("\x1b[2J\x1b[H")
+
     def banner(self, subtitle: str, version: str | None = None) -> None:
-        """Introduce CIEL with a compact cyan/violet celestial heading."""
-        heading = self._text("✦  C I E L" + (f"   v{version}" if version else ""))
+        """Introduce CIEL with a compact heading."""
+        heading = self._text("CIEL" + (f"  v{version}" if version else ""))
         lines = [self._paint(line, "violet") for line in _wrap(heading, self._width())]
         lines.extend(self._paint(line, "muted") for line in
                      _wrap(self._text(subtitle), self._width()))
         lines.append(self._paint(("─" if self._unicode else "-") * self._width(), "cyan"))
         self._write("\n".join(lines) + "\n")
+
+    def chat_header(
+        self, model: str, *, version: str | None = None, status: str = "",
+    ) -> None:
+        """Show the active model and session state without a startup dashboard."""
+        width = self._width()
+        heading = self._text("CIEL" + (f"  v{version}" if version else ""))
+        lines = [self._paint(line, "violet") for line in _wrap(heading, width)]
+        lines.extend(self._paint(line, "muted") for line in _wrap(self._text(model), width))
+        if status:
+            lines.extend(self._paint(line, "muted") for line in
+                         _wrap(self._text(status), width))
+        self._write("\n".join(lines) + "\n\n")
+
+    def message(self, role: str, text: str) -> None:
+        """Write a chat turn, retaining paragraphs and fenced code indentation."""
+        width = self._width()
+        label = "CIEL" if role.casefold() in {"assistant", "ciel"} else (
+            "You" if role.casefold() in {"user", "you"} else self._text(role)
+        )
+        lines = [self._paint(line, "cyan") for line in _wrap(label, width)]
+        indent = "  " if width > 4 else ""
+        fence: tuple[str, int] | None = None
+        for paragraph in str(text).splitlines():
+            content = self._line(paragraph)
+            marker = re.match(r"^\s*(`{3,}|~{3,})(.*)$", content)
+            if fence is not None:
+                # Native terminal wrapping keeps copied source newline boundaries intact.
+                lines.append(content)
+                if marker and marker[1][0] == fence[0] and len(marker[1]) >= fence[1] and (
+                    not marker[2].strip()
+                ):
+                    fence = None
+                continue
+            if marker:
+                fence = (marker[1][0], len(marker[1]))
+                lines.append(content)
+                continue
+            if not paragraph.strip():
+                lines.append("")
+                continue
+            lines.extend(indent + line for line in
+                         _wrap(self._text(paragraph), width - len(indent)))
+        self._write("\n".join(lines) + "\n\n")
+
+    def work_status(self, text: str) -> None:
+        """Show a short status for work that the caller has actually started."""
+        self._message("·", text, "muted")
 
     def step(self, title: str) -> None:
         """Introduce the next setup or startup step."""

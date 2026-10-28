@@ -8,19 +8,30 @@ import threading
 import pytest
 
 from ciel.chat.session import ChatSession
+from ciel.chat.state import ChatState
 from ciel.config import Settings
 from ciel.internet import InternetResult, InternetSource
 from ciel.memory import MemoryStore
-from ciel.providers.base import LLMResponse
+from ciel.memory.bridge import telegram_conversation_id
+from ciel.providers.base import LLMResponse, ToolCall
 
 
 class RecordingRouter:
     def __init__(self):
         self.messages = []
+        self.options = []
+        self.tool_calls = []
         self.answer = "Hey, what's on your mind?"
 
     def send(self, messages, **kwargs):
         self.messages.append(messages)
+        self.options.append(kwargs)
+        if messages[0].content.startswith("WEB GOAL CHECK"):
+            assert kwargs["purpose"] == "verification"
+            return LLMResponse('{"relevant_claims": [1]}', "goal-check", "test-provider")
+        if kwargs.get("tools") and self.tool_calls:
+            return LLMResponse("", "test-model", "test-provider",
+                               tool_calls=(self.tool_calls.pop(0),))
         return LLMResponse(self.answer, "test-model", "test-provider")
 
 
@@ -29,11 +40,16 @@ def session(tmp_path):
     settings = Settings(
         _env_file=None, memory_db_path=str(tmp_path / "facts.db"),
         ciel_persona_file="", internet_enabled=False,
+        chat_services="telegram", chat_state_path=str(tmp_path / "chat.db"),
+        telegram_bot_token="123:test-token",
     )
-    chat = ChatSession(settings, channel="telegram", session_id="telegram:test-owner",
+    state = ChatState(settings.chat.state_path)
+    state.bind(123, 42)
+    chat = ChatSession(settings, channel="telegram", session_id=telegram_conversation_id(123, 42),
                        router=RecordingRouter())
     yield chat
     chat.close()
+    state.close()
 
 
 def test_text_chat_import_and_answer_do_not_import_audio(tmp_path):
@@ -120,24 +136,24 @@ def test_recall_pause_and_reset_keep_saved_facts(session):
 
 
 def test_legacy_local_history_remains_protected_after_restart(session, monkeypatch):
-    local_flags = []
-
     # Existing private conversation history retains its original privacy boundary.
     session.conversation.add_turn("user", "/local Tell me a short story")
     session.close()
-    session = ChatSession(session.settings, channel="telegram", session_id="telegram:test-owner",
+    session = ChatSession(session.settings, channel="telegram", session_id=session._base_session_id,
                           router=RecordingRouter())
 
-    def prepare(*args, **kwargs):
-        local_flags.append(kwargs["local_only"])
-        return InternetResult()
+    def forbidden(*args, **kwargs):
+        pytest.fail("Private history must not reach public retrieval")
 
-    monkeypatch.setattr(session.internet, "prepare", prepare)
+    monkeypatch.setattr(session.internet, "lookup", forbidden)
     try:
         session.reply("Continue")
         session.reply("What happens next?")
-        assert local_flags == [True, True]
+        assert len(session.router.messages) == 2
         assert all(messages[0].local_only for messages in session.router.messages)
+        assert all(not {"web_search", "read_page"} & {
+            tool["function"]["name"] for tool in options.get("tools", [])
+        } for options in session.router.options)
     finally:
         session.close()
 
@@ -178,7 +194,9 @@ def test_chat_help_does_not_offer_removed_local_command(session):
 ])
 def test_other_routes_and_ordinary_command_mentions_still_reach_provider(session, text):
     assert session.reply(text) == session.router.answer
-    assert session.router.messages[-1][-1].content == text
+    assert next(message.content for message in reversed(session.router.messages[-1])
+                if message.role == "user") == text
+    assert session.router.options[-1]["purpose"] == "conversation"
 
 
 def test_reminders_and_desktop_actions_do_not_reach_provider(session):
@@ -188,13 +206,14 @@ def test_reminders_and_desktop_actions_do_not_reach_provider(session):
 
 
 def test_no_search_preference_survives_opinion_followup_until_explicit_lookup(session, monkeypatch):
+    session.settings.internet_enabled = True
     calls = []
 
-    def prepare(*args, **kwargs):
+    def lookup(*args, **kwargs):
         calls.append(args[0])
-        return InternetResult()
+        return InternetResult(attempted=True, reply="No usable results were found.")
 
-    monkeypatch.setattr(session.internet, "prepare", prepare)
+    monkeypatch.setattr(session.internet, "lookup", lookup)
     assert session.reply("Do not search.") == "Okay, I won't search."
     session.reply("What do you think?")
     session.reply("Don't search for that, instead explain the tradeoffs.")
@@ -203,6 +222,10 @@ def test_no_search_preference_survives_opinion_followup_until_explicit_lookup(se
     )
     assert calls == []
     assert "paused at the user's request" in session.router.messages[-1][0].content
+    session.router.tool_calls.append(ToolCall(
+        "public-search", "web_search",
+        json.dumps({"query": "Search for the official project page"}),
+    ))
     session.reply("Search for the official project page")
     assert calls == ["Search for the official project page"]
 
@@ -210,13 +233,18 @@ def test_no_search_preference_survives_opinion_followup_until_explicit_lookup(se
 def test_request_deadline_cancels_only_request(session, monkeypatch):
     monkeypatch.setattr("ciel.chat.session.REQUEST_TIMEOUT_SECONDS", 0.01)
     service_stop = threading.Event()
+    provider_closed = threading.Event()
 
     def blocked(messages, *, cancel_event, **kwargs):
-        assert cancel_event.wait(1)
-        raise TimeoutError("synthetic timeout")
+        try:
+            assert cancel_event.wait(1)
+            raise TimeoutError("synthetic timeout")
+        finally:
+            provider_closed.set()
 
     monkeypatch.setattr(session.router, "send", blocked)
     assert "too long" in session.reply("Tell me a story", cancel_event=service_stop)
+    assert provider_closed.wait(2), "The fake provider must release its bounded worker"
     assert not service_stop.is_set()
     service_stop.set()
     count = session.conversation.get_total_turn_count()
@@ -225,12 +253,16 @@ def test_request_deadline_cancels_only_request(session, monkeypatch):
 
 
 def test_verified_web_reply_includes_source_link(session, monkeypatch):
+    session.settings.internet_enabled = True
     source = InternetSource(
         title="Official example", url="https://example.org/answer",
         snippet="The example project supports text chat.",
     )
     lookup = InternetResult(attempted=True, query="example project", sources=[source])
-    monkeypatch.setattr(session.internet, "prepare", lambda *args, **kwargs: lookup)
+    monkeypatch.setattr(session.internet, "lookup", lambda *args, **kwargs: lookup)
+    session.router.tool_calls.append(ToolCall(
+        "example-search", "web_search", '{"query": "example project"}',
+    ))
     session.router.answer = json.dumps({"claims": [{
         "text": "The example project supports text chat.",
         "quote": "The example project supports text chat.", "source": 1,

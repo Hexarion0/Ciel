@@ -1,5 +1,6 @@
 """Microphone failures remain actionable without switching capture devices."""
 
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -11,6 +12,45 @@ from ciel.platform.linux import LinuxAudioBackend
 
 class FakePortAudioError(Exception):
     """Represent a native capture error without initializing PortAudio."""
+
+
+def test_failed_microphone_can_keep_real_text_workers_running_without_recapturing():
+    from ciel.audio.listener import ListenerState, WakeListenerLoop
+
+    backend = MagicMock()
+    backend.start_stream.side_effect = AudioInputError("Microphone unavailable")
+    detector, stt = MagicMock(), MagicMock()
+    received = []
+    answered = Event()
+
+    def on_text(text, info, audio):
+        received.append((text, info["input_source"], audio.size))
+        answered.set()
+        return True
+
+    loop = WakeListenerLoop(
+        audio_backend=backend, detector=detector, recorder=MagicMock(), stt=stt,
+        on_transcription=on_text,
+    )
+    with pytest.raises(AudioInputError):
+        loop.start()
+    assert not loop.is_running
+    try:
+        loop.start_text_only()
+        assert loop.is_running and loop.microphone_muted
+        assert loop.state == ListenerState.IDLE
+        assert loop.set_microphone_mute(False) is True
+        assert loop.submit_text("We can still chat.")
+        assert answered.wait(2)
+        assert received == [("We can still chat.", "keyboard", 0)]
+        backend.start_stream.assert_called_once()
+        detector.start.assert_called_once()
+        stt.transcribe.assert_not_called()
+        stt.transcribe_detailed.assert_not_called()
+    finally:
+        loop.stop()
+    assert not loop.is_running
+    assert all(not thread.is_alive() for thread in loop._threads)
 
 
 @pytest.mark.parametrize("stage", ["construct", "start"])

@@ -14,6 +14,7 @@ from ciel.memory import MemoryType
 from ciel.memory.bridge import telegram_conversation_id
 from ciel.providers.base import LLMResponse
 from ciel.providers.vision import synthetic_test_image
+from ciel.screen.intent import ScreenIntent
 from ciel.screen.service import ScreenResult, ScreenService, screen_scope
 from tests.test_ambient import run_callbacks as _run_callbacks
 
@@ -88,7 +89,7 @@ def test_chat_visual_request_bypasses_text_router_and_internet_and_saves_observa
     session.internet.prepare.assert_not_called()
     turns = session.conversation.get_recent_turns()
     assert_visual_turn(turns[-1])
-    screen.mark.assert_called_once_with(turns[-1].id)
+    screen.mark.assert_called_once_with(turns[-1].id, request=screen.answer.call_args.args[0])
     assert session.store.list_memories(memory_type=MemoryType.FACT) == []
 
 
@@ -99,14 +100,28 @@ def test_chat_active_followup_requests_new_pixels_instead_of_reusing_old_capture
     assert session.reply(followup) == TEXT
     requests = [call.args[0] for call in screen.answer.call_args_list]
     assert len(requests) == 2
-    assert requests[-1].query == followup
+    assert requests[-1].query == ("Look at my screen" if followup == "Look again" else followup)
     assert not requests[-1].previous
+
+
+def test_chat_screen_timeout_followed_by_retry_bypasses_text_router(chat):
+    session, screen = chat
+    timeout = "The selected screen model timed out. Please try again."
+    screen.answer.side_effect = [ScreenResult(timeout), RESULT]
+    assert session.reply("What does this error mean?") == timeout
+    assert session.reply("Try again") == TEXT
+    requests = [call.args[0] for call in screen.answer.call_args_list]
+    assert len(requests) == 2
+    assert requests[-1].query == "What does this error mean?"
+    assert not requests[-1].previous
+    session.router.send.assert_not_called()
+    session.internet.prepare.assert_not_called()
 
 
 @pytest.mark.parametrize("query", [
     "What's up?", "What about now?", "Do not look at my screen",
     "Please don't take a screenshot", 'He said "look at my screen".',
-    "I was wondering how screen capture works.",
+    "I was wondering how screen capture works.", "Try again", "Retry",
 ])
 def test_ordinary_negative_and_reported_chat_text_cannot_acquire_pixels(chat, query):
     session, screen = chat
@@ -114,12 +129,18 @@ def test_ordinary_negative_and_reported_chat_text_cannot_acquire_pixels(chat, qu
     screen.answer.assert_not_called()
 
 
-def test_nonvisual_topic_ends_implicit_visual_followup(chat):
+@pytest.mark.parametrize("followup", ["What about now?", "Try again", "Retry"])
+def test_nonvisual_topic_ends_implicit_visual_followup(chat, followup, monkeypatch):
     session, screen = chat
+    classifier = Mock(return_value=ScreenIntent("new_topic", 0.99))
+    monkeypatch.setattr("ciel.screen.service.interpret_screen_intent", classifier)
     session.reply("Look at my screen")
     session.reply("Tell me a short story")
-    session.reply("What about now?")
+    session.reply(followup)
     screen.answer.assert_called_once()
+    classifier.assert_not_called()
+    assert all(call.kwargs["purpose"] == "conversation"
+               for call in session.router.send.call_args_list)
 
 
 @pytest.mark.parametrize("invalidation", ["cancel", "reset", "expired"])
@@ -247,10 +268,12 @@ def test_voice_and_keyboard_visual_requests_bypass_general_models(
         router.stream.assert_not_called()
         internet.prepare.assert_not_called()
         internet.lookup.assert_not_called()
+        if typed:
+            tts.begin_stream.assert_not_called()
         tts.speak.assert_called_once()
         assert tts.speak.call_args.args[0] == TEXT
         assert_visual_turn(turns[-1])
-        screen.mark.assert_called_once_with(turns[-1].id)
+        screen.mark.assert_called_once_with(turns[-1].id, request=screen.answer.call_args.args[0])
     finally:
         store.close()
 
@@ -315,6 +338,37 @@ def test_runtime_screen_followup_obtains_a_fresh_capture(tmp_path, monkeypatch, 
         assert not requests[1].previous
         assert len([turn for turn in turns if turn.role == "assistant"]) == 2
         router.send.assert_not_called()
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("controller", [False, True])
+def test_runtime_screen_timeout_followed_by_typed_retry_bypasses_general_models(
+    tmp_path, monkeypatch, controller,
+):
+    timeout = "The selected screen model timed out. Please try again."
+    replies = iter([ScreenResult(timeout), RESULT])
+    created = install_screen(monkeypatch, on_answer=lambda *_args, **_kwargs: next(replies))
+    internet = stub_runtime_internet(monkeypatch)
+    router = MagicMock()
+    _, tts, _, store, turns = run_callbacks(
+        tmp_path, monkeypatch, [
+            ("What does this error mean?", {"input_source": "keyboard"}),
+            ("Try again", {"input_source": "keyboard"}),
+        ], router=router, controller=controller,
+    )
+    try:
+        requests = [call.args[0] for call in created[0].answer.call_args_list]
+        assert len(requests) == 2
+        assert requests[-1].query == "What does this error mean?"
+        assert not requests[-1].previous
+        assert [turn.content for turn in turns if turn.role == "assistant"] == [timeout, TEXT]
+        assert [call.args[0] for call in tts.speak.call_args_list] == [timeout, TEXT]
+        tts.begin_stream.assert_not_called()
+        router.send.assert_not_called()
+        router.stream.assert_not_called()
+        internet.prepare.assert_not_called()
+        internet.lookup.assert_not_called()
     finally:
         store.close()
 

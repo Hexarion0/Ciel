@@ -72,8 +72,9 @@ def test_panel_preserves_custom_pocket_identity_and_explicit_reference_precedenc
 
 
 @pytest.mark.parametrize("failure", [False, True])
-def test_header_precedes_models_panel_follows_stream_and_precedes_keyboard(
-    tmp_path, monkeypatch, failure,
+@pytest.mark.parametrize("typed", [False, True])
+def test_header_precedes_models_readiness_follows_stream_and_precedes_keyboard(
+    tmp_path, monkeypatch, failure, typed,
 ):
     from ciel import __main__, audio, config, platform, providers, terminal, terminal_ui
 
@@ -89,7 +90,10 @@ def test_header_precedes_models_panel_follows_stream_and_precedes_keyboard(
 
     monkeypatch.setattr(platform, "get_audio_backend", get_backend)
     ui = MagicMock()
+    ui.clear.side_effect = lambda: events.append("clear")
     ui.banner.side_effect = lambda *_a, **_k: events.append("banner")
+    ui.chat_header.side_effect = lambda *_a, **_k: events.append("header")
+    ui.work_status.side_effect = lambda *_a, **_k: events.append("ready")
     ui.panel.side_effect = lambda *_a: events.append("panel")
     monkeypatch.setattr(terminal_ui, "ConsoleUI", lambda **_kw: ui)
     for component in ("WakeWordDetector", "VoiceRecorder"):
@@ -118,20 +122,34 @@ def test_header_precedes_models_panel_follows_stream_and_precedes_keyboard(
     keyboard = MagicMock()
     keyboard.start.side_effect = lambda: events.append("keyboard")
     monkeypatch.setattr(terminal, "TerminalInput", lambda **_kw: keyboard)
-    monkeypatch.setattr(sys, "argv", ["ciel", "--text-input", "--no-show-ai-transcripts"])
+    monkeypatch.setattr(sys, "argv", [
+        "ciel", "--text-input" if typed else "--no-text-input", "--no-show-ai-transcripts",
+    ])
 
     if failure:
         with pytest.raises(RuntimeError, match="Audio device unavailable"):
             __main__.main()
-        assert events == ["banner", "backend", "models", "stream"]
+        assert events == ["clear", "banner", "backend", "models", "stream"]
         ui.panel.assert_not_called()
+        ui.work_status.assert_not_called()
         keyboard.start.assert_not_called()
     else:
         assert __main__.main() == 0
-        assert events == ["banner", "backend", "models", "stream", "panel", "keyboard"]
+        assert events == ["clear", "banner", "backend", "models", "stream", "panel"] + (
+            ["keyboard"] if typed else []
+        )
+        ui.clear.assert_called_once()
+        ui.banner.assert_called_once()
+        ui.chat_header.assert_not_called()
+        ui.work_status.assert_not_called()
         rows = dict(ui.panel.call_args.args[0])
         assert rows["● Listening"] == "Ambient conversation"
         assert rows["Live captions"] == "Off"
         assert rows["Recognition"] == "small.en · CPU"
+        if typed:
+            assert rows["Reasoning"] == settings.nim_reasoning
+            keyboard.start.assert_called_once()
+        else:
+            keyboard.start.assert_not_called()
     loop.stop.assert_called_once()
     tts.close.assert_called_once()

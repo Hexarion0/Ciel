@@ -1,6 +1,6 @@
 # Screen awareness: agreed design and implementation plan
 
-Status: **implemented; live screen/Telegram acceptance pending**. Updated: **2026-10-22**.
+Status: **implemented; live screen/Telegram acceptance pending**. Updated: **2026-10-24**.
 
 The first version lets Ciel look at the user's desktop when asked and discuss it
 naturally through voice, the desktop interface, or the paired Telegram account.
@@ -16,6 +16,7 @@ steps the user can follow. Continuous watching and computer control are out of s
 | The user points at something | Include the mouse pointer and its position as context for “this” and “here”; identify the target only when it is visible and clear. |
 | “What about now?” | Capture again and compare with the previous available capture. |
 | During a screen discussion: “What should I do next?” | Take a fresh capture automatically and answer from the updated screen. |
+| Immediately after a screen response: “Try again.” | Repeat the original visual question, including after a model timeout. A request for an earlier image keeps that historical scope. |
 | A question explicitly about the previous capture | Reuse that capture while it remains available, preserving its capture time. |
 | Small or unreadable text | First enlarge or crop the relevant captured region; ask the user if it remains unreadable. |
 | A paired Telegram screen request | Capture the PC desktop and reply with text by default. Send the screenshot only when explicitly requested. |
@@ -85,12 +86,39 @@ Implemented integration:
 Configure screen understanding in `ciel setup`, or use `SCREEN_ENABLED`,
 `SCREEN_PROVIDER`, `SCREEN_MODEL`, and `SCREEN_TIMEOUT_SECONDS` in `.env`.
 The default is the existing NIM connection with
-[`meta/llama-3.2-11b-vision-instruct`](https://build.nvidia.com/meta/llama-3.2-11b-vision-instruct).
-Its [image API](https://docs.api.nvidia.com/nim/reference/meta-llama-3_2-11b-vision-instruct)
-passed a synthetic red/blue image check in **1.44 seconds on 2026-10-22**.
-The catalog also listed the larger 90B candidate, but its inference timed out;
-the implementation does not treat catalog membership as working image support.
-No personal screen pixels were used for model verification.
+[`nvidia/nemotron-3.5-super-vl-120b-a12b`](https://build.nvidia.com/nvidia/nemotron-3.5-super-vl-120b-a12b).
+NIM image requests use final-answer mode, matching the ordinary Nemotron text client.
+Explicit saved model choices remain selected; change `SCREEN_MODEL` or rerun setup
+to select the new default in an existing installation.
+
+On **2026-10-24**, the previous Llama 3.2 11B choice timed out twice on a tiny
+synthetic image with a 12-second test deadline. The replacement passed the same
+color check in **1.10 seconds**. Through CIEL's actual vision client, two generated
+1920×1080 screens returned the correct invented title and panel colors in
+**2.31 seconds** including first-use verification, then **1.77 seconds** with
+verification cached. One earlier attempt returned HTTP 500. These are small
+synthetic samples, not a real-desktop latency or future availability guarantee.
+The previous model had passed in 1.44 seconds on 2026-10-22; neither catalog
+membership nor an earlier success establishes current inference availability.
+No personal screen pixels or conversation history were used in these probes.
+
+An active screen task retains its original question and latest corrected focus
+through unclear speech, clarification, pauses, and interruptions. “Again,”
+“check again,” and “Can you check again? I meant” take another look immediately.
+Other wording reaches the main response model, which can request the native screen
+tool or ask a short clarification while retaining the task. The legacy desktop path
+(`CONTROLLER_ENABLED=false`) retains its two-second contextual classifier.
+The next observation answers
+the original question and focuses on relevant changes, briefly acknowledging when
+nothing relevant changed. Actual pixels are captured for every fresh observation.
+
+A new task, explicit cancellation, reset, owner change, or new foreground launch
+ends the old task. Historical-image retries keep their historical scope. Late
+interpretation and capture results cannot restore canceled task state.
+Background conversation-summary failures are separate from screen state: failed
+batches remain pending with a 30-second retry delay. Complete structured summaries
+may exceed per-field concision targets when they fit the hard 4,000-character
+total budget; no decisions are truncated to satisfy those targets.
 
 The 2026-10-22 follow-up addresses a real response that denied image access despite
 receiving a capture. Visual inference now uses a compact, explicit image-capability

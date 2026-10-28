@@ -1,33 +1,17 @@
-"""Recent assistant replies survive real persistence and both conversational model stages.
+"""Recent assistant replies survive persistence and reach the main responding model.
 
 Providers are mocked: these regressions verify context delivery and authorization, while live
 synthetic evaluations separately check whether a hosted model uses that context well.
 """
 
-import json
 from datetime import datetime
 from unittest.mock import MagicMock
 
 import pytest
 
-from ciel.controller import _CONTEXT_MARKER
 from ciel.memory import MemoryItem, MemoryStore, MemoryType
 from ciel.providers.base import LLMResponse
 from tests.test_ambient import run_callbacks
-
-
-def _decision() -> LLMResponse:
-    """Supply a conversational choice without mocking the runtime or memory manager."""
-    return LLMResponse(json.dumps({
-        "intent": "follow_up", "action": "answer", "confidence": 0.99,
-    }), "test-controller", "test")
-
-
-def _payload(messages) -> dict:
-    """Read either supported compact controller request representation."""
-    if _CONTEXT_MARKER in messages[0].content:
-        return json.loads(messages[0].content.split(_CONTEXT_MARKER, 1)[1])
-    return json.loads(messages[-1].content)
 
 
 @pytest.mark.parametrize("typed", [False, True])
@@ -57,28 +41,15 @@ def test_recent_assistant_reply_reaches_followup_gate_and_generation(
     router = MagicMock()
     requests = [question, *followups]
     answers = iter(replies)
-    gate_requests = []
     answer_requests = []
 
     def send(messages, **kwargs):
-        if kwargs.get("purpose") == "controller":
-            index = len(gate_requests)
-            payload = _payload(messages)
-            assert messages[-1].content == requests[index]
-            assert payload["transcribed"] is not typed
-            if index:
-                previous = payload["recent_dialogue"]
-                assert previous[-2]["role"] == "user"
-                assert previous[-2]["text"] == requests[index - 1]
-                assert previous[-1]["role"] == "assistant"
-                assert previous[-1]["text"] == replies[index - 1]
-                assert payload["active_conversation"] is True
-                assert payload["direct_address"] is typed
-            gate_requests.append(payload)
-            return _decision()
-
+        assert kwargs["purpose"] == "conversation"
+        assert kwargs["max_tokens"] == (4096 if typed else 400)
         index = len(answer_requests)
-        dialogue = [(message.role, message.content) for message in messages[1:]]
+        dialogue = [(message.role, message.content) for message in messages
+                    if message.role != "system"]
+        assert ("latest message was typed" in messages[0].content) is typed
         expected = []
         for previous in range(index):
             expected.extend([
@@ -97,10 +68,10 @@ def test_recent_assistant_reply_reaches_followup_gate_and_generation(
         router=router, controller=True, persona_file=persona_file,
     )
     try:
-        assert len(gate_requests) == len(answer_requests) == 3
+        assert router.send.call_count == len(answer_requests) == 3
         assert [turn.content for turn in turns if turn.role == "user"] == requests
         assert [turn.content for turn in turns if turn.role == "assistant"] == replies
-        assert tts.speak.call_count == 3
+        assert [call.args[0] for call in tts.speak.call_args_list] == replies
         assert store.count_memories() == 0
     finally:
         store.close()
@@ -130,7 +101,7 @@ def test_local_timeline_reply_is_replayed_to_a_short_conversational_reaction(
 
     monkeypatch.setattr(read, "datetime", Clock)
     router = MagicMock()
-    router.send.side_effect = [_decision(), LLMResponse(
+    router.send.side_effect = [LLMResponse(
         "Yes, almost two weeks of work.", "test-chat", "test",
     )]
     info = {"input_source": "keyboard"} if typed else {}
@@ -141,13 +112,13 @@ def test_local_timeline_reply_is_replayed_to_a_short_conversational_reaction(
         router=router, controller=True, persona_file=persona_file,
     )
     try:
-        assert router.send.call_count == 2
+        assert router.send.call_count == 1
         assert turns[1].provider == "local"
         assert "development day 12" in turns[1].content
-        gate = _payload(router.send.call_args_list[0].args[0])
-        assert gate["recent_dialogue"][-1]["text"] == turns[1].content
-        reply_messages = router.send.call_args_list[1].args[0]
-        assert [(message.role, message.content) for message in reply_messages[1:]] == [
+        assert router.send.call_args.kwargs["purpose"] == "conversation"
+        reply_messages = router.send.call_args.args[0]
+        assert [(message.role, message.content) for message in reply_messages
+                if message.role != "system"] == [
             (turn.role, turn.content) for turn in turns[:-1]
         ]
         assert store.count_memories() == 1
@@ -157,7 +128,7 @@ def test_local_timeline_reply_is_replayed_to_a_short_conversational_reaction(
 
 
 @pytest.mark.parametrize("typed", [False, True])
-def test_noun_only_reply_keeps_the_topic_from_before_a_controller_clarification(
+def test_noun_only_reply_keeps_the_topic_from_before_a_model_clarification(
     tmp_path, monkeypatch, typed,
 ):
     """An unnecessary clarification cannot erase the assistant answer it referred to."""
@@ -168,13 +139,9 @@ def test_noun_only_reply_keeps_the_topic_from_before_a_controller_clarification(
     clarification = "What number are you referring to?"
     router = MagicMock()
     router.send.side_effect = [
-        _decision(), LLMResponse(original_reply, "test-chat", "test"),
-        LLMResponse(json.dumps({
-            "intent": "unclear", "action": "clarify", "confidence": 0.9,
-            "speech": clarification,
-        }), "test-controller", "test"),
+        LLMResponse(original_reply, "test-chat", "test"),
         LLMResponse(clarification, "test-chat", "test"),
-        _decision(), LLMResponse("Right, 18 days of work.", "test-chat", "test"),
+        LLMResponse("Right, 18 days of work.", "test-chat", "test"),
     ]
     info = {"input_source": "keyboard"} if typed else {}
     _, _, _, store, turns = run_callbacks(
@@ -184,19 +151,13 @@ def test_noun_only_reply_keeps_the_topic_from_before_a_controller_clarification(
         router=router, controller=True, persona_file=persona_file,
     )
     try:
-        assert router.send.call_count == 6
+        assert router.send.call_count == 3
         assert turns[3].provider == "test" and turns[3].model == "test-chat"
-        gate_request = router.send.call_args_list[4]
-        assert gate_request.kwargs["purpose"] == "controller"
-        assert gate_request.args[0][-1].content == "The days."
-        gate = _payload(gate_request.args[0])
-        assert [(item["role"], item["text"]) for item in gate["recent_dialogue"]] == [
-            (turn.role, turn.content) for turn in turns[:4]
-        ]
-        assert gate["recent_dialogue"][1]["text"] == original_reply
-        assert gate["recent_dialogue"][-1]["text"] == clarification
-        response_messages = router.send.call_args_list[5].args[0]
-        assert [(message.role, message.content) for message in response_messages[1:]] == [
+        assert all(call.kwargs["purpose"] == "conversation"
+                   for call in router.send.call_args_list)
+        response_messages = router.send.call_args_list[2].args[0]
+        assert [(message.role, message.content) for message in response_messages
+                if message.role != "system"] == [
             (turn.role, turn.content) for turn in turns[:-1]
         ]
         assert store.count_memories() == 0

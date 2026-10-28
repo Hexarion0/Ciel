@@ -97,6 +97,31 @@ def test_selected_model_gets_synthetic_probe_before_any_personal_pixels(connecti
     assert calls[1].kwargs["headers"]["Authorization"] == "Bearer synthetic-nim-key"
 
 
+@pytest.mark.parametrize("model", [
+    "nvidia/nemotron-3.5-super-vl-120b-a12b", "nvidia/nemotron-3-nano-vl",
+])
+def test_nim_vision_requests_disable_reasoning_for_visible_answers(connection, model):
+    connection.post.side_effect = [response(), response("Visible screen")]
+    client = VisionClient(configured(screen_model=model))
+    assert client.send([personal_message()]).content == "Visible screen"
+    for call in connection.post.call_args_list:
+        assert call.kwargs["json"]["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+@pytest.mark.parametrize("provider,key", [
+    ("groq", "groq_api_key"), ("openrouter", "openrouter_api_key"),
+])
+def test_nim_vision_reasoning_options_do_not_leak_to_other_connections(connection, provider, key):
+    connection.post.side_effect = [response(), response("Visible screen")]
+    client = VisionClient(configured(
+        screen_provider=provider, screen_model="nvidia/nemotron-3.5-super-vl-120b-a12b",
+        **{key: "synthetic-key"},
+    ))
+    client.send([personal_message()])
+    assert all("chat_template_kwargs" not in call.kwargs["json"]
+               for call in connection.post.call_args_list)
+
+
 def test_failed_synthetic_check_never_sends_screen_and_never_falls_back(connection):
     connection.post.return_value = response("I cannot read images")
     client = VisionClient(configured(groq_api_key="synthetic-spare-key"))

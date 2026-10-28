@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from ciel.audio.ambient import AmbientConversation
+from ciel.memory.bridge import start_desktop_conversation as _start_desktop_conversation
 from ciel.providers.base import ChatMessage, LLMResponse
 
 
@@ -237,14 +238,24 @@ def run_callbacks(
     tmp_path, monkeypatch, utterances, *, ambient=True, router=None, observed=None,
     tts=None, interrupted=None, persona_file=None,
     streaming=False, clock=None, ai_transcripts=False, cli_args=(), tts_enabled=True,
-    controller=False, observed_after=None,
+    controller=False, observed_after=None, initialize_conversation=None,
 ):
     """Run real CLI callbacks using an isolated DB and no audio hardware."""
     import sys
 
     from ciel import __main__, audio, config, platform, providers
-    from ciel.memory import MemoryStore
-    from ciel.persona import PERSONA_CONTEXT_VERSION
+    from ciel.memory import MemoryStore, bridge
+
+    launched_session = []
+
+    def start_conversation(store):
+        session_id = _start_desktop_conversation(store)
+        launched_session.append(session_id)
+        if initialize_conversation is not None:
+            initialize_conversation(store, session_id)
+        return session_id
+
+    monkeypatch.setattr(bridge, "start_desktop_conversation", start_conversation)
 
     settings = config.Settings(
         _env_file=None, memory_db_path=str(tmp_path / "memory.db"), tts_streaming=streaming,
@@ -295,7 +306,7 @@ def run_callbacks(
     ])
     assert __main__.main() == 0
     store = MemoryStore(settings.memory.db_path)
-    turns = store.get_recent_turns(f"desktop_session:{PERSONA_CONTEXT_VERSION}")
+    turns = store.get_recent_turns(launched_session[-1])
     return router, tts, loop, store, turns
 
 

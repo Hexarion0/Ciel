@@ -1,11 +1,13 @@
 """Speech-to-text conversion engine using faster-whisper with VAD and anti-hallucination."""
 
 import gc
+import inspect
 import math
 import re
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +20,9 @@ from ciel.logging import get_logger
 
 logger = get_logger("audio.stt")
 _DEFAULT_AUDIO = AudioConfig()
+_NO_CORRECTION_SCOPE = object()
+_CORRECTION_HINT_TTL = 300.0
+_MAX_CORRECTION_HINTS = 12
 
 
 def free_cuda_memory_mb() -> int | None:
@@ -109,6 +114,10 @@ class SpeechToText:
         self.wake_phrase = wake_phrase
         self._retry_model: WhisperModel | None = None
         self._retry_blocked_devices: set[str] = set()
+        self._correction_lock = threading.Lock()
+        self._correction_scope_provider: Callable[[], object] | None = None
+        self._correction_scope: object = _NO_CORRECTION_SCOPE
+        self._correction_hints: dict[str, tuple[str, float]] = {}
 
         self.model: WhisperModel | None = None
         self._ready = threading.Event()
@@ -118,6 +127,84 @@ class SpeechToText:
         # Load model in background thread — startup continues immediately
         self._loader = threading.Thread(target=self._load_model_bg, daemon=True)
         self._loader.start()
+
+    def set_correction_scope_provider(self, provider: Callable[[], object] | None) -> None:
+        """Bind a local owner/session/reset check; replacing it revokes all name hints."""
+        if provider is not None and not callable(provider):
+            raise TypeError("Correction scope provider must be callable or None")
+        with self._correction_lock:
+            self._correction_scope_provider = provider
+            self._correction_scope = _NO_CORRECTION_SCOPE
+            self._correction_hints.clear()
+
+    def clear_correction_hints(self) -> None:
+        """Forget temporary user spelling hints without changing saved memory or prompts."""
+        with self._correction_lock:
+            self._correction_scope = _NO_CORRECTION_SCOPE
+            self._correction_hints.clear()
+
+    def _refresh_correction_scope(self) -> object:
+        """Revoke hints when local context disappears or changes, without holding its lock."""
+        with self._correction_lock:
+            provider = self._correction_scope_provider
+        scope: object = _NO_CORRECTION_SCOPE
+        if provider is not None:
+            try:
+                scope = provider()
+                if scope is None:
+                    scope = _NO_CORRECTION_SCOPE
+            except Exception:
+                # Context reset/disconnection is a reason to forget hints, never
+                # a reason to fail transcription or expose an old owner's names.
+                pass
+        now = time.monotonic()
+        with self._correction_lock:
+            if provider is not self._correction_scope_provider:
+                return _NO_CORRECTION_SCOPE
+            if scope != self._correction_scope:
+                self._correction_hints.clear()
+                self._correction_scope = scope
+            self._correction_hints = {
+                key: value for key, value in self._correction_hints.items() if value[1] > now
+            }
+        return scope
+
+    def remember_correction(self, term: str, *, scope: object) -> bool:
+        """Temporarily hint an explicitly typed name in its current conversation scope.
+
+        Callers must supply only a user's explicit spelling correction, never
+        names inferred from assistant text, websites, or ambient background speech.
+        Hints influence decoding; they never replace recognized transcript text.
+        """
+        if not isinstance(term, str) or len(term) > 64:
+            return False
+        if any(not (char.isalnum() or char in " -'’._+#") for char in term):
+            return False
+        term = " ".join(term.split())
+        if not term or len(term.split()) > 6 or not any(char.isalpha() for char in term):
+            return False
+        current_scope = self._refresh_correction_scope()
+        if current_scope is _NO_CORRECTION_SCOPE or current_scope != scope:
+            return False
+        with self._correction_lock:
+            if self._correction_scope != scope:
+                return False
+            key = term.casefold()
+            self._correction_hints.pop(key, None)
+            self._correction_hints[key] = (term, time.monotonic() + _CORRECTION_HINT_TTL)
+            while len(self._correction_hints) > _MAX_CORRECTION_HINTS:
+                del self._correction_hints[next(iter(self._correction_hints))]
+        return True
+
+    def _correction_hotwords(self, expected_scope: object) -> str:
+        """Snapshot only current hints, including a fresh scope check before retries."""
+        scope = self._refresh_correction_scope()
+        if scope is _NO_CORRECTION_SCOPE or scope != expected_scope:
+            return ""
+        with self._correction_lock:
+            if scope != self._correction_scope:
+                return ""
+            return ", ".join(term for term, _expires in self._correction_hints.values())
 
     def _load_model_bg(self) -> None:
         """Background thread: load model then set the ready event."""
@@ -280,6 +367,7 @@ class SpeechToText:
 
         target_lang = language or self.language
         start_t = time.time()
+        correction_scope = self._refresh_correction_scope()
 
         # Decode deterministically without penalizing natural repetitions and corrections.
         decode_kwargs: dict[str, Any] = {
@@ -304,7 +392,21 @@ class SpeechToText:
 
         def decode(options: dict[str, Any], model: WhisperModel | None = None) -> dict[str, Any]:
             """Consume lazy inference and expose quality without treating it as certainty."""
-            generator, info = (model or self.model).transcribe(audio_input, **options)
+            transcribe = (model or self.model).transcribe
+            hotwords = self._correction_hotwords(correction_scope)
+            if hotwords:
+                try:
+                    parameters = inspect.signature(transcribe).parameters
+                except (TypeError, ValueError):
+                    parameters = {}
+                if "hotwords" in parameters or any(
+                    parameter.kind == inspect.Parameter.VAR_KEYWORD
+                    for parameter in parameters.values()
+                ):
+                    # Older/custom decoders may lack this optional argument.
+                    # Ignore hints there rather than falling back to CPU.
+                    options = {**options, "hotwords": hotwords}
+            generator, info = transcribe(audio_input, **options)
             segments_list = []
             text_parts = []
             raw_parts = []

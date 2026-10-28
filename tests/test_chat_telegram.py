@@ -56,14 +56,18 @@ def test_owner_only_before_conversation_and_duplicate_claim_survives_restart(tmp
 def test_transport_and_real_memory_session_confirm_and_recall_same_updated_fact(tmp_path):
     from ciel.chat.session import ChatSession
     from ciel.config import Settings
+    from ciel.memory.bridge import telegram_conversation_id
 
     state = ChatState(tmp_path / "chat.db")
     state.bind(123, 42)
     router = Mock()
     settings = Settings(_env_file=None, memory_db_path=str(tmp_path / "facts.db"),
-                        ciel_persona_file="", internet_enabled=False)
-    session = ChatSession(settings, channel="telegram", session_id="telegram:123:42",
-                          router=router)
+                        ciel_persona_file="", internet_enabled=False,
+                        chat_services="telegram", chat_state_path=str(tmp_path / "chat.db"),
+                        telegram_bot_token="123:test-token")
+    session = ChatSession(
+        settings, channel="telegram", session_id=telegram_conversation_id(123, 42), router=router,
+    )
     client = Mock()
     service = TelegramService(client, state, 123, session.reply, clock=lambda: NOW)
     try:

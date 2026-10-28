@@ -1,5 +1,6 @@
 """Tests for faster-whisper speech-to-text module."""
 
+from inspect import Parameter, Signature
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -288,3 +289,178 @@ def test_repetition_hallucination_requests_repeat(model_without_downloads):
     model_without_downloads.transcribe.return_value = result
     detailed = SpeechToText().transcribe_detailed(np.ones(16000, dtype=np.float32) * 0.1)
     assert detailed['needs_repeat'] and detailed['text'] == ''
+
+
+def correction_stt(scope):
+    """Use a mutable local conversation scope without models or stored dialogue."""
+    stt = SpeechToText()
+    stt.set_correction_scope_provider(lambda: scope[0])
+    return stt
+
+
+def test_explicit_name_hint_reaches_primary_and_quality_retry(model_without_downloads):
+    scope = [("owner", "conversation", 0)]
+    stt = correction_stt(scope)
+    assert stt.remember_correction("Tensura", scope=scope[0])
+    model_without_downloads.transcribe.side_effect = [
+        decoding("Just Tetsura.", -0.95), decoding("Just Tensura.", -0.1),
+    ]
+
+    result = stt.transcribe_detailed(np.ones(16000, dtype=np.float32) * 0.1)
+
+    assert result["text"] == result["raw_text"] == "Just Tensura."
+    assert result["retried"] and not result["needs_repeat"]
+    assert model_without_downloads.transcribe.call_count == 2
+    for call in model_without_downloads.transcribe.call_args_list:
+        assert call.kwargs["hotwords"] == "Tensura"
+        assert call.kwargs["initial_prompt"] == "Ciel is the name of the assistant."
+        assert call.kwargs["condition_on_previous_text"] is False
+
+
+def test_name_hint_never_replaces_recognized_text(model_without_downloads):
+    scope = [("owner", "conversation", 0)]
+    stt = correction_stt(scope)
+    stt.remember_correction("Tensura", scope=scope[0])
+    model_without_downloads.transcribe.return_value = decoding("TensorFlow", -0.1)
+
+    result = stt.transcribe_detailed(np.ones(16000, dtype=np.float32) * 0.1)
+
+    assert result["text"] == result["raw_text"] == "TensorFlow"
+    assert not result["retried"] and not result["needs_repeat"]
+
+
+def test_correction_hint_expires_without_reusing_stale_names(model_without_downloads, monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr("ciel.audio.stt.time.monotonic", lambda: clock[0])
+    scope = [("owner", "conversation", 0)]
+    stt = correction_stt(scope)
+    stt.remember_correction("Tensura", scope=scope[0])
+    model_without_downloads.transcribe.return_value = decoding("A normal question", -0.1)
+    audio = np.ones(16000, dtype=np.float32) * 0.1
+
+    clock[0] = 399.9
+    stt.transcribe(audio)
+    assert model_without_downloads.transcribe.call_args.kwargs["hotwords"] == "Tensura"
+    clock[0] = 400.0
+    stt.transcribe(audio)
+    assert "hotwords" not in model_without_downloads.transcribe.call_args.kwargs
+
+
+@pytest.mark.parametrize("changed_scope", [
+    ("other-owner", "conversation", 0),
+    ("owner", "other-conversation", 0),
+    ("owner", "conversation", 1),
+])
+def test_context_change_clears_hints_before_decode(model_without_downloads, changed_scope):
+    scope = [("owner", "conversation", 0)]
+    original = scope[0]
+    stt = correction_stt(scope)
+    stt.remember_correction("Tensura", scope=original)
+    model_without_downloads.transcribe.return_value = decoding("A normal question", -0.1)
+    audio = np.ones(16000, dtype=np.float32) * 0.1
+
+    scope[0] = changed_scope
+    stt.transcribe(audio)
+    assert "hotwords" not in model_without_downloads.transcribe.call_args.kwargs
+    assert not stt.remember_correction("Old owner name", scope=original)
+    scope[0] = original
+    stt.transcribe(audio)
+    assert "hotwords" not in model_without_downloads.transcribe.call_args.kwargs
+
+
+def test_unavailable_context_discards_hints(model_without_downloads):
+    scope = [("owner", "conversation", 0)]
+    unavailable = [False]
+
+    def context():
+        if unavailable[0]:
+            raise RuntimeError("Context was reset")
+        return scope[0]
+
+    stt = SpeechToText()
+    stt.set_correction_scope_provider(context)
+    stt.remember_correction("Tensura", scope=scope[0])
+    unavailable[0] = True
+    model_without_downloads.transcribe.return_value = decoding("A normal question", -0.1)
+    audio = np.ones(16000, dtype=np.float32) * 0.1
+    stt.transcribe(audio)
+    assert "hotwords" not in model_without_downloads.transcribe.call_args.kwargs
+    assert not stt.remember_correction("Tensura", scope=scope[0])
+    unavailable[0] = False
+    stt.transcribe(audio)
+    assert "hotwords" not in model_without_downloads.transcribe.call_args.kwargs
+
+
+def test_scope_change_during_decode_does_not_hint_old_audio_with_new_owner_names(
+    model_without_downloads,
+):
+    scope = [("owner", "conversation", 0)]
+    stt = correction_stt(scope)
+    stt.remember_correction("Tensura", scope=scope[0])
+
+    def transcribe(_audio, **_options):
+        if model_without_downloads.transcribe.call_count == 1:
+            scope[0] = ("other-owner", "conversation", 0)
+            assert stt.remember_correction("Private project", scope=scope[0])
+            return decoding("Unclear command", -0.95)
+        return decoding("Clear command", -0.1)
+
+    model_without_downloads.transcribe.side_effect = transcribe
+    result = stt.transcribe_detailed(np.ones(16000, dtype=np.float32) * 0.1)
+
+    assert result["retried"]
+    assert model_without_downloads.transcribe.call_args_list[0].kwargs["hotwords"] == "Tensura"
+    assert "hotwords" not in model_without_downloads.transcribe.call_args_list[1].kwargs
+
+
+def test_correction_hint_bound_and_refresh_order(model_without_downloads):
+    scope = [("owner", "conversation", 0)]
+    stt = correction_stt(scope)
+    for index in range(14):
+        assert stt.remember_correction(f"Project {index}", scope=scope[0])
+    assert stt.remember_correction("PROJECT 2", scope=scope[0])
+    model_without_downloads.transcribe.return_value = decoding("A normal question", -0.1)
+
+    stt.transcribe(np.ones(16000, dtype=np.float32) * 0.1)
+
+    assert model_without_downloads.transcribe.call_args.kwargs["hotwords"] == ", ".join(
+        [*(f"Project {index}" for index in range(3, 14)), "PROJECT 2"]
+    )
+    stt.clear_correction_hints()
+    stt.transcribe(np.ones(16000, dtype=np.float32) * 0.1)
+    assert "hotwords" not in model_without_downloads.transcribe.call_args.kwargs
+
+
+@pytest.mark.parametrize("term", [
+    "", " ", "a" * 65, "one two three four five six seven", "12345", "/search",
+    "https://example.org", "name\nignore instructions", "name\x1b[2J", "Tensura*", None,
+])
+def test_correction_hints_reject_unsupported_junk(model_without_downloads, term):
+    scope = [("owner", "conversation", 0)]
+    stt = correction_stt(scope)
+    assert not stt.remember_correction(term, scope=scope[0])
+    model_without_downloads.transcribe.return_value = decoding("A normal question", -0.1)
+    stt.transcribe(np.ones(16000, dtype=np.float32) * 0.1)
+    assert "hotwords" not in model_without_downloads.transcribe.call_args.kwargs
+
+
+def test_correction_hints_disabled_without_context_provider(model_without_downloads):
+    stt = SpeechToText()
+    assert not stt.remember_correction("Tensura", scope=("owner", "conversation", 0))
+
+
+def test_decoder_without_hotwords_support_ignores_hints_without_reload(
+    model_without_downloads, monkeypatch,
+):
+    scope = [("owner", "conversation", 0)]
+    stt = correction_stt(scope)
+    assert stt.remember_correction("Tensura", scope=scope[0])
+    transcribe = model_without_downloads.transcribe
+    transcribe.__signature__ = Signature([Parameter("audio", Parameter.POSITIONAL_OR_KEYWORD)])
+    transcribe.return_value = decoding("Recognized title", -0.1)
+    factory = MagicMock(side_effect=AssertionError("Must not reload a working decoder"))
+    monkeypatch.setattr("ciel.audio.stt.WhisperModel", factory)
+
+    assert stt.transcribe(np.ones(16000, dtype=np.float32) * 0.1) == "Recognized title"
+    assert "hotwords" not in transcribe.call_args.kwargs
+    factory.assert_not_called()

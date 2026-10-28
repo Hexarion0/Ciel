@@ -1,6 +1,5 @@
 """Focused spelling corrections reach real memory writes in both runtime paths."""
 
-import json
 from threading import Event
 from unittest.mock import MagicMock
 
@@ -24,9 +23,7 @@ def _conversational_router(reply="Let's keep talking about that."):
     router = MagicMock()
 
     def send(*_args, **kwargs):
-        if kwargs.get("purpose") == "controller":
-            return LLMResponse(json.dumps({"action": "answer", "confidence": 0.99}),
-                               "light", "test")
+        assert kwargs.get("purpose") != "controller"
         if kwargs.get("purpose") == "speech_gate":
             return LLMResponse('{"listener":"assistant","confidence":0.99}', "light", "test")
         return LLMResponse(reply, "chat", "test")
@@ -77,7 +74,7 @@ def test_explicit_user_topic_survives_a_model_answer_for_a_short_correction(
         assert store.get_fact("user:favorite_game").metadata["value"] == "Standoff 2"
         assert turns[-1].provider == "local"
         assert "I've updated that." in turns[-1].content
-        assert router.send.call_count == (2 if controller else 1)
+        assert router.send.call_count == 1
     finally:
         store.close()
 
@@ -175,7 +172,7 @@ def test_canceled_confirmation_cannot_mutate_a_focused_correction(
 @pytest.mark.parametrize("ambient", [False, True])
 @pytest.mark.parametrize("correction", [False, True])
 def test_memory_proposals_explain_the_explicit_confirmation_address_when_needed(
-    tmp_path, monkeypatch, controller, typed, ambient, correction,
+    tmp_path, monkeypatch, capsys, controller, typed, ambient, correction,
 ):
     if correction:
         _seed_game(tmp_path)
@@ -197,6 +194,10 @@ def test_memory_proposals_explain_the_explicit_confirmation_address_when_needed(
         else:
             assert f"Say yes to {yes_action} or no to {no_action}." in reply
             assert "hello Nova, yes" not in reply
+        if typed:
+            tts.begin_stream.assert_not_called()
+            assert reply in capsys.readouterr().out
+        tts.speak.assert_called_once()
         assert tts.speak.call_args.args[0] == reply
         router.send.assert_not_called()
         current = store.get_fact("user:favorite_game")

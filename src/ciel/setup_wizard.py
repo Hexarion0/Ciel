@@ -31,7 +31,8 @@ _API_PROVIDERS = (
     ("openrouter", "OpenRouter", "OPENROUTER_API_KEY"),
 )
 _SEARCH_PROVIDERS = (
-    ("ddgs", "Free search · no account or key", None),
+    ("parallel", "Parallel · free, no account or key", None),
+    ("ddgs", "DuckDuckGo / public Brave · free, no key", None),
     ("brave", "Brave Search", "BRAVE_SEARCH_API_KEY"),
     ("tavily", "Tavily", "TAVILY_API_KEY"),
 )
@@ -100,7 +101,7 @@ def _initial_configuration(current_env: dict[str, str]) -> dict[str, str]:
         "CIEL_LOG_LEVEL": "INFO",
         "CIEL_PREFERRED_NAME": "",
         "INTERNET_HOME_CITY": "",
-        "INTERNET_PROVIDER": "ddgs",
+        "INTERNET_PROVIDER": "parallel",
         "MEMORY_LEARNING_MODE": "confirm",
         "NIM_MODEL": ProviderConfig().nim_model,
         "SCREEN_ENABLED": "true",
@@ -223,17 +224,18 @@ def _select_device(ui: ConsoleUI, configuration: dict[str, str], *, output: bool
 def _configure_search(ui: ConsoleUI, configuration: dict[str, str]) -> None:
     """Select one search service before asking for its key; keep other saved keys."""
     ui.step("Web search")
-    ui.note("Free search needs no account. Optional services use their own API key and quota.")
+    ui.note("Parallel is free without an account or key, with lower usage limits.")
+    ui.note("Brave Search and Tavily use their own API key and quota.")
     ui.note("Ciel uses only your selected search provider, even if other keys are saved.")
     while True:
-        current = configuration.get("INTERNET_PROVIDER", "ddgs")
+        current = configuration.get("INTERNET_PROVIDER", "parallel")
         choices = [
             (value, f"{name} · key configured" if key and configuration.get(key) else name)
             for value, name, key in _SEARCH_PROVIDERS
         ]
         selected = ui.choose(
             "Search provider", choices,
-            default=current if current in {value for value, _label in choices} else "ddgs",
+            default=current if current in {value for value, _label in choices} else "parallel",
         )
         _value, name, key = next(row for row in _SEARCH_PROVIDERS if row[0] == selected)
         if key is None:
@@ -246,12 +248,12 @@ def _configure_search(ui: ConsoleUI, configuration: dict[str, str]) -> None:
         if configuration.get(key, "").strip():
             configuration["INTERNET_PROVIDER"] = selected
             return
-        ui.note(f"{name} needs an API key. Enter a key or choose Free search.")
+        ui.note(f"{name} needs an API key. Enter a key or choose a free search provider.")
 
 
 def _search_label(configuration: dict[str, str]) -> str:
     """Describe the selected search service without exposing credentials."""
-    selected = configuration.get("INTERNET_PROVIDER", "ddgs")
+    selected = configuration.get("INTERNET_PROVIDER", "parallel")
     row = next((row for row in _SEARCH_PROVIDERS if row[0] == selected), None)
     if row is None:
         return f"{selected} · unsupported; choose a provider in setup"

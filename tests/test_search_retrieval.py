@@ -42,7 +42,9 @@ def test_news_backend_preserves_publication_date_and_publisher(monkeypatch):
         "date": "2026-10-20T08:30:00+08:00", "source": "News.MN",
     }]
     monkeypatch.setitem(sys.modules, "ddgs", SimpleNamespace(DDGS=Mock(return_value=client)))
-    result = InternetService(InternetConfig(max_pages=0)).prepare("search the news in Mongolia")
+    result = InternetService(InternetConfig(
+        provider="ddgs", max_pages=0,
+    )).prepare("search the news in Mongolia")
     assert result.kind == "news" and len(result.sources) == 1
     source = result.sources[0]
     assert source.published_at == "2026-10-20T08:30:00+08:00"
@@ -59,7 +61,7 @@ def test_news_backend_falls_back_to_free_text_when_unavailable(monkeypatch):
         "body": "Mongolia rail news: a new railway opens.",
     }]
     monkeypatch.setitem(sys.modules, "ddgs", SimpleNamespace(DDGS=Mock(return_value=client)))
-    result = InternetService(InternetConfig(max_pages=0)).prepare("Mongolia news")
+    result = InternetService(InternetConfig(provider="ddgs", max_pages=0)).prepare("Mongolia news")
     assert result.sources and client.text.called
     assert not result.sources[0].published_at
 

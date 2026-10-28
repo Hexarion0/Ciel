@@ -92,6 +92,7 @@ class ProviderManager:
         max_tokens: int = 1024,
         allowed_providers: tuple[str, ...] | None = None,
         allow_model_fallback: bool = True,
+        nim_reasoning: bool | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
         """Send prompt attempting preferred provider first with automatic fallback."""
@@ -121,12 +122,16 @@ class ProviderManager:
                     model=model if preferred == provider_name else None,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    **({"reasoning_enabled": nim_reasoning}
+                       if provider_name == "nim" and nim_reasoning is not None else {}),
                     **({"allow_model_fallback": False}
                        if provider_name == "nim" and not allow_model_fallback else {}),
                     **kwargs,
                 )
-                if not isinstance(response.content, str) or not response.content.strip():
-                    raise RuntimeError("Provider returned no reply text")
+                if not isinstance(response.content, str) or not (
+                    response.content.strip() or response.tool_calls
+                ):
+                    raise RuntimeError("Provider returned no reply text or tool calls")
                 logger.info(
                     "Successfully generated response via '%s' (model: %s, latency: %.2fs)",
                     provider_name,
@@ -156,6 +161,7 @@ class ProviderManager:
         cancel_event: Event | None = None,
         allowed_providers: tuple[str, ...] | None = None,
         allow_model_fallback: bool = True,
+        nim_reasoning: bool | None = None,
         **kwargs: Any,
     ) -> Iterator[LLMStreamChunk]:
         """Stream response from the first functioning provider."""
@@ -178,6 +184,8 @@ class ProviderManager:
                 continue
 
             emitted = False
+            pending: list[LLMStreamChunk] = []
+            pending_characters = 0
             try:
                 logger.debug("Attempting stream with provider '%s'...", provider_name)
                 for chunk in provider.stream(
@@ -186,22 +194,35 @@ class ProviderManager:
                     temperature=temperature,
                     max_tokens=max_tokens,
                     cancel_event=cancel_event,
+                    **({"reasoning_enabled": nim_reasoning}
+                       if provider_name == "nim" and nim_reasoning is not None else {}),
                     **({"allow_model_fallback": False}
                        if provider_name == "nim" and not allow_model_fallback else {}),
                     **kwargs,
                 ):
                     if cancel_event is not None and cancel_event.is_set():
                         return
-                    emitted |= bool(chunk.delta.strip())
+                    if not emitted:
+                        if not chunk.delta.strip() and not chunk.tool_calls:
+                            # Hold leading whitespace so an empty attempt can fall back
+                            # without publishing fragments from two different models.
+                            pending_characters += len(chunk.delta)
+                            if pending_characters > 256 * 1024 or len(pending) >= 1024:
+                                raise RuntimeError("Provider returned excessive empty chunks")
+                            pending.append(chunk)
+                            continue
+                        emitted = True
+                        yield from pending
+                        pending.clear()
                     yield chunk
                 if emitted or (cancel_event is not None and cancel_event.is_set()):
                     return
-                raise RuntimeError("Provider stream returned no reply text")
+                raise RuntimeError("Provider stream returned no reply text or tool calls")
             except Exception as err:
                 if cancel_event is not None and cancel_event.is_set():
                     return
                 if emitted:
-                    # Switching after speech started would splice unrelated answers.
+                    # A published tool fragment belongs to this response just as text does.
                     raise RuntimeError("Provider stream failed after a partial reply") from err
                 logger.warning(
                     "Provider '%s' streaming failed: %s. Attempting fallback.",

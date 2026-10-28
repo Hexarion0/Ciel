@@ -57,8 +57,8 @@ def search_api(
     disabled environment proxies keep credentials at the selected provider. Exceptions
     expose only a static category or HTTP status, never request/response text.
     """
-    if config.provider == "ddgs":
-        raise SearchProviderError("Free search must use the DDGS search path.")
+    if config.provider not in {"brave", "tavily"}:
+        raise SearchProviderError("Free search must use the selected free search path.")
     name = "Brave Search" if config.provider == "brave" else "Tavily"
     secret = config.brave_api_key if config.provider == "brave" else config.tavily_api_key
     key = secret.get_secret_value().strip() if secret else ""

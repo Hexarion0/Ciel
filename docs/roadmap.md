@@ -1,6 +1,6 @@
 # CIEL development roadmap
 
-Last reviewed: **2026-10-22**. Package version: **0.3.6 development**.
+Last reviewed: **2026-10-28**. Package version: **0.3.6 development**.
 
 The goal is a personal companion with natural voice conversation, persistent memory,
 shared context across voice and chat, and useful awareness of what the user is doing.
@@ -14,10 +14,10 @@ before treating it as ready for everyday use.
 | Voice loop | Wake recognition, local STT, provider streaming, sentence playback, interruptions, captions, actionable microphone startup errors | Sustained microphone/speaker acceptance of the current combined changes |
 | Voices | Default CPU Pocket streaming; local Piper fallback; optional custom Turbo HQ; bundled worker and manifest | Reproducible custom-voice installation and private asset import |
 | Providers | NIM, Groq, OpenRouter, Ollama, provider-specific models, contextual routing, empty-reply failover, latency tracing | Usage totals, budget controls, broader live fallback verification |
-| Controller | Local handlers for explicit commands; configured-provider fallback; one JSON repair within the decision deadline; admitted turns cannot select silence | Broader real-conversation decision-quality evaluation |
-| Memory | SQLite conversations, shared voice/chat context, indexed older user dialogue, structured state, current facts/revisions, optional local semantic recall, forgetting | Live cross-channel and voice-based restart acceptance, summary quality evaluation |
+| Controller | Exact local handlers, then native reads selected by the main responding model; shared task context, bounded tool rounds, and final synthesis; guarded legacy diagnostics | Broader real-conversation quality and outage evaluation |
+| Memory | Markdown primary notes, migration/paired backups, bounded source retrieval, fresh-launch curated context, indexed same-owner archives, optional local hybrid recall, guarded nightly review/apply, current facts/revisions, forgetting | Live voice/chat restart acceptance, local embedding evaluation, overnight scheduler and review acceptance |
 | Actions | Trusted module discovery, validation, local telemetry, allowlisted Linux app launching | Model-selected calls, reminders, live desktop launch acceptance |
-| Internet | Free DDGS search; optional selected Brave/Tavily APIs; article/news/feed reading, dates, supported partial answers, shared source observations | Broader live news quality, site compatibility, PDF/media extraction |
+| Internet | Free Parallel search; optional DDGS/Brave/Tavily; article/news/feed reading, dates, supported partial answers, shared source observations, full research goals, relevance checks, and a shared 30-second native research budget | Broader live news quality, site compatibility, PDF/media extraction |
 | Personality | Modular persona prompt, continuity rules, opinions/initiative, editable preferences, voice-requested style updates/reset | Continued evaluation during real conversations |
 | Setup | Configure/review/save before selected package/model installation; CPU recognition choice by default; preserved existing settings; missing-asset reporting | Automatic Turbo setup, managed desktop runtime, clean-machine validation |
 | Desktop web interface | PC-local voice/text chat, live captions, status, and controls | Same-Wi-Fi phone access and desktop acceptance |
@@ -30,6 +30,26 @@ microphone accuracy, speaker quality, or a completed release. Historical evidenc
 is in [release checks](release-checks.md), [latency findings](conversation-latency.md),
 and the [changelog](../CHANGELOG.md). The repository has a `v0.2` tag; no stable
 `v0.3` tag is recorded yet.
+
+## Agreed next upgrade — 2026-10-25
+
+The [smarter CIEL design](smarter-ciel.md) adds a quality-first sequence before
+broader computer control: representative conversation checks and a shared normal
+research budget of 30 seconds, then optional temporary observation of both monitors
+and useful initiative. Zen pause detection and sustained desktop acceptance remain
+unverified. Anime comments wait for a pause; brief coding hints may be offered
+while anime plays elsewhere after evidence of a repeated unresolved problem.
+
+The default native conversation path now shares a bounded task projection across
+voice and chat, handles retries/corrections, and reserves a final sourced answer
+within its normal 30-second research budget. The [conversation/search evaluation](
+conversation-search-evaluation.md) records automated, synthetic hosted-model, and
+public-retrieval checks. Sustained microphone acceptance and the optional observation
+coordinator remain pending; the legacy controller diagnostics retain their old bounds.
+
+These are planned capabilities. Existing screen capture remains on request until
+the optional observation coordinator is implemented. Desktop edits, commands,
+clicking, and typing are deferred to a later phase.
 
 ## Proposed feature order
 
@@ -136,6 +156,14 @@ to be available just because the client is configured.
 - [x] Configurable automatic/confirmed/explicit learning and confirmation before conflicting replacements.
 - [x] Persistent pause/resume for saved-fact recall while retaining conversation continuity.
 - [x] Project decision/constraint journals, current next steps, and owner inspection/backup commands.
+- [x] Owner-editable Markdown source of truth with sibling-workspace migration and paired backups.
+- [x] Curated `MEMORY.md`/`USER.md` bootstrap; detailed notes and past same-owner launches on demand.
+- [x] Bounded `memory_search`/`memory_get` with actual source paths, line ranges, and privacy checks.
+- [x] Rebuildable FTS5 workspace index, fresh edit/delete reconciliation, and bounded text/hash caches.
+- [x] Keyword access during optional local hybrid inference, without implicit model downloads.
+- [x] Authenticated daily checkpoints before compaction/close, with private-context exclusions.
+- [x] Runtime 03:00 reflection with recall gates, tool-free evidence plans, and `DREAMS.md` review.
+- [x] Explicit owner apply for merges/conflicts, guarded preimages, and stale-owner/reset rejection.
 - [x] Shared character budgets and atomic summary commits across independent managers.
 - [x] Editable personality file and managed style updates/reset by voice.
 - [x] Modular personality and continuity prompt with bounded initiative and reasoned opinions.
@@ -145,14 +173,20 @@ to be available just because the client is configured.
 - [x] Keep internal interruption status out of spoken dialogue and provider reply examples.
 - [ ] Teach a fact by voice, confirm it, restart, and recall it on the target desktop.
 - [ ] Verify rejection and forgetting behavior through the actual microphone.
+- [ ] Verify a live scheduled reflection, owner review/apply, and paired backup/restore on Linux.
+- [ ] Evaluate an installed local embedding model before enabling optional semantic/hybrid recall.
 - [ ] Test active follow-ups and filtering of speech addressed to other people after
       removing model-selected silence; check the earlier optional intent path separately.
 - [ ] Finish [release acceptance](release-checks.md) before tagging stable v0.3.
 
-Memory recall uses words and aliases by default. Optional semantic recall uses a
-configured local Ollama embedding model and an explicit indexing step; it remains
-disabled by default. Forgetting retains the chat archive. Ambient classification
-estimates the intended listener without identifying speakers.
+Memory recall uses local keyword indexes by default. Optional semantic/hybrid
+recall requires an accepted local Ollama embedding model and remains disabled by
+default. The structured fact vector index has an explicit indexing command;
+workspace search refreshes its own derived vectors in the background. Fresh launches
+retain curated memory without replaying old conversation. Reflection runs while a
+CIEL process is alive and applies the configured learning/review gates. Forgetting
+retains raw chat archives and prior backups. Ambient classification estimates the
+intended listener without identifying speakers.
 
 ## Installation and custom voice
 

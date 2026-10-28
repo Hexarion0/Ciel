@@ -6,14 +6,15 @@ older benchmark reports describe the settings used for their recorded runs.
 
 ## Providers and routing
 
-The current default NIM model is `nvidia/nemotron-3.5-lightning-30b-a3b` for both
-conversation and complex tasks. `NIM_MODEL` and `NIM_COMPLEX_MODEL` override those
-choices. The [availability and latency report](conversation-latency.md) records the
-earlier Super comparison and the later endpoint failure that prompted this change.
-Nemotron 3 and 3.5 requests disable thinking by default for conversational replies.
+Normal requests select `nvidia/nemotron-3.5-super-vl-120b-a12b`; complex work selects
+`nvidia/nemotron-3-ultra-550b-a55b`. NIM is preferred for ordinary conversation when
+configured. `NIM_MODEL` and `NIM_COMPLEX_MODEL` override those choices.
+The [availability report](conversation-latency.md) records successful direct inference,
+streaming, native tools, and reasoning on/off on the replacement Super 3.5 VL endpoint.
+It replaces the older Super 120B endpoint that returned 404 despite being listed.
 Missing or retired models (HTTP 404/410) immediately try a different configured NIM backup.
-`NIM_FALLBACK_MODEL` defaults to the same model, so an unavailable endpoint is not
-retried through an implicit larger backup. Explicit backup choices remain supported.
+`NIM_FALLBACK_MODEL` defaults to Ultra 550B. A warning identifies failover, and the
+reply/status records the actual served model. There is no implicit Lightning downgrade.
 Empty or reasoning-only responses also try that backup once; reasoning is never
 used as the spoken answer. Fallback never splices a new answer into partial speech.
 Standalone time and date questions are answered from the local clock without an
@@ -25,14 +26,35 @@ words or long messages alone do not select the complex model; implementation,
 debugging, architecture, and explicit `/strong` requests do. `/fast` and `/deep`
 remain available, and continuation requests retain the preceding task's routing.
 
-Action decisions use configured providers in this order: NIM, Groq, OpenRouter,
-then Ollama. `CONTROLLER_MODEL` applies to NIM; other providers use their own default
-model. Provider fallback and one malformed-JSON retry share
-`CONTROLLER_TIMEOUT_SECONDS`. Once a turn is admitted, the action model chooses a
-reply, clarification, search, page read, or local tool; it cannot choose silence.
+`/reasoning` shows this session's preference. `/reasoning auto|on|off` changes it
+without a model call; requests already running keep their original snapshot.
+`auto` enables thinking for complex tasks and keeps ordinary replies quick.
+`NIM_REASONING` controls startup (`auto` by default). Reasoning is requested only
+where the selected provider/model supports it and is excluded from displayed or
+spoken output. Thinking reserves at least 8,192 completion tokens because NIM counts
+hidden reasoning against that budget. Spoken answers retain their short prompt.
+
+Typed desktop and paired chat answers can use up to 4,096 output tokens and keep
+paragraphs, lists, and code. Desktop typed answers are displayed and spoken. Longer
+answers receive a spoken excerpt of at most 80 words, including a pointer to the
+full chat answer; code stays visible and is acknowledged rather than read aloud.
+No extra model call is used for this excerpt. Paired chat workers remain text services.
+Spoken requests retain their 400-token answer allowance and brief voice style;
+thinking can reserve a larger internal completion allowance as described above.
+The terminal clears the visible screen on launch, shows a boxed status panel, and
+keeps an editable ruled composer below output. It shows actual served models and
+retains a plain-text fallback for pipes and limited terminals.
+
+The main response model answers admitted turns directly and requests native tools
+when needed. There is no separate decision-model request before ordinary chat.
+Tool results return to normal conversation routing. Invalid tool arguments,
+unavailable tools, repeated calls, and stale results are rejected by the application.
+`CONTROLLER_MAX_TOOL_STEPS` now bounds the main loop to three through five rounds.
+`CONTROLLER_MODEL` remains for legacy diagnostics and progress utilities; it does
+not choose tools in the default flow. Web evidence remains verified before speech.
 Explicit stop/mute controls and filtering of room speech remain application decisions.
-The synthetic checker, `scripts/check_controller.py`, records every decision-model
-request and any successful format repair without loading personal conversation data.
+The older `scripts/check_controller.py` exercises the retained legacy controller;
+it does not measure the default main-model tool loop.
 OpenRouter defaults to its [Free Models Router](https://openrouter.ai/docs/guides/routing/routers/free-router),
 `openrouter/free`; the underlying model, availability, and latency can vary.
 
@@ -42,6 +64,58 @@ classification require Ollama, and web retrieval stays disabled, including after
 context trimming or restart. Clearing that conversation resets its restriction.
 An Ollama outage reports failure or defers background work for that conversation.
 Ollama remains an optional provider for ordinary routing.
+
+## Web search
+
+After a failed lookup, “Why?” asks Ciel to explain the failure while keeping your
+question available. A correction such as “chapter, episode, no, no, season four”
+updates that question to season four. Ciel keeps the original transcript in history
+and uses the explicit correction for the lookup. Mentioning chapter and episode
+while correcting yourself does not request an anime-to-novel reading point.
+
+After an episode lookup, asking where to continue in the novel or manga changes
+the requested answer. Ciel keeps the series and season while dropping the completed
+latest-episode question. In that reading context, “light node” is interpreted as
+light novel for the query; the saved transcript stays unchanged. Earlier assistant
+episode details still require independent sources before they can support a mapping.
+
+Follow-ups keep the current request across voice and typing. For example, after
+“Search where Amber Harbour episode 12 continues in the light novel,” type
+`Amber Harbor*`, then say “try again” if the lookup failed. Ciel keeps the episode
+and requested reading point. “Continue” can use evidence already retrieved for an
+interrupted reply. “Wait” keeps that task available; “cancel” or “don't search”
+ends it. A new topic replaces the old task, and a fresh launch starts a new chat
+while retaining saved memories.
+
+“Search Tensura” asks for a supported overview without needing another question.
+For questions with several parts, Ciel gives the supported findings and identifies
+requested details she could not verify. Equivalent repeated searches stop, while
+useful new leads can add evidence. Default native research uses a shared 30-second
+budget and reserves time for the answer and evidence checks. If those checks fail,
+she explains the failure rather than presenting unchecked text as verified.
+
+A short explicit name correction such as `Tensura*` or `I meant Tensura` completes
+the nearby pending search with that subject. It keeps the original requested scope
+without adding a season or release-date question. A correction typed within two
+minutes of a spoken search keeps the same spelling-repair context. Both typed and
+spoken searches receive one spoken lookup acknowledgement and a spoken final answer.
+Repeated web steps share one progress announcement; the full typed answer stays in chat.
+
+Evidence checks use the configured normal responder without thinking, regardless
+of chat reasoning mode. A timeout is reported as an evidence-check timeout; it is
+not treated as proof that the retrieved pages lack an answer.
+
+Public search defaults to Parallel's free anonymous service. No account or API key
+is required; the free service has lower usage limits than paid access. Ciel reads
+the returned source excerpts and, when needed, public pages to support her answer.
+See the [Parallel search documentation](https://docs.parallel.ai/integrations/mcp/search-mcp).
+
+`ciel setup` offers Parallel, the free DuckDuckGo/public Brave option (`ddgs`),
+Brave Search, and Tavily. `INTERNET_PROVIDER=parallel` selects Parallel in `.env`.
+Only the selected provider is used, so keeping other API keys saved does not spend
+their quota or enable automatic fallback. Switching providers preserves those keys.
+An existing explicit provider setting remains selected until you change it.
+`INTERNET_ENABLED=false` disables all public retrieval.
 
 ## Screen questions
 
@@ -82,8 +156,47 @@ See [screen awareness](screen-awareness.md) for implementation and live checks.
 
 ## Personality and memory
 
-See [memory and personality](memory-persona.md) for confirmed goals and profiles,
-contextual recall, structured conversation state, and example conversations.
+See [memory and personality](memory-persona.md) for Markdown migration, source
+retrieval, confirmed goals/profiles, nightly review, and example conversations.
+
+The default database `data/ciel.db` has a sibling `data/ciel.workspace/` containing
+`MEMORY.md`, optional `USER.md`, dated `memory/*.md` notes, and the owner-facing
+`DREAMS.md` reflection log. Existing saved facts migrate once; SQLite retains
+conversation archives, settings, and structured caches. A new launch starts fresh
+dialogue with bounded curated memory. Daily notes and old same-owner conversations
+remain available when you request a memory lookup.
+
+Ask `Search my memory for Atlas recovery` or
+`Read memory/atlas.md lines 10-30`. CIEL can search notes and read bounded line
+ranges through `memory_search`/`memory_get`, with source evidence for the answer.
+Keyword search needs no extra model. Edits/deletions refresh the derived index;
+`ciel memory index --force` rebuilds it and `ciel memory reset-index` clears only
+derived workspace search data. Private notes require local-only context.
+
+```bash
+ciel memory status
+ciel memory get MEMORY.md --from 1 --lines 40
+ciel memory flush
+ciel memory consolidate
+ciel memory review
+ciel memory apply RUN_ID --action 0
+```
+
+`consolidate` may use the configured background provider after live owner evidence
+passes recall/relevance gates. `review` shows original quotes and source lines;
+`apply` confirms the displayed actions without an AI request. A running CIEL
+process schedules reflection at `MEMORY_CONSOLIDATION_TIME=03:00` in the OS timezone.
+The default `confirm` learning mode queues durable additions for review. Merges,
+supersessions, and conflicts require approval in all modes. Set
+`MEMORY_CONSOLIDATION_ENABLED=false` to disable reflection.
+Daily working-note capture has its own `MEMORY_DAILY_CAPTURE_ENABLED` setting;
+`explicit` learning mode alone does not disable those notes.
+
+`ciel memory backup /path/to/new-snapshot.db` creates that SQLite file and its
+`new-snapshot.workspace/` sibling. Keep and restore both; the Markdown directory
+includes private notes, provenance, and preimages. The command refuses existing
+destinations. Recall pause disables model-facing workspace lookup while leaving
+owner CLI inspection, saved data, and learning available.
 
 The voice persona is a warm, mature, confident feminine companion: playful in
 casual conversation, focused during tasks, and patient when you're frustrated.
@@ -121,8 +234,9 @@ the application handles common direct facts (preferred name, favorite items, and
 project dates), their corrections, and explicit `remember ...` / `forget ...`
 commands. Confirmed facts update one keyed record with a bounded revision
 history. Other facts can be saved with `remember ...`. Saved name and favorite
-queries can be answered locally. Recall ranks related words and a small set of
-aliases; it does not use embeddings or an additional model.
+queries can be answered locally. Keyword recall ranks related words and a small
+set of aliases; optional hybrid recall uses a selected local embedding model after
+its quality evaluation passes. It remains disabled by default.
 For example: `Ciel, my favorite game is CS2`, then `Ciel, yes` to confirm.
 A correction such as `Actually, my favorite game is Valorant` also needs
 confirmation. `Ciel, forget my favorite game` removes the saved fact. Forgetting removes the durable fact
@@ -132,10 +246,10 @@ paraphrases outside the known wording can still require explicit cleanup.
 Forgetting a supported topic that has no saved fact leaves other facts intact.
 Saving a new value keeps older forgotten values suppressed unless you explicitly
 save that same value again.
-Conversation context is scoped to the persona version. The companion persona
-starts a separate context while the legacy desktop chat stays archived in SQLite.
-Saved facts and preferences remain shared; conversation summaries are excluded
-from general memory recall and only the active session's summary is replayed.
+Conversation context is scoped to the current foreground launch and paired owner.
+Saved facts and curated memory remain shared; old launches stay archived in SQLite
+and require a memory lookup. Only the current authorized conversation's summary
+and recent turns support automatic dialogue replay.
 Recalled facts include their recorded timestamp so relative statements such as
 "this is day three" don't become claims about today. Saved project anchors are
 included even for informal questions, with elapsed calendar days and inclusive
@@ -194,6 +308,12 @@ console mode. Typed requests use the
 same conversation, memory confirmations, and validated actions as voice requests.
 A new typed message cancels the previous request. Replies can still be spoken.
 
+If a microphone cannot open, an interactive `ciel` session or `ciel web` continues
+with typed chat. The launch panel and `/status` show the microphone as unavailable.
+Spoken replies remain available when enabled, but microphone capture stays off for
+the run. Reconnect or select a working input in setup, then restart for voice;
+unmuting does not retry the device.
+
 | Command | Behavior |
 | --- | --- |
 | `/mute` | Toggle microphone input off/on. Typed messages and spoken replies still work. |
@@ -206,6 +326,8 @@ Use `ciel start --no-text-input` to disable the keyboard reader, or
 `--text-input` to enable it explicitly (including redirected stdin). EOF closes
 keyboard input while leaving voice listening active. Microphone mute is temporary
 and does not change `.env`; it discards pending voice capture, not conversation memory.
+With `--no-text-input`, terminal mode exits if the microphone cannot open. The web
+page provides its own text input independently of that terminal option.
 
 Listening keeps microphone ingestion separate from wake inference, transcription,
 and callbacks. It records immediately after wake detection without a spoken
@@ -276,7 +398,9 @@ automatically authorize saving personal facts.
 
 Summaries run separately
 from voice replies, wait for at least six new older messages, process bounded
-batches, and resume across restarts. Context keeps a bounded tail of messages
+batches, and retain progress in each archived conversation. Each new foreground
+launch starts fresh dialogue while retaining saved personal facts and older archives.
+Context keeps a bounded tail of messages
 awaiting a summary so batching does not immediately lose the preceding exchange.
 Provider failures and empty summaries leave the cursor unchanged for a later
 retry. The providerless fallback advances only through the turns it describes.
@@ -290,9 +414,14 @@ Existing explicit `.env` choices still apply; set `AMBIENT_LISTENING=true` to
 enable it in an older configuration. No additional launch flags are needed.
 `--no-ambient` selects wake-word mode for one run. Local Silero VAD captures
 speech without a wake phrase at 16 kHz. Direct addresses are handled locally.
-With the action controller enabled, admitted follow-ups get a reply or clarification;
+With the default main-model flow, admitted follow-ups get a reply or clarification;
 the model cannot choose silence. Explicit stop/mute and clearly unrelated room speech
 remain application controls.
+
+In the main-model flow, `AMBIENT_FOLLOWUP_POLICY=strict` also applies the existing
+listener-confidence gate to inferred speech within the active follow-up window.
+Explicit wake phrases and typed messages skip that gate. This optional speech filter
+does not choose tools; the main response model still handles admitted requests.
 
 The earlier intent path (`CONTROLLER_ENABLED=false`) uses an economical `speech_gate`
 request for possible follow-ups within `AMBIENT_FOLLOWUP_SECONDS` (300 seconds by default).
@@ -448,6 +577,12 @@ process can still change free memory between the check and inference.
 
 
 ## Speech recognition accuracy
+
+Explicitly typed subject corrections for a pending search also provide temporary
+spelling hints to STT. Only the corrected name is used, for up to five minutes and
+12 names in the current conversation. Hints clear on owner, session, or reset
+changes and are never saved as personal facts. They influence future decoding;
+the original recognized transcript remains unchanged.
 
 Command STT defaults to `STT_MODEL=small.en` and `STT_BEAM_SIZE=5`.
 Larger models and wider beams need more inference time; compare recognition on

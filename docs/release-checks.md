@@ -2,6 +2,451 @@
 
 Run from the repository root with the development environment active.
 
+## Repository review before commit — 2026-10-28
+
+- Reviewed pending native response/provider/search, memory, desktop/audio/chat/screen,
+  terminal, configuration, evaluation script, and documentation changes.
+- Fixed archived recall privacy across paired channel projections, including transitive
+  membership before any summary exists. Local-only recall and owner/reset boundaries
+  retain regression coverage with temporary synthetic databases.
+- Native screen calls require an observation request in the current user wording.
+  Capability questions, acknowledgements, and discussion of a prior view cannot authorize
+  fresh pixels, even if the model requests the screen tool. Explicit rechecks still work.
+- Strict ambient mode checks inferred speech before persistence or tools. Default
+  conversation mode and explicit wake/keyboard messages retain their normal response path.
+- Translation checks cancel their own provider work at timeout without canceling the
+  owner's request or accepting a late result. All four findings have regression tests
+  that reproduced the failure before the corresponding fix.
+- Lint, Python 3.10 syntax checks, dependency consistency, shell syntax, isolated wheel
+  build, and installed-package CLI/resource/behavior checks passed. Credential-pattern
+  and pending-file scans found no credentials, recordings, databases, or model artifacts.
+  Final ordinary suite: **4,139 passed, 5 hardware tests deselected**, 97.41 seconds.
+  Local diagnostics: `data/diagnostics/final-review/`. Hardware acceptance remains separate.
+
+## Spoken desktop typed replies — 2026-10-28
+
+- Desktop typed messages, spelling corrections, local replies, and search results
+  now use speech as well as their full written display. Native and legacy response
+  paths both retain the text response budget and code in chat. Search work receives
+  one audible acknowledgement across repeated lookup steps.
+- A deterministic excerpt keeps typed speech within 80 words, including its pointer
+  to the full answer. It filters internal notes, reasoning, code, and citation markers
+  without generating new factual claims or making another model request. Code-only
+  replies receive a short spoken acknowledgement.
+- Focused checks cover native and legacy desktop delivery, verified searches,
+  screen replies, memory proposals, cancellation, playback failure, and missing
+  microphones. The excerpt helper passed **28 tests** without model or audio access.
+  The final ordinary suite passed **4,101 tests**, with **5 hardware tests deselected**,
+  in 92.33 seconds.
+- Disabled speech and canceled turns stay silent. Playback exceptions keep the full
+  typed answer visible once without generating another answer. Paired headless chat
+  workers retain text delivery. Ruff, whitespace checks, isolated wheel build, and
+  packaged excerpt checks passed. Local diagnostics: `data/diagnostics/typed-speech/`.
+- Manual acceptance: restart `ciel`, type a short question, type a search and a
+  spelling correction, then request a long explanation with code. Expect audible
+  replies and one full written answer; code stays in chat. Check `/stop` during
+  playback and typed replies with the microphone muted or unavailable. These automated
+  checks mock audio hardware and do not establish speaker acceptance.
+
+## Episode-to-reading follow-up regression — 2026-10-28
+
+- Replayed latest episode → novel continuation using the supplied episode title.
+  Desktop voice, desktop typing, and headless chat send the new reading outcome to
+  retrieval, carrying the series/season without concatenating both full requests.
+  Contextual “light node” interpretation affects query data only, not raw transcripts.
+  A canceled lookup or independently named topic does not inherit the series.
+- Unverified mapping replies skip the episode question when the user supplies an
+  episode number or title. Requests without an episode retain that clarification.
+  Related plot summaries and chapter mentions remain insufficient mapping evidence.
+- Focused reading, episode, chat, legacy runtime, and goal checks: **87 passed**.
+  Full ordinary suite: **4,067 passed, 5 hardware tests deselected**, 93.26 seconds.
+  Ruff, whitespace checks, isolated wheel build, and packaged behavior checks passed.
+- Two real Parallel/model probes sent the corrected continuation goal in one lookup
+  each. Neither established a supported reading point. The second returned the
+  uncertainty reply in 14.104 seconds without asking for the title again. These are
+  public synthetic-history probes, not microphone acceptance or proof of broad
+  retrieval quality. Diagnostics: `data/diagnostics/reading-followup/`.
+
+## Latest-episode search regression — 2026-10-28
+
+- Replayed the reported latest-Tensura-episode → “Why?” → spoken season-four
+  correction. Ciel retains the title and requested outcome, discards the abandoned
+  scope words in its task projection, and preserves the raw transcript. Desktop
+  voice and headless chat regressions cover the corrected request.
+- Ciel explains recognized application verification failures without another model
+  or web call. It does not infer that the retrieved pages lacked the answer.
+- Initial queries cannot introduce a season absent from the owner's task. Latest
+  episode checks reject unrelated premiere/dub announcements. Reading-point fallback
+  requires a reading request and respects manga versus novel wording.
+- One bounded report repair can correct invalid JSON/quotation output. Source checks
+  recognize hash-numbered rows under an Episode table header, date abbreviations,
+  and wording such as “24th and final episode.” Fabricated numbers, missing source
+  support, canceled work, and repair loops remain rejected.
+- Full ordinary suite: **4,051 passed, 5 hardware tests deselected**, 96.39 seconds.
+  Final focused checks passed **127 tests**. Ruff, whitespace checks, isolated wheel
+  build, and packaged behavior smoke checks passed.
+- Public Parallel/model reproduction returned a cited latest-listed-episode answer
+  in 10.110 seconds. The follow-up replay explained “Why?” in 0.006 seconds with no
+  lookup, then retained season four and returned cited partial findings after one
+  lookup in 16.160 seconds. Partial findings retained an uncertainty note.
+  These are sampled public searches, not microphone or provider-availability guarantees.
+  Local diagnostics: `data/diagnostics/tensura-season-repair/`.
+
+## Task continuity and useful search answers — 2026-10-28
+
+- Full ordinary suite: **4,026 passed, 5 hardware integration tests deselected**
+  in 90.33 seconds. Focused task/search checks: **177 passed**, including **39
+  conversation replays** through desktop and chat. Ruff and `git diff --check` passed.
+- The eight-case live configured-model evaluation passed **8/8** with synthetic
+  dialogue and evidence: title repairs, medium/season amendments, retry, interrupted
+  continuation, compound questions, and partial findings. Each case made one lookup
+  and three logical model requests, completing in **3.373–12.250 seconds**. Earlier
+  probes encountered provider and evidence-check timeouts; this sample does not
+  establish continuous provider availability.
+- A real Parallel lookup for an overview of Python returned cited findings from
+  official `docs.python.org` documentation in **7.043 seconds**. This is a public
+  source-retrieval smoke check, not a broad live-search quality benchmark.
+- A separate temporary paired-session check passed voice task → Telegram title
+  correction → voice retry. Unpairing removed access to the shared projected task.
+- Deadline tests cover slow lookup and model code that ignores cancellation, final
+  synthesis/checking reserves, source retention, and rejection of late output.
+  Control tests verify cancellation is retained in raw dialogue so another channel
+  cannot revive canceled work with “again.”
+- An actual desktop stream interruption replay verifies retrieved evidence is
+  archived with the interrupted answer, then reused by typed “continue” with no
+  repeated lookup. The related audio/privacy/runtime group passed 210 checks.
+- The isolated wheel build and packaged task/deadline/gap-parser imports passed.
+  Diagnostics are under ignored `data/diagnostics/task-search/`. Reproduction,
+  coverage, and limits are in [conversation/search evaluation](conversation-search-evaluation.md).
+- Real microphone/speaker acceptance remains separate; no personal recordings,
+  saved conversations, or screen captures were sent in these evaluation runs.
+
+## Search corrections and recognition hints — 2026-10-28
+
+- The complete ordinary regression run passed **3,901 tests**, with **5 hardware
+  integration tests deselected** (85.84 seconds). Ruff, `git diff --check`, the
+  wheel build, and packaged correction/STT/compatibility smoke checks passed.
+- Replayed the supplied TensorFlow → `Tensura*` exchange with synthetic sources.
+  A name correction completes the admitted search directly, preserves the user's
+  scope, and avoids a new clarification or alternating generated search subjects.
+  Raw user turns retain their original wording.
+  A live replay through the configured Super 3.5 VL model, with temporary history
+  and synthetic evidence, made one `Tensura` lookup and returned a cited answer.
+- Desktop search progress speaks once for voice requests and recent typed subject
+  repairs of those requests. Other typed messages and typed final answers remain
+  display-only. Tests cover streaming, repeated reads, cancellation before lookup,
+  quoted/negated search mentions, unrelated topics, and expired voice preference.
+- STT accepts only explicit owner-provided spelling hints, bounded to 12 names and
+  five minutes. Tests cover expiry, owner/session/reset revocation, retry decoding,
+  unsupported decoder versions, and preserving raw transcripts and confidence.
+- Live synthetic checks reproduced a valid web report being withheld after the
+  independent relevance check timed out. That check now uses the normal responder
+  with reasoning disabled, without changing the eight-second bound or accepting
+  unchecked claims. Timeout/provider failures receive accurate empty-source replies.
+  A synthetic check under chat reasoning `on` completed successfully in 0.757s.
+- During validation, a cancellation deadlock was reproduced with a full audio queue.
+  Final sentinel delivery and worker finalization now notice cancellation promptly.
+  Deterministic regressions keep active inference resources owned until the worker
+  actually finishes, and reject stale playback.
+- Focused search/correction checks, STT checks, and verification/routing checks passed.
+  Real microphone recognition of the corrected name remains a hardware acceptance
+  step; synthetic checks do not measure that accuracy.
+
+## Model selection, reasoning, and terminal chat — 2026-10-28
+
+- The complete ordinary regression run passed **3,821 tests**, with **5 hardware
+  integration tests deselected** (266.77 seconds). Ruff passed for `src`, `tests`,
+  and `scripts`; `git diff --check` passed.
+  The subsequent replacement-model and restored-panel changes passed 312 focused
+  provider/routing tests and 109 terminal/startup/CLI tests.
+- The saved local configuration and package defaults select Super 3.5 VL 120B for normal
+  conversation, Ultra 550B for complex work, and Ultra 550B for NIM fallback.
+  Replies and `/status` report the actual served model.
+- Synthetic live requests on 2026-10-27 found Super 120B listed but returning 404
+  for inference. Ultra 550B answered, served the normal fallback, handled explicit
+  reasoning on/off, and completed an automatic-reasoning native tool/result loop.
+  No personal histories or screen pixels were used.
+  A fresh 2026-10-28 check reproduced Super's inference 404 and a successful
+  Ultra inference response despite both models appearing in the catalogue.
+- The replacement `nvidia/nemotron-3.5-super-vl-120b-a12b` passed direct synthetic
+  inference with reasoning off and on, a native tool/result loop, and a streaming
+  reply with the ordinary voice budget on 2026-10-28. No fallback was involved.
+  NVIDIA returned backend alias `private/nvidia/nemotron-3.5-super-120b-a12b`.
+  Actual CIEL routing also completed reasoning-off greeting, reasoning-on arithmetic,
+  and a two-round native tool/result reply using the new public model identifier.
+- `/reasoning auto|on|off` is a local session control in the terminal and paired
+  text chat. Mode selection is snapshotted for each request. Tests cover the
+  supported NIM template flag, hidden-token allowance, and suppression of separate
+  reasoning fields and split thinking tags without discarding native tools.
+- Voice keeps its brief prompt and ordinary 400-token answer allowance. Typed
+  desktop and paired chat allow 4,096-token answers with paragraphs and complete
+  code. Desktop typed replies stream as text without initializing speech, including
+  when `CONTROLLER_ENABLED=false` selects the retained legacy intent flow.
+- The terminal clears the visible interactive screen at launch, restores its boxed
+  status panel after initialization, and keeps the editable ruled composer.
+  Synthetic PTY checks cover Unicode input, interruption,
+  resizing, narrow/plain terminals, safe output, and terminal-mode restoration.
+  Fenced code retains indentation and original source line boundaries for copying.
+- The wheel built successfully. A smoke check imported its actual packaged modules
+  and verified model defaults, reasoning request flags, local toggle handling,
+  code rendering, and the text streaming module.
+- These checks do not establish real microphone/speaker acceptance or guarantee
+  future hosted-model availability and latency.
+
+## Main-model native tools — 2026-10-27
+
+- The complete ordinary suite passed **3,725 tests**, with **5 hardware integration
+  tests deselected**. The full run required local socket access for synthetic web
+  and Wayland-session tests. Ruff passed for `src`, `tests`, and `scripts`, and
+  `git diff --check` passed.
+- Default desktop and text-chat paths no longer ask a separate controller to choose
+  the next action. Ordinary turns use one main-model request. Native web, memory,
+  and contextual screen calls preserve real tool-call IDs and result messages.
+- Real callback regressions cover full follow-up context, raw-note search/get,
+  original-wording action authorization, local-only histories, cancellation/reset,
+  active screen task revisions, speech repairs, and fresh web-pause changes.
+- Native adapter tests cover all four providers, fragmented arguments, tool-only
+  completions, malformed fields, fallback restrictions, and image/privacy boundaries.
+- Web reports retain quote, number, scope, translation, and semantic relevance
+  checks before speech. Relevance checks use normal conversation routing and a
+  separate bounded worker pool, so an occupied retrieval worker cannot starve them.
+- Synthetic live probes against the configured NIM Lightning model passed a
+  one-request greeting and both synchronous and streaming two-request tool loops.
+  No personal histories or screen pixels were sent. These small checks establish
+  native tool compatibility, not live voice latency or general reasoning accuracy.
+- The wheel built successfully. A smoke check imported its actual packaged modules
+  and executed a synthetic native tool/result/answer loop from the wheel.
+- `CONTROLLER_ENABLED=false` retains the legacy desktop intent flow. The old
+  controller checker remains a legacy diagnostic rather than the default-path test.
+
+## Controller latency — 2026-10-27
+
+- The complete ordinary suite passed **3,565 tests**, with **5 hardware integration
+  tests deselected**. Ruff passed for `src`, `tests`, and `scripts`.
+- An eight-request alternating live comparison measured median decision time of
+  **2.186 s before** and **1.247 s with compact output**. All eight ordinary/contextual
+  sample decisions used the expected action. This measures routing, not total voice latency.
+- Four actual-callback regression cases verify screen turns recall memory once
+  instead of twice, preserving keyboard/voice behavior and protected history.
+- Format repair retains both memory tools. Current follow-ups are presented in
+  their own user message, separately from labeled historical context.
+- The broader live routing sweep passed **21/24**. Search-failure explanations,
+  ambiguous references, and configured-city weather remain unreliable in subsequent
+  probes. Prompt changes did not reliably fix these; they are recorded as open model
+  behavior rather than passing checks. See [latency findings](conversation-latency.md).
+
+## Markdown memory implementation and pending acceptance — 2026-10-27
+
+The complete ordinary suite passed **3,559 tests**, with **5 hardware integration
+tests deselected**, using isolated data and mocked devices/providers. Ruff passed
+for `src`, `tests`, and `scripts`; `git diff --check` passed. The focused workspace,
+cache, and search run also passed 105 tests. This records automated behavior, not a
+live microphone, installed embedding model, or overnight provider run. Reproduce
+the complete check and inspect the focused memory/channel cases with:
+
+```bash
+.venv/bin/pytest -o addopts="-ra -m 'not integration'" -q
+.venv/bin/pytest tests/test_memory_workspace.py tests/test_memory_workspace_cache.py \
+  tests/test_workspace_search.py tests/test_memory_workspace_cli.py \
+  tests/test_memory_workspace_privacy.py tests/test_memory_workspace_runtime.py \
+  tests/test_memory_tools.py tests/test_memory_lifecycle.py \
+  tests/test_memory_consolidation_parity.py tests/test_chat_session.py \
+  tests/test_conversation_bridge.py
+.venv/bin/ruff check src tests scripts
+git diff --check
+```
+
+The wheel build passed. A headless smoke check imported the built wheel and verified
+its actual package path, then exercised status, forced index, search, raw-note get,
+reset-index, search after reset, and a paired SQLite/Markdown backup with synthetic
+data. This checked installed-package behavior without audio or provider calls.
+
+Use disposable database/workspace overrides and synthetic owner statements for
+acceptance. Global CLI options precede the subcommand:
+
+```bash
+ciel memory --db /tmp/ciel-memory-check.db --json status
+ciel memory --db /tmp/ciel-memory-check.db search Atlas recovery
+ciel memory --db /tmp/ciel-memory-check.db get MEMORY.md --from 1 --lines 40
+ciel memory --db /tmp/ciel-memory-check.db index --force
+ciel memory --db /tmp/ciel-memory-check.db reset-index
+```
+
+Check these boundaries before treating the memory upgrade as release-ready:
+
+1. Migrate a stopped synthetic legacy database. Confirm current facts/revisions,
+   settings, and dialogue survive, owner prose stays intact, and a second open adds
+   no duplicate managed blocks. An explicit `--db` must use its own sibling workspace.
+2. Edit, atomically replace, and delete Markdown while CIEL runs. Check source
+   lines and snippets after each operation, including equal-size/mtime-preserving
+   edits. Invalid UTF-8, revoked permissions, and symlinked notes/cache paths must
+   fail without serving cached text. Reset/rebuild must preserve authoritative files.
+3. Restart the foreground app. Confirm bounded curated `MEMORY.md`/`USER.md`
+   context persists while yesterday's raw dialogue and daily notes stay out of
+   ordinary replay. Request earlier owner evidence in voice and paired chat;
+   check sources and the three-call/evidence limits. A fresh public question after
+   memory lookup must follow its own route. Unpaired or replaced owners receive
+   no workspace or prior-owner archive evidence. A reset during bootstrap or tool
+   retrieval must prevent another model call with old excerpts and must not
+   reinsert the earlier user turn into the reset conversation. Repeat with the
+   controller disabled and after streamed audio begins: ordinary interruption can
+   retain spoken history, while a reset must leave the erased archive empty.
+   Recognized personal-history queries must not reach public search; explicit
+   public research about note-taking must remain available.
+4. Pause recall, then test ordinary replies, local fact reads, `memory_search`,
+   and `memory_get`. Owner CLI inspection should remain available. Repeat privacy
+   checks with `/local` and private notes, including a later turn in that context.
+   Quoted/tool/assistant text and a note's frontmatter must not manufacture owner
+   authority or durable promotion evidence.
+5. Check daily checkpoints before compaction and close. Use the lifecycle tests'
+   controlled clock for the 03:00 schedule and hard ranking thresholds. Then run a
+   separate live scheduled check with the selected provider. Unqueried notes and
+   repeated identical same-day queries must remain ineligible. Record provider
+   deferral, shutdown, reset, owner-change, and missed-run behavior.
+6. Inspect `review RUN_ID` before applying. Check selected zero-based actions,
+   partial/repeated apply, all-pending apply, merge/supersede conflicts, curated
+   budget rejection, source deletion, and a concurrent owner edit. Verify that
+   managed current-fact corrections still use the normal confirmation handler.
+   `DREAMS.md` and preimages must remain outside automatic recall/promotion.
+7. Back up to a new destination and retain both the `.db` and `.workspace/`
+   outputs. Restore the pair into a separate namespace, with a derived/custom
+   workspace path matching the restored database. Check private provenance,
+   source references, and revisions; rebuilding search must work without copying
+   its derived cache. Existing destinations must remain untouched on failure.
+8. Forget a synthetic fact that also appears in a daily note and reflection log.
+   Verify known wording is suppressed/redacted and pending plans cannot restore it.
+   Verify the documented limits: raw conversation archives, old backups, unknown
+   paraphrases, and forensic storage recovery require separate handling.
+
+A warm-filesystem synthetic benchmark used 1,000 archive notes of 7,800 bytes plus
+one managed curated fact, with three unchanged scans per measurement:
+
+| Operation | Before cache | After cache |
+| --- | --- | --- |
+| Files reread per unchanged document scan | 1,002 | 0 |
+| Median document scan | 118.89 ms | 51.50 ms |
+| Median structured-fact signature check | 45.67 ms | 0.18 ms |
+
+Document scans still discover and stat allowed paths for freshness. The text/hash
+cache holds at most 4,096 entries and about 16 MiB; evicted notes require rereads.
+These timings cover this synthetic local check, not model inference or full reply
+latency. With a blocked embedding adapter, regression tests require fresh keyword
+access without waiting for it. Optional semantic search gets a 100 ms inference
+budget and may finish after the first keyword-only answer. Evaluate a real local
+model with `semantic-evaluate` before enabling it; record quality and timing results
+apart from mocked tests.
+
+## Search corrections and task grounding — 2026-10-25
+
+- **3,243 tests passed**, with five hardware/model integrations deselected. Ruff
+  and whitespace checks passed. Local socket tests ran with the required permission.
+- Regressions cover a spoken anime request followed by a typed light-novel
+  correction, retained user-provided titles and episode scope, targeted questions
+  for missing details, and unrelated new questions that must start a new task.
+  Model-invented season/episode numbers are rejected, including written-out numbers;
+  explicit user corrections replace stale scope in search keywords and evidence checks.
+- Parallel receives the original research objective separately from search keywords.
+  An independent answer check rejects related episode/release facts that do not
+  answer the requested continuation question. Useful supported partial answers remain
+  available; displayed sources and citation numbers reflect the claims actually used.
+- Text-only live probes with public anime wording retained a known title through
+  short corrections and asked for missing scope when the model guessed a season.
+  Four decision samples took 1.54–2.13 seconds. Synthetic evidence probes rejected
+  an unrelated release claim in 1.06 seconds and accepted a supported continuation
+  claim in 0.96 seconds. These samples do not establish general accuracy or total
+  microphone-to-speaker latency. No private history, images, or audio was sent.
+- Full-history privacy checks cover both the answer generator and independent
+  answer check, including protected context outside the compacted recent dialogue.
+  Cancellation, deadlines, malformed judge responses, and provider failures are tested.
+- Live microphone acceptance and the factual current Tensura continuation point
+  remain unchecked. Restart CIEL, ask where to continue in the light novel, correct
+  the medium, and provide a season or episode when asked. CIEL should retain the
+  title and requested relation rather than ask for the name again or substitute
+  an episode schedule for the reading point.
+
+## Chat after microphone startup failure — 2026-10-24
+
+- **3,169 tests passed**, with five hardware/model integrations deselected. Ruff
+  and whitespace checks passed. Local socket tests ran with the required permission.
+- Mocked microphone-open failures now exercise real listener processing workers,
+  real desktop callbacks, typed replies, saved conversation turns, and clean exit.
+  Both interactive terminal input and browser chat remain usable after the failure.
+- The text fallback starts no capture or wake workers, stays muted, reports an
+  unavailable microphone, and does not retry capture through unmute or mode controls.
+  Terminal sessions with text input disabled retain the existing actionable error.
+- Actual ALSA hardware recovery remains unchecked. Restart CIEL with the unavailable
+  input, type a message, inspect `/status`, and exit with `/exit`. Reconnect or select
+  the desired microphone and restart to restore voice capture.
+
+## Parallel free search — 2026-10-24
+
+- **3,163 tests passed**, with five hardware/model integrations deselected. Ruff
+  and whitespace checks passed. Local socket tests ran with the required permission.
+- The default search provider is now Parallel's anonymous Search MCP. Setup and
+  configuration accept it without credentials; saved keys remain inactive unless
+  their provider is selected. The local configuration was switched separately.
+- Real `InternetService` searches for “Python asyncio documentation” and “OpenClaw
+  free web search providers” each returned five sources with usable excerpts in
+  1.39 and 1.20 seconds respectively. These samples measure retrieval only, not
+  answer generation, microphone-to-speaker latency, or general search accuracy.
+- Source excerpts remain labeled through storage and follow-ups. They support
+  quote validation without claiming a local page read or requiring another fetch.
+- Regressions cover cancellation before query transmission during the handshake,
+  JSON/SSE protocol handling, shared deadlines, bounded responses, private requests,
+  safe errors, provider isolation, and fresh anonymous sessions after chat resets.
+
+## Contextual follow-ups and fresh launches — 2026-10-24
+
+- **3,104 tests passed**, with five hardware/model integrations deselected. Ruff
+  and whitespace checks passed. Local socket tests ran with the required permission.
+- The reported sequence (screen request, damaged transcript, correction, “check
+  again,” “again”) now has entry-point regressions in chat and both desktop
+  controller modes. Tests verify new screen operations, retained original/corrected
+  focus, direct clarification, and absence of the ordinary stale-answer fallback.
+- Task lifecycle tests cover pauses, canceled requests, late commits, simultaneous
+  writes from separate processes, reset between validation and commit, low-confidence
+  speech, and explicit new tasks. Cancel/reset cannot restore the old task.
+- Real foreground-launch and persistent-chat tests verify fresh prompts and
+  summaries, retained saved facts and old archives, current-run voice/chat continuity,
+  and discarded old pending confirmations and screen context.
+- Complete structured summaries exceeding per-field concision targets are retained
+  losslessly within the hard 4,000-character total. Types, schema, nonempty text,
+  over-budget rejection, pending turns, and reset/cooldown behavior remain tested.
+- A live text-only synthetic intent probe resolved unseen another-look wording in
+  1.08 seconds. Two other probes reached the two-second decision limit and returned
+  clarification. These samples do not establish live speech accuracy or future
+  provider latency. No saved conversation, desktop image, or microphone audio was sent.
+
+Live acceptance: start CIEL, request a screen observation, change something visible,
+then correct an utterance and ask “Can you check again? I meant,” “check again,”
+and “again.” Each another-look request should obtain a new view and focus on relevant
+changes. Repeat after an interruption or pause. Cancel or start a different task and
+verify “again” does not revive the screen request. Restart CIEL and verify a fresh
+conversation with saved personal facts still available. This microphone/desktop
+acceptance remains outstanding.
+
+## Screen timeout and retry recovery — 2026-10-24
+
+- All **3,001 non-integration tests passed**; five hardware/model integrations
+  were deselected. Ruff and whitespace checks passed. The full run required
+  permission to open temporary local sockets for web and desktop-discovery tests.
+- Regressions cover a screen timeout followed by typed retry in both desktop
+  controller modes and chat. Retries retain the original question and historical
+  image scope; unrelated conversation, resets, and owner changes end the context.
+- Failed background summaries retain pending turns and wait 30 seconds before
+  retrying. Tests cover expiry, provider/validation failure categories, foreground
+  preemption, and reset recovery without skipping turns.
+- The previously selected Llama 3.2 11B endpoint timed out on two tiny synthetic
+  image probes. Nemotron 3.5 Super VL passed the color check and read an invented
+  title and panel colors through CIEL's actual vision client in 2.31 seconds
+  including verification, then 1.77 seconds with verification cached. An earlier
+  attempt returned HTTP 500. These samples do not guarantee service availability.
+  No personal screenshots, conversation history, microphone, or playback were used.
+- Default/example settings now select the tested vision model, with reasoning
+  disabled for NIM Nemotron vision requests. Existing explicit choices are preserved;
+  the reported local configuration was updated separately. Live desktop acceptance
+  remains open; restart CIEL and request a new screen observation to verify it.
+
 ## Screen-awareness validation — 2026-10-22
 
 Follow-up tool-feedback/grounding change: **2,960 tests passed**, five integration

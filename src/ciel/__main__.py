@@ -165,8 +165,6 @@ def main(argv: list[str] | None = None) -> int:
     from ciel.chat.autostart import reconcile_chat_startup
 
     chat_startup = reconcile_chat_startup(settings.chat, project_dir=Path.cwd())
-    if not chat_startup.success:
-        print(chat_startup.message)
 
     from ciel.platform import get_audio_backend
     from ciel.platform.base import AudioInputError
@@ -178,8 +176,13 @@ def main(argv: list[str] | None = None) -> int:
         from ciel.terminal_ui import ConsoleUI
 
         console = ConsoleUI()
+        if args.command != "web":
+            console.clear()
         console.banner("Your voice. Your companion.", version=__version__)
         console.note("Preparing voice and recognition. First startup can take a moment.")
+
+    if not chat_startup.success:
+        print(chat_startup.message)
 
     logger.info("==========================================")
     logger.info("   CIEL - Desktop AI Assistant v%s  ", __version__)

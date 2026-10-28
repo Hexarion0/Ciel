@@ -12,7 +12,7 @@ from tests.test_ambient import run_callbacks
 
 @pytest.mark.parametrize("controller", [False, True])
 @pytest.mark.parametrize("tts_enabled", [False, True])
-def test_streamed_reply_stays_visible_once_without_audio(
+def test_typed_streamed_reply_stays_visible_once_when_audio_is_unavailable(
     tmp_path, monkeypatch, capsys, controller, tts_enabled,
 ):
     monkeypatch.setenv("INTERNET_ENABLED", "false")
@@ -37,6 +37,12 @@ def test_streamed_reply_stays_visible_once_without_audio(
         assert capsys.readouterr().out.count(answer) == 1
         assert [turn.content for turn in turns if turn.role == "assistant"] == [answer]
         router.stream.assert_called_once()
+        if tts_enabled:
+            tts.speak.assert_called_once()
+            assert tts.speak.call_args.args[0] == answer
+        else:
+            tts.speak.assert_not_called()
+        tts.begin_stream.assert_not_called()
     finally:
         store.close()
 
@@ -72,5 +78,6 @@ def test_canceled_stream_does_not_publish_stale_text_fallback(
         assert answer not in capsys.readouterr().out
         assert not [turn for turn in turns if turn.role == "assistant"]
         tts.speak.assert_not_called()
+        tts.begin_stream.assert_not_called()
     finally:
         store.close()

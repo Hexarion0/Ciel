@@ -7,8 +7,11 @@ from dotenv.main import resolve_variables
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-DEFAULT_NIM_MODEL = "nvidia/nemotron-3.5-lightning-30b-a3b"
-DEFAULT_SCREEN_MODEL = "meta/llama-3.2-11b-vision-instruct"
+DEFAULT_NIM_MODEL = "nvidia/nemotron-3.5-super-vl-120b-a12b"
+DEFAULT_NIM_COMPLEX_MODEL = "nvidia/nemotron-3-ultra-550b-a55b"
+DEFAULT_NIM_FALLBACK_MODEL = DEFAULT_NIM_COMPLEX_MODEL
+DEFAULT_CONTROLLER_MODEL = "nvidia/nemotron-3.5-lightning-30b-a3b"
+DEFAULT_SCREEN_MODEL = "nvidia/nemotron-3.5-super-vl-120b-a12b"
 
 
 def _register_search_secret(value: SecretStr | None) -> SecretStr | None:
@@ -87,13 +90,22 @@ class MemoryConfig(BaseModel):
     semantic_model: str = Field(default="", max_length=256)
     semantic_host: str = "http://127.0.0.1:11434"
     semantic_timeout_seconds: float = Field(default=1.5, ge=0.1, le=10)
+    workspace_enabled: bool = True
+    workspace_path: str = Field(default="", max_length=4096)
+    workspace_bootstrap_max_chars: int = Field(default=8000, ge=256, le=100000)
+    daily_capture_enabled: bool = True
+    flush_enabled: bool = True
+    consolidation_enabled: bool = True
+    consolidation_time: str = Field(default="03:00", pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    search_max_results: int = Field(default=6, ge=1, le=50)
+    search_min_score: float = Field(default=0.35, ge=0, le=1)
 
 
 class ControllerConfig(BaseModel):
-    """Lightweight AI decisions and bounded public-tool loops."""
+    """Compatibility settings for main tools, progress, and legacy diagnostics."""
 
     enabled: bool = True
-    model: str = DEFAULT_NIM_MODEL
+    model: str = DEFAULT_CONTROLLER_MODEL
     timeout_seconds: float = Field(default=8.0, ge=0.1, le=30)
     max_tool_steps: int = Field(default=3, ge=1, le=5)
 
@@ -103,7 +115,7 @@ class InternetConfig(BaseModel):
 
     enabled: bool = Field(default=True, description="Enable public web retrieval")
     automatic: bool = Field(default=True, description="Search requests needing current facts")
-    provider: Literal["ddgs", "brave", "tavily"] = Field(default="ddgs")
+    provider: Literal["parallel", "ddgs", "brave", "tavily"] = Field(default="parallel")
     brave_api_key: SecretStr | None = Field(default=None)
     tavily_api_key: SecretStr | None = Field(default=None)
     home_city: str = Field(
@@ -141,12 +153,15 @@ class ProviderConfig(BaseModel):
         description="Default NVIDIA NIM model name",
     )
     nim_complex_model: str = Field(
-        default=DEFAULT_NIM_MODEL,
+        default=DEFAULT_NIM_COMPLEX_MODEL,
         description="NVIDIA NIM model for complex reasoning and coding tasks",
     )
     nim_fallback_model: str = Field(
-        default=DEFAULT_NIM_MODEL,
+        default=DEFAULT_NIM_FALLBACK_MODEL,
         description="NVIDIA NIM fallback model for failover / rate-limiting",
+    )
+    nim_reasoning: Literal["auto", "on", "off"] = Field(
+        default="auto", description="Reasoning for conversation: auto, on, or off",
     )
     openrouter_api_key: SecretStr | None = Field(
         default=None,
@@ -313,8 +328,9 @@ class Settings(BaseSettings):
     # Provider settings
     nim_api_key: SecretStr | None = Field(default=None)
     nim_model: str = Field(default=DEFAULT_NIM_MODEL)
-    nim_complex_model: str = Field(default=DEFAULT_NIM_MODEL)
-    nim_fallback_model: str = Field(default=DEFAULT_NIM_MODEL)
+    nim_complex_model: str = Field(default=DEFAULT_NIM_COMPLEX_MODEL)
+    nim_fallback_model: str = Field(default=DEFAULT_NIM_FALLBACK_MODEL)
+    nim_reasoning: Literal["auto", "on", "off"] = "auto"
     openrouter_api_key: SecretStr | None = Field(default=None)
     groq_api_key: SecretStr | None = Field(default=None)
     ollama_host: str = Field(default="http://localhost:11434")
@@ -343,17 +359,28 @@ class Settings(BaseSettings):
     memory_semantic_model: str = Field(default="", max_length=256)
     memory_semantic_host: str = "http://127.0.0.1:11434"
     memory_semantic_timeout_seconds: float = Field(default=1.5, ge=0.1, le=10)
+    memory_workspace_enabled: bool = True
+    memory_workspace_path: str = Field(default="", max_length=4096)
+    memory_workspace_bootstrap_max_chars: int = Field(default=8000, ge=256, le=100000)
+    memory_daily_capture_enabled: bool = True
+    memory_flush_enabled: bool = True
+    memory_consolidation_enabled: bool = True
+    memory_consolidation_time: str = Field(
+        default="03:00", pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$",
+    )
+    memory_search_max_results: int = Field(default=6, ge=1, le=50)
+    memory_search_min_score: float = Field(default=0.35, ge=0, le=1)
 
-    # AI controller settings; private conversations still require the local provider.
+    # Compatibility names: default foreground tool selection belongs to the main model.
     controller_enabled: bool = Field(default=True)
-    controller_model: str = Field(default=DEFAULT_NIM_MODEL)
+    controller_model: str = Field(default=DEFAULT_CONTROLLER_MODEL)
     controller_timeout_seconds: float = Field(default=8.0, ge=0.1, le=30)
     controller_max_tool_steps: int = Field(default=3, ge=1, le=5)
 
     # Public internet retrieval settings
     internet_enabled: bool = Field(default=True)
     internet_automatic: bool = Field(default=True)
-    internet_provider: Literal["ddgs", "brave", "tavily"] = Field(default="ddgs")
+    internet_provider: Literal["parallel", "ddgs", "brave", "tavily"] = Field(default="parallel")
     brave_search_api_key: SecretStr | None = Field(default=None)
     tavily_api_key: SecretStr | None = Field(default=None)
     internet_home_city: str = Field(default="", max_length=200)
@@ -482,11 +509,20 @@ class Settings(BaseSettings):
             semantic_model=self.memory_semantic_model,
             semantic_host=self.memory_semantic_host,
             semantic_timeout_seconds=self.memory_semantic_timeout_seconds,
+            workspace_enabled=self.memory_workspace_enabled,
+            workspace_path=self.memory_workspace_path,
+            workspace_bootstrap_max_chars=self.memory_workspace_bootstrap_max_chars,
+            daily_capture_enabled=self.memory_daily_capture_enabled,
+            flush_enabled=self.memory_flush_enabled,
+            consolidation_enabled=self.memory_consolidation_enabled,
+            consolidation_time=self.memory_consolidation_time,
+            search_max_results=self.memory_search_max_results,
+            search_min_score=self.memory_search_min_score,
         )
 
     @property
     def controller(self) -> ControllerConfig:
-        """Structured AI controller configuration."""
+        """Compatibility tool-loop and legacy diagnostic configuration."""
         return ControllerConfig(
             enabled=self.controller_enabled, model=self.controller_model,
             timeout_seconds=self.controller_timeout_seconds,
@@ -519,6 +555,7 @@ class Settings(BaseSettings):
             nim_model=self.nim_model,
             nim_complex_model=self.nim_complex_model,
             nim_fallback_model=self.nim_fallback_model,
+            nim_reasoning=self.nim_reasoning,
             openrouter_api_key=self.openrouter_api_key,
             groq_api_key=self.groq_api_key,
             ollama_host=self.ollama_host,

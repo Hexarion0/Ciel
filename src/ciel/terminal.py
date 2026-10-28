@@ -22,6 +22,7 @@ _COMMAND_HELP = {
     "/mode": "/mode [ambient|wake] — Show or change this session's listening mode.",
     "/memory": "/memory [status|pause|resume] — Inspect or pause/resume saved-memory recall. "
                "Saved facts are kept; recent conversation and learning remain active.",
+    "/reasoning": "/reasoning [auto|on|off] — Show or change reasoning for this session.",
     "/stop": "/stop — Cancel the current recording and reply.",
     "/exit": "/exit — Shut down CIEL. /quit is an alias.",
     "/quit": "/quit — Shut down CIEL. Alias for /exit.",
@@ -33,6 +34,7 @@ _COMMAND_HELP = {
 _COMMAND_USAGE = {
     "/status": "/status", "/mute": "/mute [on|off]", "/unmute": "/unmute",
     "/mode": "/mode [ambient|wake]", "/memory": "/memory [status|pause|resume]",
+    "/reasoning": "/reasoning [auto|on|off]",
     "/stop": "/stop", "/exit": "/exit", "/quit": "/quit",
     "/help": "/help [command]",
 }
@@ -56,6 +58,8 @@ class TerminalInput:
         set_mute: Callable[[bool], bool] | None = None,
         mode: Callable[[str | None], str] | None = None,
         memory: Callable[[str], str] | None = None,
+        reasoning: Callable[[str | None], str] | None = None,
+        microphone_available: Callable[[], bool] | None = None,
     ) -> None:
         self.stream = sys.stdin if stream is None else stream
         self.output = sys.stdout if output is None else output
@@ -69,6 +73,8 @@ class TerminalInput:
         self.set_mute = set_mute
         self.mode = mode
         self.memory = memory
+        self.reasoning = reasoning
+        self.microphone_available = microphone_available
         self._command_lock = threading.RLock()
         self._closed = threading.Event()
         self._thread: threading.Thread | None = None
@@ -101,6 +107,7 @@ class TerminalInput:
         choices = {
             "/mute": {"on", "off"}, "/mode": {"ambient", "wake"},
             "/memory": {"status", "pause", "resume"},
+            "/reasoning": {"auto", "on", "off"},
         }
         if (
             len(arguments) > 1
@@ -117,6 +124,10 @@ class TerminalInput:
             self.stop_reply()
             self.write("Stopped the current reply.")
         elif command in {"/mute", "/unmute"}:
+            if self.microphone_available is not None and not self.microphone_available():
+                self.write("Microphone unavailable; typed messages still work. "
+                           "Connect an input and restart CIEL to use voice.")
+                return
             if command == "/mute" and not arguments:
                 muted = self.toggle_mute()
             elif self.set_mute is None:
@@ -135,7 +146,7 @@ class TerminalInput:
                     "Type a message and press Enter. /mute toggles the microphone; "
                     "/stop cancels the reply; /exit quits; /help shows these controls.\n"
                     "More controls: /status; /mute on|off; /unmute; /mode [ambient|wake]; "
-                    "/memory [status|pause|resume]; /quit.\n"
+                    "/memory [status|pause|resume]; /reasoning [auto|on|off]; /quit.\n"
                     "Route one message with /fast, /strong, or /deep. "
                     "Use /help COMMAND for details."
                 )
@@ -148,6 +159,10 @@ class TerminalInput:
         elif command == "/memory":
             self.write(self.memory(arguments[0] if arguments else "status")
                        if self.memory is not None else "/memory is unavailable in this session.")
+        elif command == "/reasoning":
+            self.write(self.reasoning(arguments[0] if arguments else None)
+                       if self.reasoning is not None else
+                       "/reasoning is unavailable in this session.")
 
     def start(self) -> None:
         """Start reading stdin; EOF ends keyboard input without stopping voice."""
@@ -159,7 +174,9 @@ class TerminalInput:
         descriptor = None
         try:
             descriptor = self.stream.fileno()
-            interactive = os.isatty(descriptor) and isinstance(self.output, TerminalOutput)
+            interactive = os.isatty(descriptor) and isinstance(self.output, TerminalOutput) and (
+                not self.output.chat or self.output.interactive
+            )
             if interactive:
                 import termios
                 import tty

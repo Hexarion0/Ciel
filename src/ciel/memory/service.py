@@ -51,6 +51,7 @@ UPDATE_DETAIL_NEEDED = (
 )
 
 RECALL_PAUSED = "Saved-memory recall is paused. Say 'resume memory recall' to use saved facts."
+PRIVATE_MEMORY = "That saved detail requires a local-only conversation."
 _FAVORITE = re.compile(
     r"my\s+(?:favou?rite|fav)\s+(game|food|color|colour|drink|movie|language)\s+"
     r"(?:is(?: now)?|has changed to)\s+(.+)", re.I,
@@ -411,6 +412,7 @@ class MemoryService:
 
     def handle(
         self, text: str, now: datetime | None = None, *, authorized: bool = True,
+        local_only: bool = False,
     ) -> str | None:
         """Propose conversational facts; save explicit commands or timely confirmations.
 
@@ -438,13 +440,18 @@ class MemoryService:
             answer = original.casefold().strip(" .!?")
             if is_memory_confirmation(original):
                 current = self.store.get_fact(pending[0])
+                if not local_only and (pending[1].metadata.get("local_only")
+                                       or current and current.metadata.get("local_only")):
+                    self.focus_key = None
+                    return PRIVATE_MEMORY
                 if (current.content if current else None) != pending[3]:
                     proposal = self._propose(
-                        pending[0], pending[1],
+                        pending[0], pending[1], local_only=local_only,
                     )
                     return proposal + " The saved fact changed since the previous question."
                 pending[1].source = "user_confirmed"
-                return self._save(pending[0], pending[1], expected_content=pending[3])
+                return self._save(pending[0], pending[1], expected_content=pending[3],
+                                  local_only=local_only)
             if answer in {"no", "no thanks", "don't save it", "do not save it", "cancel",
                           "never mind", "forget that"}:
                 self.focus_key = None
@@ -473,9 +480,9 @@ class MemoryService:
             re.IGNORECASE,
         )
         if forget:
-            return self._forget(forget.group(1))
+            return self._forget(forget.group(1), local_only=local_only)
         if re.fullmatch(r"(?:please\s+)?forget(?:\s+(?:that|it))?[.!]?", original, re.I):
-            return self._forget("that")
+            return self._forget("that", local_only=local_only)
         statement = explicit.group(1) if explicit else original
         correction = bool(
             re.match(r"^(?:no[,.\s]|actually\b|i meant\b|correction\b)", statement, re.I)
@@ -499,12 +506,16 @@ class MemoryService:
                     return RECALL_PAUSED
                 remembered = self.store.get_fact(self.focus_key)
                 if remembered is not None:
+                    if remembered.metadata.get("local_only") and not local_only:
+                        return PRIVATE_MEMORY
                     return self.store.redact_forgotten(remembered.content)
             if profile_recall and self.focus_key:
                 if not self.recall_enabled:
                     return RECALL_PAUSED
                 remembered = self.store.get_fact(self.focus_key)
                 if remembered is not None:
+                    if remembered.metadata.get("local_only") and not local_only:
+                        return PRIVATE_MEMORY
                     return self.store.redact_forgotten(remembered.content)
             if re.fullmatch(
                 r"(?:what(?:'s| is) my name|what do you call me)[?.!]*",
@@ -515,6 +526,8 @@ class MemoryService:
                     return RECALL_PAUSED
                 remembered = self.store.get_fact("user:preferred_name")
                 if remembered is not None:
+                    if remembered.metadata.get("local_only") and not local_only:
+                        return PRIVATE_MEMORY
                     return self.store.redact_forgotten(remembered.content)
             return None
         key = None
@@ -602,6 +615,12 @@ class MemoryService:
             )
         ):
             return None
+        previous = self.store.get_fact(key)
+        if previous is not None and previous.metadata.get("local_only") and not local_only:
+            self.focus_key = None
+            return PRIVATE_MEMORY
+        if local_only or previous is not None and previous.metadata.get("local_only"):
+            metadata["local_only"] = True
         item = MemoryItem(
             content=clean, memory_type=kind, source="user_explicit",
             metadata={**metadata, **({"value": value} if value is not None else {})},
@@ -623,22 +642,32 @@ class MemoryService:
                     self.focus_key = key
                     return f"I already remember that. {clean}"
                 if inferred_subject or (old is not None and self.confirm_corrections):
-                    return self._propose(key, item)
-                return self._save(key, item, expected_content=old.content if old else None)
+                    return self._propose(key, item, local_only=local_only)
+                return self._save(key, item, expected_content=old.content if old else None,
+                                  local_only=local_only)
             old = self.store.get_fact(key)
             if old is not None and old.content == clean:
                 self.focus_key = key
                 return f"I already remember that. {clean}"
-            return self._propose(key, item)
+            return self._propose(key, item, local_only=local_only)
         old = self.store.get_fact(key)
         if old is not None and old.content != clean and self.confirm_corrections:
-            return self._propose(key, item)
-        return self._save(key, item, expected_content=old.content if old else None)
+            return self._propose(key, item, local_only=local_only)
+        return self._save(key, item, expected_content=old.content if old else None,
+                                  local_only=local_only)
 
-    def _propose(self, key: str, item: MemoryItem) -> str:
+    def _propose(
+        self, key: str, item: MemoryItem, *, local_only: bool = False,
+    ) -> str:
         """Ask before overwriting an existing fact or saving in confirmation mode."""
         self.focus_key = key
         current = self.store.get_fact(key)
+        if not local_only and (item.metadata.get("local_only")
+                               or current and current.metadata.get("local_only")):
+            self.cancel_proposal()
+            return PRIVATE_MEMORY
+        if local_only or current and current.metadata.get("local_only"):
+            item.metadata["local_only"] = True
         self._pending = (key, item, time.monotonic() + 60.0, current.content if current else None)
         if current is not None and current.content != item.content:
             return (
@@ -647,18 +676,28 @@ class MemoryService:
             )
         return f"Should I remember this? {item.content} Say yes to save it or no to skip it."
 
-    def _save(self, key: str, item: MemoryItem, *, expected_content: str | None) -> str:
+    def _save(
+        self, key: str, item: MemoryItem, *, expected_content: str | None,
+        local_only: bool = False,
+    ) -> str:
         """Persist exactly the explicit or confirmed fact and report the result."""
         old = self.store.get_fact(key)
+        if not local_only and (item.metadata.get("local_only")
+                               or old and old.metadata.get("local_only")):
+            self.cancel_proposal()
+            return PRIVATE_MEMORY
+        if local_only or old and old.metadata.get("local_only"):
+            item.metadata["local_only"] = True
         try:
             self.store.upsert_fact(key, item, expected_content=expected_content)
         except MemoryConflictError:
-            return self._propose(key, item) + " The saved fact changed before that update."
+            return (self._propose(key, item, local_only=local_only)
+                    + " The saved fact changed before that update.")
         self.focus_key = key
         action = "updated" if old and old.content != item.content else "saved"
         return f"I've {action} that. {item.content}"
 
-    def _forget(self, topic: str) -> str:
+    def _forget(self, topic: str, *, local_only: bool = False) -> str:
         """Resolve specific saved topics, refusing an ambiguous broad deletion."""
         topic = topic.strip().rstrip(".!?")
         if topic.strip().casefold() not in ("that", "it", "the last fact"):
@@ -679,10 +718,15 @@ class MemoryService:
                 # general goal or CIEL's unrelated development-date anchor.
                 self.focus_key = None
         item = self.store.get_fact(self.focus_key) if self.focus_key else None
+        if item is not None and item.metadata.get("local_only") and not local_only:
+            self.focus_key = None
+            return PRIVATE_MEMORY
         if self.focus_key and item is None:
             self.focus_key = None
             return "I couldn't find a saved fact matching that. Which fact should I forget?"
-        matches = self.store.find_memories_containing(topic, limit=2)
+        matches = [candidate for candidate in
+                   self.store.find_memories_containing(topic, limit=2)
+                   if local_only or not candidate.metadata.get("local_only")]
         if item is not None:
             matches = [item]
         if not matches:
@@ -690,6 +734,7 @@ class MemoryService:
             query_terms = terms(topic)
             ranked = [
                 pair for pair in ranked if query_terms and query_terms <= terms(pair[1].content)
+                and (local_only or not pair[1].metadata.get("local_only"))
             ]
             if ranked and (len(ranked) == 1 or ranked[0][0] > ranked[1][0] * 1.5):
                 matches = [ranked[0][1]]

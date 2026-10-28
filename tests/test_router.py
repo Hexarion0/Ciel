@@ -74,12 +74,12 @@ def test_retired_local_command_is_not_a_supported_manual_override(mock_manager):
 def test_routing_decisions(mock_manager):
     router = ModelRouter(manager=mock_manager)
 
-    # Simple with Groq configured -> groq
+    # Conversation always prefers the configured Super route, including greetings.
     decision_simple = router.route("Hello")
     assert decision_simple.complexity == ComplexityLevel.SIMPLE
-    assert decision_simple.provider_name == "groq"
+    assert decision_simple.provider_name == "nim"
 
-    # Complex -> NIM 70B
+    # Complex -> NIM Ultra
     decision_complex = router.route("Design a high-concurrency database architecture with sharding")
     assert decision_complex.complexity == ComplexityLevel.COMPLEX
     assert decision_complex.provider_name == "nim"

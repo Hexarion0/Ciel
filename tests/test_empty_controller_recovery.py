@@ -7,7 +7,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from ciel.memory import MemoryItem, MemoryStore, MemoryType
-from ciel.memory.bridge import desktop_conversation_id
 from ciel.providers.base import LLMResponse
 from ciel.providers.router import ModelRouter
 from tests.test_ambient import run_callbacks
@@ -19,17 +18,13 @@ def _answer_decision() -> LLMResponse:
     }), "test-controller", "test")
 
 
-def _seed_legacy_private_summary(tmp_path) -> None:
+def _seed_legacy_private_summary(store: MemoryStore, session_id: str) -> None:
     """Reopen protected history created before the local command was retired."""
-    store = MemoryStore(tmp_path / "memory.db")
-    try:
-        store.save_memory(MemoryItem(
-            content="A private conversation from an earlier release.",
-            memory_type=MemoryType.CONVERSATION,
-            metadata={"session_id": desktop_conversation_id(), "local_only": True},
-        ))
-    finally:
-        store.close()
+    store.save_memory(MemoryItem(
+        content="A private conversation from an earlier release.",
+        memory_type=MemoryType.CONVERSATION,
+        metadata={"session_id": session_id, "local_only": True},
+    ))
 
 
 @pytest.mark.parametrize("ambient", [True, False])
@@ -42,8 +37,6 @@ def test_empty_controller_recovery_includes_observer_only_query_once(
     router = MagicMock()
     generation_messages = []
     query = "explain this setting."
-    if private:
-        _seed_legacy_private_summary(tmp_path)
 
     def send(messages, **kwargs):
         if kwargs.get("purpose") == "controller":
@@ -56,6 +49,7 @@ def test_empty_controller_recovery_includes_observer_only_query_once(
         tmp_path, monkeypatch,
         [("", {"cancel_event": replacement, "supersedes_cancel_event": canceled})],
         ambient=ambient, router=router, controller=True,
+        initialize_conversation=_seed_legacy_private_summary if private else None,
         observed=[("Ciel, " + query, {
             "superseded": True, "cancel_event": canceled,
         })],
@@ -83,8 +77,6 @@ def test_empty_controller_recovery_does_not_duplicate_an_accepted_canceled_query
     router = MagicMock()
     generation_messages = []
     query = "explain this setting."
-    if private:
-        _seed_legacy_private_summary(tmp_path)
 
     def send(messages, **kwargs):
         if kwargs.get("purpose") == "controller":
@@ -101,6 +93,7 @@ def test_empty_controller_recovery_does_not_duplicate_an_accepted_canceled_query
         [("Ciel, " + query, {"cancel_event": canceled}),
          ("", {"cancel_event": replacement, "supersedes_cancel_event": canceled})],
         router=router, controller=True,
+        initialize_conversation=_seed_legacy_private_summary if private else None,
     )
     try:
         assert len(generation_messages) == 2
@@ -127,8 +120,6 @@ def test_accepted_canceled_request_and_observed_addition_recover_without_duplica
     initial_event, observer_event, final_event = Event(), Event(), Event()
     observer_event.set()
     query = "explain this setting."
-    if private:
-        _seed_legacy_private_summary(tmp_path)
     addition = "And include an example."
     generation_messages = []
     router = MagicMock()
@@ -152,6 +143,7 @@ def test_accepted_canceled_request_and_observed_addition_recover_without_duplica
             "supersedes_cancel_event": initial_event,
         })]},
         router=router, controller=True,
+        initialize_conversation=_seed_legacy_private_summary if private else None,
     )
     try:
         expected = [query, addition, *([final] if final else [])]

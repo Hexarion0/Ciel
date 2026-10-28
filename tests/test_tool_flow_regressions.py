@@ -12,13 +12,17 @@ from ciel.internet import InternetResult, InternetService
 from tests.test_screen_integration import RESULT, install_screen, run_callbacks
 
 
-@pytest.mark.parametrize("controller", [False, True])
-def test_voice_screen_announcement_precedes_work_and_is_not_saved(
-    tmp_path, monkeypatch, controller,
+@pytest.mark.parametrize("controller,typed", [(False, False), (True, False), (True, True)])
+def test_screen_announcement_precedes_work_in_its_input_channel_and_is_not_saved(
+    tmp_path, monkeypatch, capsys, controller, typed,
 ):
     events = []
     def answer(_service, request, _messages, **kwargs):
         assert kwargs["progress"]("screen", request.query)
+        if typed:
+            announcement = capsys.readouterr().out
+            assert "screen" in announcement and "watching" in announcement
+            tts.speak.assert_called_once()
         events.append("screen")
         return RESULT
     install_screen(monkeypatch, on_answer=answer)
@@ -30,12 +34,20 @@ def test_voice_screen_announcement_precedes_work_and_is_not_saved(
         return True
     tts.speak.side_effect = speak
     _, _, _, store, turns = run_callbacks(
-        tmp_path, monkeypatch, [("What anime am I watching?", {"input_source":"keyboard"})],
+        tmp_path, monkeypatch, [("What anime am I watching?",
+                                 {"input_source": "keyboard"} if typed else
+                                 {"wake_verified": True})],
         controller=controller, tts=tts,
     )
     try:
+        if typed:
+            assert RESULT.text in capsys.readouterr().out
+            tts.begin_stream.assert_not_called()
+        assert len(events) == 3
         assert "anime" in events[0] or "watching" in events[0]
         assert events[1] == "screen"
+        assert events[-1] == RESULT.text
+        assert tts.speak.call_count == 2
         assert [t.content for t in turns if t.role == "assistant"] == [RESULT.text]
     finally:
         store.close()

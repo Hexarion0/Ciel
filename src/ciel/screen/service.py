@@ -8,8 +8,9 @@ import json
 import re
 import threading
 import time
+import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ from ciel.providers.router import ModelRouter
 from ciel.providers.vision import VisionCancelled, VisionClient, VisionError
 from ciel.screen.cache import CaptureCache, ScreenCacheError
 from ciel.screen.capture import Capture, HyprlandCaptureBackend, ScreenCaptureError
+from ciel.screen.intent import interpret_screen_intent
 
 _PREFIX = re.compile(
     r"^(?:(?:please|hey|ciel|can (?:you|u)|could you|would you)[,\s]+)*", re.I,
@@ -47,6 +49,28 @@ _FOLLOWUP = re.compile(
     r"(?:what about|explain|what is|what's) (?:this|that)(?: (?:button|error|window))?)"
     r"[.!?]*", re.I,
 )
+_RETRY = re.compile(r"(?:try again|retry|again|check again|look again|one more time)[.!?]*", re.I)
+_NEW_TASK = re.compile(
+    r"^(?:(?:please|can you|could you|would you)[,\s]+)*"
+    r"(?:tell(?: me)? (?:a|an|another|some) (?:joke|story|poem|fact)\b|"
+    r"(?:write|compose|calculate|solve|translate|remind)\b)", re.I,
+)
+_VISUAL_REFERENCE = re.compile(
+    r"\b(?:it|this|that|these|those|there|again|screen|display|desktop|monitor|"
+    r"window|scene|view|image|picture|frame|cursor|pointer)\b", re.I,
+)
+_NATIVE_LOOK = re.compile(
+    r"^(?:(?:actually|now|please)\s+)*"
+    r"(?:(?:i (?:want|need|would like) you to )?"
+    r"(?:look|check|inspect|examine|reassess|recheck|refresh|capture|zoom)\b|"
+    r"(?:have|take) (?:another|a (?:fresh|new)|one more) look\b)", re.I,
+)
+_DISCUSSION_TARGET = re.compile(r"\b(?:answer|reply|reasoning|explanation|conclusion)\b", re.I)
+_STOP_VISUAL = re.compile(
+    r"^(?:please\s+)?(?:don't|do not|stop|never)\s+"
+    r"(?:look\w*|check\w*|captur\w*|watch\w*)\b.*\b"
+    r"(?:screen|display|desktop|monitor|image|picture)\b", re.I,
+)
 _PREVIOUS = re.compile(
     r"(?:.*\b(?:previous|earlier|last|old) (?:screen(?:shot)?|capture|image)\b.*|"
     r"what (?:was|did you see) on my screen(?: earlier| before)?[.!?]*)", re.I,
@@ -70,6 +94,20 @@ class ScreenRequest:
     query: str
     previous: bool = False
     send_image: bool = False
+    original_query: str = field(default="", compare=False)
+    repeat: bool = field(default=False, compare=False)
+    focus_query: str = field(default="", compare=False)
+    task_scope: str = field(default="", compare=False, repr=False)
+    task_revision: str | None = field(default=None, compare=False, repr=False)
+
+
+@dataclass(frozen=True)
+class ScreenTurn:
+    """An admitted turn's visual operation, short clarification, or ordinary conversation."""
+
+    request: ScreenRequest | None = None
+    clarification: str = ""
+    canceled: bool = False
 
 
 @dataclass(frozen=True)
@@ -82,6 +120,7 @@ class ScreenResult:
     capture_id: str = ""
     expires_at: float = 0
     image: bytes | None = field(default=None, repr=False)
+    task_revision: str = field(default="", repr=False)
 
 
 class _Cancellation(threading.Event):
@@ -179,20 +218,198 @@ class ScreenService:
         return "screen_last_turn:" + self._scope_key()
 
     def active(self) -> bool:
-        """Only an immediately preceding visual answer establishes visual follow-ups."""
+        """Keep an application-owned task through corrections and interrupted replies."""
         state = self.conversation.store.get_setting(self._state_key(), {})
-        if not isinstance(state, dict) or not state.get("turn_id"):
+        if not isinstance(state, dict):
             return False
+        if self._original_request(state) is not None:
+            return True
+        if not state.get("turn_id"):
+            return False
+        # Older markers have no task description and cannot grant contextual retries.
         turns = self.conversation.get_recent_turns(limit=6)
         assistant = next((t for t in reversed(turns) if t.role == "assistant"), None)
         return assistant is not None and assistant.id == state["turn_id"]
 
     def resolve(self, query: str) -> ScreenRequest | None:
-        return resolve_request(query, active=self.active())
+        """Resolve clear requests immediately, retaining the original visual question."""
+        active = self.active()
+        key = self._state_key()
+        state = self.conversation.store.get_setting(key)
 
-    def mark(self, turn_id: int) -> None:
+        def bound(request: ScreenRequest) -> ScreenRequest:
+            return replace(request, task_scope=key, task_revision=self._revision(state))
+
+        clean = query.strip().replace("’", "'")
+        clean = re.sub(r"(?:[.!?,;]\s*|\s+)i (?:meant|mean)[.!?,\s]*$", "", clean,
+                       flags=re.I)
+        clean = re.sub(r"^(?:(?:no|sorry|actually)[,\s]+)?i (?:meant|mean)[,\s]+", "",
+                       clean, flags=re.I)
+        clean = _PREFIX.sub("", clean, count=1)
+        original = self._original_request(state) if active else None
+        if active and _RETRY.fullmatch(clean):
+            if original is not None:
+                return bound(ScreenRequest(
+                    original.query, original.previous, original.send_image,
+                    original_query=original.original_query or original.query,
+                    focus_query=original.query, repeat=True,
+                ))
+            return None
+        request = resolve_request(clean, active=active)
+        if request is not None:
+            followup = active and resolve_request(clean) is None
+            return bound(ScreenRequest(
+                query, request.previous, request.send_image,
+                original_query=(original.original_query or original.query)
+                if followup and original else "",
+                focus_query=original.query if followup and original else "", repeat=followup,
+            ))
+        return None
+
+    def task_revision(self) -> str:
+        """Read the current visual task generation without obtaining any pixels."""
+        return self._revision(self.conversation.store.get_setting(self._state_key()))
+
+    def resolve_native(self, query: str) -> ScreenRequest | None:
+        """Bind a main-model visual request to actual user wording and active task."""
+        request = self.resolve(query)
+        if request is not None or not self.active():
+            return request
+        clean = query.strip().replace("’", "'")
+        if (re.search(r'''["“”]|(?<!\w)'[^']+'(?!\w)''', clean)
+                or re.search(r"\b(?:don't|do not|never|stop|not|without|avoid|said|wrote|"
+                             r"quote|example|hypothetical)\b", clean, re.I)
+                or not _VISUAL_REFERENCE.search(clean)
+                or not _NATIVE_LOOK.match(_PREFIX.sub("", clean, count=1))
+                or _DISCUSSION_TARGET.search(clean)):
+            return None
+        original = self.resolve("What should I do next?")
+        return replace(original, query=query, focus_query=query, send_image=False) \
+            if original is not None else None
+
+    @staticmethod
+    def _original_request(state: Any) -> ScreenRequest | None:
+        request = state.get("request") if isinstance(state, dict) else None
+        if (isinstance(request, dict) and isinstance(request.get("query"), str)
+                and request["query"].strip()
+                and type(request.get("previous")) is bool
+                and type(request.get("send_image")) is bool):
+            return ScreenRequest(request["query"], request["previous"], request["send_image"],
+                                 original_query=request.get("original_query", ""),
+                                 focus_query=request["query"])
+        return None
+
+    @staticmethod
+    def _revision(state: Any) -> str:
+        return str(state.get("revision", "")) if isinstance(state, dict) else ""
+
+    def clear(self) -> None:
+        """End only the active task; preserve the owner's archived observations."""
+        self.conversation.store.set_setting(self._state_key(), {"revision": uuid.uuid4().hex})
+
+    def begin(self, request: ScreenRequest) -> str:
+        """Retain an admitted request before work, so interruption cannot erase its focus."""
+        key = self._state_key()
+        state = self.conversation.store.get_setting(key)
+        if request.task_scope and request.task_scope != key:
+            return ""
+        if request.task_revision is not None and request.task_revision != self._revision(state):
+            return ""
+        return self._save_task(request, key=key, turn_id=0, expected=state)
+
+    def _save_task(self, request: ScreenRequest, *, key: str, turn_id: int, expected: Any,
+                   revision: str = "") -> str:
+        revision = revision or uuid.uuid4().hex
+        committed = self.conversation.store.compare_setting(key, expected, {
+            "turn_id": turn_id, "revision": revision,
+            "request": {"query": request.focus_query or request.original_query or request.query,
+                        "original_query": request.original_query or request.query,
+                        "previous": request.previous, "send_image": request.send_image},
+        })
+        return revision if committed else ""
+
+    def interpret(
+        self, query: str, router: Any, messages: list[ChatMessage], *,
+        cancel_event: threading.Event | None = None,
+        current: Callable[[], bool] = lambda: True, local_only: bool = False,
+    ) -> ScreenTurn:
+        """Interpret an admitted follow-up once; keep uncertain tasks and expire new topics."""
+        if not current() or (cancel_event is not None and cancel_event.is_set()):
+            return ScreenTurn(canceled=True)
+        request = self.resolve(query)
+        if request is not None:
+            return ScreenTurn(request=request)
+        if not self.active():
+            return ScreenTurn()
+        key = self._state_key()
+        state = self.conversation.store.get_setting(key, {})
+        original = self._original_request(state)
+        if original is None:
+            return ScreenTurn()
+        if _STOP_VISUAL.match(query.strip()) or (
+            _NEW_TASK.match(query.strip()) and not _VISUAL_REFERENCE.search(query)
+        ):
+            if not self.conversation.store.compare_setting(
+                key, state, {"revision": uuid.uuid4().hex},
+            ):
+                return ScreenTurn(canceled=True)
+            return ScreenTurn(clarification="Okay, I won't look at your screen."
+                              if _STOP_VISUAL.match(query.strip()) else "")
+
+        def valid() -> bool:
+            return (current() and key == self._state_key()
+                    and state == self.conversation.store.get_setting(key, {}))
+
+        canceled = _Cancellation(cancel_event, valid)
+        intent = interpret_screen_intent(
+            router, query, original.query, messages, cancel_event=canceled,
+            local_only=local_only, timeout_seconds=2.0,
+        )
+        if intent is None or canceled.is_set():
+            return ScreenTurn(canceled=True)
+        if intent.action == "new_topic":
+            if not self.conversation.store.compare_setting(
+                key, state, {"revision": uuid.uuid4().hex},
+            ):
+                return ScreenTurn(canceled=True)
+            return ScreenTurn()
+        if intent.action == "clarify":
+            return ScreenTurn(clarification=intent.question or
+                              "Did you want another look at your screen?")
+        if intent.action in {"refresh", "history"}:
+            # The model chooses an operation, never a replacement instruction or delivery mode.
+            return ScreenTurn(request=ScreenRequest(
+                original.query + "\nCurrent follow-up: " + query,
+                previous=intent.action == "history" or original.previous,
+                original_query=original.original_query or original.query, repeat=True,
+                focus_query=original.query + "\nCurrent follow-up: " + query,
+                task_scope=key, task_revision=self._revision(state),
+            ))
+        return ScreenTurn()
+
+    def mark(self, turn_id: int, *, request: ScreenRequest | None = None,
+             expected_revision: str | None = None) -> bool:
         """Mark a persisted text observation, never its pixels or extracted personal facts."""
-        self.conversation.store.set_setting(self._state_key(), {"turn_id": turn_id})
+        state: dict[str, Any] = {"turn_id": turn_id}
+        if request is not None:
+            key = self._state_key()
+            if request.task_scope and request.task_scope != key:
+                return False
+            current = self.conversation.store.get_setting(key)
+            previous = self._original_request(current)
+            revision = self._revision(current)
+            if expected_revision is not None and revision != expected_revision:
+                return False
+            if (expected_revision is None and request.task_revision is not None
+                    and request.task_revision != revision and previous != ScreenRequest(
+                        request.focus_query or request.original_query or request.query,
+                        request.previous, request.send_image,
+                    )):
+                return False
+            return bool(self._save_task(request, key=key, turn_id=turn_id, expected=current,
+                                        revision=revision))
+        self.conversation.store.set_setting(self._state_key(), state)
+        return True
 
     def _get_cache(self) -> CaptureCache:
         scope = self._scope_key()
@@ -206,6 +423,10 @@ class ScreenService:
         return self._cache
 
     def still_valid(self, result: ScreenResult) -> bool:
+        if result.task_revision and self.conversation.store.get_setting(
+            self._state_key(), {},
+        ).get("revision") != result.task_revision:
+            return False
         if not result.capture_id:
             return True
         try:
@@ -281,6 +502,13 @@ class ScreenService:
         if ModelRouter.requires_local(messages) and self.settings.screen_provider != "ollama":
             return ScreenResult("This conversation has protected local history, so I can't send "
                                 "its screen context to a cloud model.")
+        revision = self.begin(request)
+        if not revision:
+            return None
+        parent = canceled
+        canceled = _Cancellation(parent, lambda: self.conversation.store.get_setting(
+            self._state_key(), {},
+        ).get("revision") == revision)
         try:
             cache = self._get_cache()
             try:
@@ -295,6 +523,7 @@ class ScreenService:
                     return ScreenResult(
                         "That screenshot is no longer available. I still have our text "
                         "discussion; ask me to look again for a fresh view.",
+                        task_revision=revision,
                     )
                 capture = previous[-1]
             if progress is not None and not progress(
@@ -311,7 +540,7 @@ class ScreenService:
                     return None
                 cache.add(capture)
             result = ScreenResult("", capture_id=capture.id,
-                                  expires_at=capture.captured_at + 900)
+                                  expires_at=capture.captured_at + 900, task_revision=revision)
             used_ids = [capture.id]
             def valid() -> bool:
                 return (not canceled.is_set() and self.still_valid(result)
@@ -322,7 +551,8 @@ class ScreenService:
                 return ScreenResult("Here’s the requested screenshot.", capture_id=capture.id,
                                     expires_at=capture.captured_at + 900,
                                     image=_sheet([("Requested desktop capture",
-                                                   self._desktop(capture))]))
+                                                   self._desktop(capture))]),
+                                    task_revision=revision)
             panels = []
             if (previous and previous[-1].id != capture.id
                     and cache.contains(previous[-1].id)):
@@ -373,6 +603,14 @@ class ScreenService:
                 "alone does not establish a title; qualify guesses and ask for a title or "
                 "clearer frame if needed. Never promote a previous assistant's guess as evidence."
             )
+            if request.repeat:
+                prompt += (
+                    "\nThis is another look for the same task. Answer the original question "
+                    "from the supplied view, focusing on relevant changes between PREVIOUS and "
+                    "CURRENT when both exist. If nothing relevant changed, say so briefly. "
+                    "Do not repeat the earlier full description or scold the user for asking "
+                    "again. Original question: " + (request.original_query or request.query)
+                )
             history = [m.content[:240] for m in messages if m.role == "user"
                        and m.content != request.query][-3:]
             if history:
@@ -418,7 +656,7 @@ class ScreenService:
             image = _sheet([("Requested desktop capture", self._desktop(capture))]) \
                 if request.send_image else None
             return ScreenResult(text, response.provider, response.model, capture.id,
-                                capture.captured_at + 900, image)
+                                capture.captured_at + 900, image, task_revision=revision)
         except VisionCancelled:
             return None
         except (ScreenCacheError, ScreenCaptureError, VisionError) as error:
@@ -429,7 +667,7 @@ class ScreenService:
                     self._cache.contains("")
                 except ScreenCacheError:
                     return None
-            return ScreenResult(str(error))
+            return ScreenResult(str(error), task_revision=revision)
 
     def close(self) -> None:
         if self._cache is not None:

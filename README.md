@@ -35,7 +35,8 @@ See the [roadmap](docs/roadmap.md) for implementation status and priorities.
 
 ## Install and start
 
-Use **Python 3.10+** on Linux with a working microphone and audio output.
+Use **Python 3.10+** on Linux. Voice input needs a working microphone, and spoken
+replies need audio output. Typed chat remains available without a microphone.
 A GPU is optional: fresh setup offers CPU recognition, and CUDA is an explicit
 choice. The default Pocket voice runs on CPU. Initial package and model
 installation needs internet access. Provider replies need a configured cloud
@@ -185,14 +186,18 @@ a missing fallback does not trigger an automatic download during a voice reply.
 ### Provider configuration
 
 The wizard accepts NIM, Groq, and OpenRouter API keys. Keep them in `.env`.
-The current NIM default for both ordinary and complex requests is
-`nvidia/nemotron-3.5-lightning-30b-a3b`, verified through the controller and
-conversation stream after the configured Super endpoint returned 404. See the
-[availability and latency findings](docs/conversation-latency.md). Override it with
-`NIM_MODEL` and `NIM_COMPLEX_MODEL`; availability and latency depend on your provider
-account. `NIM_FALLBACK_MODEL` selects a different conversation backup when needed;
-the default matches the primary model and avoids a duplicate attempt. The official
-API example is available from [NVIDIA](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b).
+Normal requests select `nvidia/nemotron-3.5-super-vl-120b-a12b`; complex requests select
+`nvidia/nemotron-3-ultra-550b-a55b`. When NIM is configured, ordinary conversation
+uses it too. `NIM_MODEL`, `NIM_COMPLEX_MODEL`, and `NIM_FALLBACK_MODEL` override these
+choices. The fallback defaults to Ultra 550B, and replies report the actual served
+model. On 2026-10-28, Super 3.5 VL passed direct inference, streaming, native-tool,
+and reasoning on/off checks. It replaces the older Super 120B endpoint that returned
+404. See the [availability checks](docs/conversation-latency.md).
+
+Use `/reasoning auto`, `/reasoning on`, or `/reasoning off` in the terminal or
+paired text chat. `auto` enables reasoning for complex work and disables it for
+ordinary replies; `NIM_REASONING` sets the startup preference. Supported Nemotron
+models receive the thinking flag, while internal reasoning stays out of replies.
 
 OpenRouter defaults to its official [Free Models Router](https://openrouter.ai/docs/guides/routing/routers/free-router),
 `openrouter/free`. Its available underlying model and response speed can vary.
@@ -203,12 +208,33 @@ No provider setup is needed for local clock, memory, or supported desktop action
 
 ## Everyday use
 
+The terminal clears the visible screen on launch, shows a boxed status panel,
+and keeps an editable `❯` composer. Typed replies
+stay visible in chat, with room for explanations, lists, and copyable code. Ciel
+also speaks typed replies; longer answers get a brief excerpt and a pointer to the
+full text. Voice requests keep their brief spoken style. `/status` shows requested
+models, reasoning mode,
+and the last served model; `/help` lists controls. Plain and narrow terminals remain
+supported.
+
+Each new `ciel` or `ciel web` launch starts a fresh conversation. Saved personal
+memories remain available, and earlier conversations stay archived without being
+automatically replayed. During that launch, paired Telegram and desktop voice/text
+share the current conversation; a running Telegram worker follows the new launch.
+
 `ciel` opens a compact launch screen with the current listening mode, voice,
 recognition device, and caption setting. A microphone being active does not imply
 every model is ready: deferred voice preparation and unavailable recognition are
 shown in the panel. `ciel start dev` keeps detailed diagnostics. Setup supports
 arrow keys and Enter in interactive terminals, with numbered choices for plain
 terminals and redirected input. Set `NO_COLOR=1` for uncolored output.
+
+If the microphone cannot open, an interactive `ciel` session or `ciel web` stays
+open for typed chat. The launch panel and `/status` report that the microphone is
+unavailable; spoken replies can still work when enabled. Voice capture stays off
+for that run. Reconnect the microphone or select another input in setup, then
+restart for voice. Terminal mode with `--no-text-input` still exits on microphone
+failure; the web interface has its own text input.
 
 ```bash
 .venv/bin/ciel start                    # ambient conversation and live AI captions
@@ -298,27 +324,30 @@ available and the old personality file is preserved.
 
 Explicitly addressed, reliably transcribed clock, memory, and supported desktop
 commands run through local handlers without an AI request. Other transcripts and
-typed messages admitted to the conversation go to an AI controller, which chooses
-a reply, clarification, web search, page reading, or an existing local tool.
-The model cannot discard an admitted turn as “stay silent.” Inactive room speech
-and clear speech to another person are filtered before this decision; stop and
+typed messages admitted to the conversation go directly to the main response model.
+It answers or requests a native web, memory, or screen tool, then continues with
+the real result. Ordinary chat has no separate AI decision request.
+Inactive room speech
+and clear speech to another person are filtered before the reply; stop and
 mute controls remain immediate.
 
-Decisions use configured providers in order: NIM, Groq, OpenRouter, then Ollama.
-`CONTROLLER_MODEL` selects the NIM decision model, currently
-`nvidia/nemotron-3.5-lightning-30b-a3b`; other providers use their own default model.
-A failed provider can fall back to another configured provider within the same
-decision deadline. Malformed decision JSON gets one format retry within that
-deadline. Existing model overrides are preserved. Conversation replies and
-research reports use normal provider routing.
+Native tools use normal conversation routing and existing model overrides.
+NIM, Groq, OpenRouter, and Ollama adapters preserve structured tool requests and
+results; tool arguments never enter speech. Invalid, unknown, repeated, or stale
+requests are rejected. A provider cannot splice a fallback after publishing text
+or a tool fragment. Existing local-only conversations still require Ollama.
 
 For searches, CIEL gives a short spoken acknowledgment, retrieves pages using an
-AI-written query, and reports the supported answer. The controller uses recent user
+AI-written query, and reports the supported answer. The main model uses recent user
 context and relevant saved memories to keep the subject when you say “try again.”
+Brief corrections such as “the light novel” retain the original title and question.
+The requested outcome is sent separately from search keywords, so an episode lookup
+cannot replace a question about where to continue reading. When the title is known
+but the season or episode is missing, CIEL asks for that detail instead of guessing it.
 “Why can't you search?” asks for an explanation. If sources are insufficient, the
-controller can refine the query or read another page while useful new evidence appears.
-Research has no overall time cutoff. Repeated queries and consecutive attempts that
-add no evidence end the investigation; individual network/model requests still expire.
+main model can refine the query or read another page within the bounded tool loop.
+Requests allow three to five model rounds; repeated tool requests stop the loop.
+Individual network/model requests also expire.
 Telegram keeps receiving messages during research, so “stop” cancels the active request.
 Local tools keep their existing allowlists and confirmation rules.
 
@@ -329,13 +358,15 @@ CIEL points to the matching source link without reading the address aloud.
 Unrelated results are discarded;
 source previews alone do not establish an exact answer.
 Web replies use a short answer with matching source excerpts, which the application
-checks before speech. Invalid output, invented quotes, and unsupported numbers receive
+checks for quotation support and relevance to the actual task before speech. Invalid
+output, unrelated claims, invented quotes, and unsupported numbers receive
 an uncertainty reply or the supported subset with its gaps. News requests aim for 3–5
 recent stories with individual article links and dated source metadata. Mongolia news
 checks English and Mongolian reporting and replies in English. If a fuller summary
 cannot be supported, CIEL can show the dated article headlines she actually retrieved.
 Publication, modification, and provider-reported dates remain distinct. Exact
-anime-to-novel reading points require a page excerpt,
+anime-to-novel reading points, including requests written as “lightnovel” or “LN,”
+require a page or provider excerpt,
 not only a search preview. Web replies wait for validation before playback; ordinary
 conversation still streams when enabled.
 
@@ -345,9 +376,11 @@ across the currently paired voice/chat context, including after restart. Observa
 remain separate from personal facts; a failed lookup cannot replay an older topic as
 its evidence. A later unrelated conversation ends implicit research continuation.
 
-Search defaults to the free `ddgs` package, using DuckDuckGo and public Brave web
-search backends without a search API key. Setup also offers
-Brave Search and Tavily: choose the service first, then enter its masked API key. Only
+Search defaults to [Parallel's free search service](https://docs.parallel.ai/integrations/mcp/search-mcp),
+which supplies ranked excerpts without an account or API key. The anonymous service
+has lower usage limits than paid access. Setup also offers the free `ddgs` package
+(DuckDuckGo and public Brave backends), Brave Search, and Tavily. For the latter two,
+choose the service first, then enter its masked API key. Only
 the selected search provider is used; saving another key never enables automatic
 fallback or spending that service's quota. Switching providers preserves saved keys.
 Optional services may charge according to your account plan. Search connections are
@@ -363,12 +396,12 @@ Edit `.env` and restart to change these controls:
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
-| `CONTROLLER_ENABLED` | `true` | Use AI decisions; `false` restores the earlier intent handlers |
-| `CONTROLLER_MODEL` | `nvidia/nemotron-3.5-lightning-30b-a3b` | NIM action decision model; other AI providers use their own defaults |
-| `CONTROLLER_TIMEOUT_SECONDS` | `8.0` | Deadline for each action decision |
-| `CONTROLLER_MAX_TOOL_STEPS` | `3` | Consecutive lookup attempts without new evidence before stopping |
+| `CONTROLLER_ENABLED` | `true` | Use the main response model with native tools; `false` retains the legacy desktop intent path |
+| `CONTROLLER_MODEL` | `nvidia/nemotron-3.5-lightning-30b-a3b` | Legacy decision/progress utility model; unused for main response tool selection |
+| `CONTROLLER_TIMEOUT_SECONDS` | `8.0` | Web claim relevance check budget; legacy decision deadline |
+| `CONTROLLER_MAX_TOOL_STEPS` | `3` | Main model rounds per request, clamped to 3–5 |
 | `INTERNET_ENABLED` | `true` | Enable public search and page reading |
-| `INTERNET_PROVIDER` | `ddgs` | Use only this search service: `ddgs`, `brave`, or `tavily` |
+| `INTERNET_PROVIDER` | `parallel` | Use only this search service: `parallel`, `ddgs`, `brave`, or `tavily` |
 | `BRAVE_SEARCH_API_KEY` / `TAVILY_API_KEY` | Empty | Credentials for the selected optional service |
 | `INTERNET_AUTOMATIC` | `true` | Search current facts without an explicit search command |
 | `INTERNET_HOME_CITY` | Empty | Default city and country for local questions |
@@ -380,10 +413,9 @@ A location in your request overrides the saved default. Set `INTERNET_HOME_CITY`
 to your city and country, or tell CIEL the location when asked; a timezone does
 not establish your home city. `INTERNET_ENABLED=false` disables internet retrieval.
 Local commands remain available without a cloud provider. If every eligible
-controller provider fails, an admitted request
-receives a short clarification. Background speech stays outside the conversation.
-Research model requests have a 60-second stall limit; the investigation can continue
-across further useful lookups without an overall deadline.
+response provider fails, an admitted request receives a short failure message.
+Background speech stays outside the conversation. Tool-assisted requests can use
+additional model rounds; ordinary chat answers in one main request.
 
 ### Listening and performance settings
 
@@ -416,15 +448,53 @@ in the recorded GPU tests. Turbo has its own separate environment.
 See [usage and tuning](docs/usage.md) for ambient follow-ups, strict mode,
 interruption recovery, captions, memory behavior, and STT retry settings.
 
+## Editable memory
+
+CIEL keeps durable notes in `data/ciel.workspace/` beside the default
+`data/ciel.db`. `MEMORY.md` holds curated memory, `USER.md` holds an optional
+profile, and `memory/*.md` holds dated working notes and detailed archives.
+`DREAMS.md` records reflection results and proposed changes for owner review.
+Existing durable SQLite facts migrate once into managed Markdown blocks;
+conversation archives and settings stay in SQLite.
+
+New foreground launches start fresh conversations with bounded curated memory.
+Ask `Search my memory for Atlas recovery` or `Read memory/atlas.md lines 10-30`
+to retrieve real source excerpts; past conversations remain available through
+same-owner memory lookup. Keyword search works without an embedding model.
+Optional hybrid recall uses an accepted local Ollama model. Source edits and
+deletions refresh the derived index without rereading unchanged note text.
+
+While CIEL runs, a local 03:00 reflection checks source evidence, recall frequency,
+query diversity, and relevance before proposing durable changes. The default
+`confirm` mode queues additions for review; merges and conflicts require approval
+in all modes. Automatic daily working-note capture has a separate setting.
+
+```bash
+ciel memory status
+ciel memory search Atlas recovery
+ciel memory get MEMORY.md --from 1 --lines 40
+ciel memory review
+ciel memory apply RUN_ID --action 0
+ciel memory backup /path/to/new-snapshot.db
+```
+
+Keep both `new-snapshot.db` and `new-snapshot.workspace/` from a backup. See
+[memory and personality](docs/memory-persona.md) for migration, recall controls,
+nightly review, configuration, and forgetting limits.
+
 ## Data and privacy
 
 API keys, `persona.txt`, model weights, recordings, databases, and generated
-benchmarks are excluded from Git. Accepted conversations are stored in
-`data/ciel.db` by default. Forgetting a fact removes the structured memory
-and suppresses known wording in provider context; it does not erase archived chats.
+benchmarks and the default `data/` memory workspace are excluded from Git. Keep
+custom workspace paths outside tracked source files. Accepted conversations
+stay in `data/ciel.db` by default; durable Markdown, provenance, and private
+preimages live beside it. Forgetting removes the selected fact, redacts known
+matching wording from workspace notes and derived lifecycle data, and suppresses
+it in provider context. Archived raw chats, prior backups, and unknown paraphrases
+need separate cleanup.
 
 Wake recognition, transcription, and speech synthesis run locally. Cloud replies
-send conversation context and relevant saved facts to the selected provider.
+send conversation context and bounded curated/retrieved memory to the selected provider.
 Web searches send query terms and relevant user context to public search services,
 and page reads contact the requested public sites. Set `INTERNET_ENABLED=false`
 to disable retrieval.
@@ -458,7 +528,7 @@ src/ciel/
 ├── actions/        # trusted local actions, validation, execution
 ├── audio/          # wake recognition, recording, STT, TTS, wake training
 ├── providers/      # AI clients, routing, fallback
-├── memory/         # SQLite facts, conversations, summaries
+├── memory/         # Markdown workspace, indexed recall, SQLite archives, lifecycle
 ├── platform/       # Linux audio and system telemetry
 ├── config.py       # environment settings
 ├── internet.py     # bounded public search, page reading, source evidence

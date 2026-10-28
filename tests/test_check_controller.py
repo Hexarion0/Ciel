@@ -94,6 +94,9 @@ def test_full_check_still_validates_source_backed_report(monkeypatch, capsys):
     quote = "Amber Works season 4 part 2 ends at light novel volume 11."
 
     def send(_messages, **kwargs):
+        if _messages[0].content.startswith("WEB GOAL CHECK"):
+            assert kwargs["purpose"] == "controller"
+            return LLMResponse('{"relevant_claims": [1]}', "synthetic-goal-check", "nim")
         content = (
             json.dumps({"claims": [{"text": "That part ends at light novel volume 11.",
                                     "source": 1, "quote": quote}]})

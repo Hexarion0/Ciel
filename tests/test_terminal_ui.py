@@ -31,6 +31,45 @@ class TTYBuffer(io.StringIO):
         return super().write(text)
 
 
+@pytest.mark.parametrize("no_color", [False, True])
+def test_clear_supported_terminal_once_and_flushes_without_erasing_scrollback(
+    monkeypatch, no_color,
+):
+    monkeypatch.setenv("TERM", "xterm-256color")
+    if no_color:
+        monkeypatch.setenv("NO_COLOR", "1")
+    else:
+        monkeypatch.delenv("NO_COLOR", raising=False)
+    output = TTYBuffer()
+    output.flush = MagicMock()
+
+    ConsoleUI(stream=output).clear()
+
+    assert output.writes == ["\x1b[2J\x1b[H"]
+    output.flush.assert_called_once()
+
+
+@pytest.mark.parametrize("term", ["xterm-256color", "dumb", "unknown"])
+def test_clear_redirected_output_emits_no_terminal_controls(monkeypatch, term):
+    monkeypatch.setenv("TERM", term)
+    output = io.StringIO()
+    output.write("Existing log\n")
+
+    ConsoleUI(stream=output).clear()
+
+    assert output.getvalue() == "Existing log\n"
+
+
+@pytest.mark.parametrize("term", ["dumb", "unknown"])
+def test_clear_unsupported_terminal_preserves_output(monkeypatch, term):
+    monkeypatch.setenv("TERM", term)
+    output = TTYBuffer()
+
+    ConsoleUI(stream=output).clear()
+
+    assert output.writes == []
+
+
 @pytest.fixture
 def interactive(monkeypatch):
     import select

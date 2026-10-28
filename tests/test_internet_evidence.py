@@ -26,7 +26,9 @@ def evidence_service(monkeypatch):
     monkeypatch.setitem(sys.modules, "ddgs", SimpleNamespace(
         DDGS=Mock(side_effect=AssertionError("Unexpected search backend")),
     ))
-    service = InternetService(InternetConfig(max_pages=0, research_max_pages=0, max_results=10))
+    service = InternetService(InternetConfig(
+        provider="ddgs", max_pages=0, research_max_pages=0, max_results=10,
+    ))
     service.search = Mock(return_value=[])
     monkeypatch.setattr(service, "_search", service.search)
     monkeypatch.setattr(service, "_read_page", Mock(

@@ -1,8 +1,170 @@
 # Memory and personality
 
-CIEL combines a stable companion personality with attributed personal facts,
-recent dialogue, and a running account of older conversations. The upgrade keeps
-those sources distinct so continuity does not become invented certainty.
+CIEL keeps durable memory in owner-editable Markdown, with SQLite for conversation
+archives, structured fact caches, and lifecycle bookkeeping. Replies receive bounded
+curated context and can retrieve older evidence when you ask about it.
+
+The design draws on OpenClaw's [Markdown memory layers](https://docs.openclaw.ai/concepts/memory)
+and [background dreaming](https://docs.openclaw.ai/concepts/dreaming): keep a compact
+curated file, search detailed notes on demand, and check evidence before promotion.
+CIEL implements its own owner checks, settings, and review commands. Fresh CIEL
+launches load curated memory while leaving daily notes and old chats for retrieval.
+
+## Markdown workspace and migration
+
+With the default `MEMORY_DB_PATH=data/ciel.db`, CIEL uses the sibling directory
+`data/ciel.workspace/`. Set `MEMORY_WORKSPACE_PATH` to choose another directory.
+
+| Source | Purpose |
+| --- | --- |
+| `MEMORY.md` | Curated durable facts, decisions, and application-managed current fact blocks |
+| `USER.md` | Optional owner-written profile and communication preferences |
+| `memory/YYYY-MM-DD.md` | Dated working observations with source attribution |
+| `memory/**/*.md` | Detailed notes and archives available through search |
+| `memory/private/**/*.md` | Notes available in local-only context |
+| `DREAMS.md` | Reflection results and proposed changes for owner inspection |
+| `.ciel-memory.json` | Application-owned fact identities and provenance, independent of note prose |
+| `.memory-state/preimages/` | Private copies of curated text before guarded replacements |
+| `.ciel/search.sqlite3` | Rebuildable keyword/embedding index; Markdown remains authoritative |
+
+The first workspace-enabled open migrates existing durable SQLite records to managed
+Markdown blocks. CIEL retains conversation archives, settings, fact keys, and revision
+history. Reopening the same workspace does not append duplicate imports. Existing
+unrelated Markdown stays intact. Disabling `MEMORY_WORKSPACE_ENABLED` retains the
+SQLite compatibility path. An in-memory database creates no workspace unless the
+caller supplies one.
+
+Before the first upgraded launch, keep a copy of the old database with CIEL stopped.
+After migration, back up the database and its workspace together using the command
+below. Copy a custom workspace too if you move the database to another computer.
+
+You can edit note text in a UTF-8 editor. Preserve managed block identifiers if you
+want a current fact to keep its identity and history. Editing that block refreshes
+the structured cache; removing it or its source file removes that managed fact.
+Other Markdown prose remains searchable evidence without creating a keyed fact.
+CIEL rejects invalid UTF-8 and unsafe paths rather than returning a cached preimage.
+
+Keep `.ciel-memory.json` with your notes. CIEL uses that registry and authenticated
+owner turns to classify sources; a frontmatter claim such as `origin: owner` grants
+no authority. Automatic context admits curated sources whose recorded contributors
+are owner/validated agent sources. Imported or untrusted content remains data for
+explicit retrieval. The `memory/private/` namespace stays private even without a
+registry entry. `DREAMS.md` and preimages stay outside automatic recall and promotion.
+
+## Search and read source evidence
+
+Ask `Search my memory for Atlas recovery` or `Read memory/atlas.md lines 10-30`.
+Voice and paired-owner chat use the same `memory_search` and `memory_get` tools.
+Search returns paths, source line ranges, scores, provenance, and bounded snippets;
+get reads a selected range from an allowed Markdown source. A request for earlier
+conversation can also retrieve dated user excerpts from the same owner's authorized
+archives. Session references do not grant arbitrary filesystem access.
+
+An ordinary reply receives bounded `USER.md`/`MEMORY.md` context, plus private curated
+memory when local routing permits it. Daily observations, imported notes, and old
+launches' conversations require a relevant memory lookup. Each foreground launch
+starts fresh conversation context while retaining those sources for later retrieval.
+
+The model can make at most three memory tool calls before its final answer.
+`MEMORY_SEARCH_MAX_RESULTS=6` and `MEMORY_SEARCH_MIN_SCORE=0.35` set search defaults;
+`memory_get` defaults to 100 lines with an 8,000-character excerpt ceiling. The
+combined tool evidence must fit `MEMORY_RECALL_MAX_CHARS` (6,000 by default).
+Warnings or missing evidence require an honest partial answer or clarification.
+Retrieved prose supplies historical evidence; it cannot authorize actions or writes.
+Recognized personal-history lookups stay within memory rather than falling back to
+public search. An explicit request such as `Search online for ways to organize my
+notes` still uses the web route. Exact local search/read requests also work with
+the AI controller disabled. Reset and owner changes invalidate in-flight reads and
+replies; an interrupted streamed reply is retained only in the unchanged conversation.
+
+Keyword search uses local SQLite FTS5, Unicode matching, filename lookup, and bounded
+chunks. Optional hybrid recall adds the configured local embedding client described
+below. CIEL needs no downloaded embedding model or hosted embedding service for
+keyword access. Dated notes receive recency weighting; curated files do not age out.
+
+Search reconciles edits and deletions before retrieval; a running owner runtime also
+polls for changes. Unchanged text and hashes use a bounded, stat-validated cache.
+Structured fact checks inspect registered fact sources without scanning the archive.
+Search still checks source visibility, permissions, and provenance. Slow embedding
+work runs outside the search lock; a query waits at most 100 ms for optional inference
+before using available keyword evidence. A later matching query can use completed
+semantic scores. This inference budget does not cap source scanning or all SQL work.
+
+Use `ciel memory index --force` to rebuild the derived workspace index, or
+`ciel memory reset-index` to clear it. Both preserve Markdown and conversation
+archives. Removing a source revokes its results even if index publication fails.
+
+## Daily checkpoints and nightly review
+
+CIEL stages accepted, authenticated owner statements when
+`MEMORY_DAILY_CAPTURE_ENABLED=true`. It flushes useful statements to dated working
+notes before conversation compaction, on clean conversation close, or through
+`ciel memory flush`. `MEMORY_FLUSH_ENABLED=false` disables those checkpoints.
+The flush keeps original attributed wording and avoids duplicate entries. Assistant
+claims, tool/screen output, recalled passages, recognized secrets, and private `/local`
+conversation are excluded from automatic capture/promotion.
+
+`MEMORY_CONSOLIDATION_ENABLED=true` starts a stoppable scheduler in a running CIEL
+process. `MEMORY_CONSOLIDATION_TIME=03:00` selects local OS wall time. The PC and a
+CIEL runtime must be running; this creates no separate system cron job and performs
+no missed-run catch-up on launch. Foreground work takes priority, and a busy or
+unavailable provider causes a quiet five-minute retry.
+
+Reflection first checks live owner evidence and recorded retrieval signals. A
+candidate needs at least three recall signals from three distinct queries, a latest
+recall within 30 days, and a weighted score of at least 0.75. Repeating one query on
+one day counts once. Ranking combines retrieval relevance, frequency, query diversity,
+recency, cross-day recurrence, and conceptual breadth, plus bounded light/REM-style
+reinforcement. An unqueried daily log does not qualify through repetition alone.
+
+Only then may the background provider propose sourced additions, merges, or
+supersessions. CIEL validates a tool-free structured plan against original owner
+quotes and live line references. In `automatic` learning mode, a nonconflicting
+addition can enter `MEMORY.md` if it fits the curated/bootstrap budget. In `confirm`
+or `explicit` mode, proposed additions wait for owner review. Merges, supersessions,
+and possible conflicts require review in all modes. Managed current fact blocks
+remain protected; use the normal confirmed correction commands for those fields.
+Nightly curated output has a 4,000-character ceiling, reduced further by the shared
+bootstrap budget and profile allowance. Larger owner-written files stay on disk;
+CIEL clips the context excerpt rather than shortening the owner's source file.
+
+Inspect `DREAMS.md` in your editor and pending actions through the CLI:
+
+```bash
+ciel memory flush
+ciel memory consolidate
+ciel memory review
+ciel memory review RUN_ID
+ciel memory apply RUN_ID --action 0
+```
+
+`consolidate` can contact the configured background AI route after the evidence
+gates pass. `review` and `apply` run without an AI request. `apply RUN_ID` approves
+all pending actions; repeat `--action INDEX` to select the displayed zero-based
+actions. These lifecycle commands require the selected database's persisted owner
+conversation binding from a CIEL launch; an isolated `--db` does not borrow the
+normal database's owner context. Approval rechecks owner scope, source quotes,
+reset generations, and the curated preimage. Changed or deleted evidence, a
+concurrent owner edit, or an exceeded budget can reject the apply. CIEL keeps the
+earlier curated text and logs completed changes; an approval does not override
+managed current-fact protection.
+
+The workspace-specific environment settings are:
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| `MEMORY_WORKSPACE_ENABLED` | `true` | Use Markdown-backed durable memory |
+| `MEMORY_WORKSPACE_PATH` | empty | Derive a `.workspace` sibling from `MEMORY_DB_PATH` |
+| `MEMORY_WORKSPACE_BOOTSTRAP_MAX_CHARS` | `8000` | Upper bound before shared recall limits and source wrappers |
+| `MEMORY_DAILY_CAPTURE_ENABLED` | `true` | Stage authenticated owner turns for working notes |
+| `MEMORY_FLUSH_ENABLED` | `true` | Preserve useful staged context at checkpoints |
+| `MEMORY_CONSOLIDATION_ENABLED` | `true` | Enable manual and scheduled reflection |
+| `MEMORY_CONSOLIDATION_TIME` | `03:00` | Local OS wall-clock schedule while CIEL runs |
+| `MEMORY_SEARCH_MAX_RESULTS` | `6` | Default workspace tool result count |
+| `MEMORY_SEARCH_MIN_SCORE` | `0.35` | Default recall relevance threshold |
+
+`MEMORY_RECALL_ENABLED`, `MEMORY_RECALL_MAX_CHARS`, and the learning/correction
+settings still apply. A saved pause/resume choice overrides the initial recall flag.
 
 ## Personal context you control
 
@@ -12,12 +174,14 @@ those sources distinct so continuity does not become invented certainty.
 - `confirm` (fresh-install default): ask before saving a conversational statement.
 - `explicit`: save only `remember ...` commands.
 
-The selected desktop configuration uses `automatic` and
-`MEMORY_CONFIRM_CORRECTIONS=true`. Changing an existing fact asks for confirmation,
+Set `MEMORY_LEARNING_MODE=automatic` to opt into new current-fact saves without
+a proposal. With `MEMORY_CONFIRM_CORRECTIONS=true`, changing an existing fact asks for confirmation,
 including when the replacement starts with `remember`. Broad project-date inference
 and short inferred corrections remain proposals. Questions, quotations, uncertain
 wording, other people's statements, and compound requests are not automatic facts.
 The recognizer makes no provider call and does not extract arbitrary conversation.
+Daily working-note capture has its own `MEMORY_DAILY_CAPTURE_ENABLED` switch;
+`explicit` learning mode still permits those checkpoints unless you disable them.
 
 Supported statements include:
 
@@ -77,8 +241,9 @@ Other notes still use `remember ...`. Automatic mode records the source as
 ## Pause recall and inspect saved memory
 
 Say `pause memory recall` or `resume memory recall`. The setting survives restart.
-Pausing keeps saved facts and learning active, but omits saved facts and the saved
-preferred name from reply context and disables local saved-fact answers. Recent
+Pausing keeps saved facts and learning active, but omits saved facts, workspace
+bootstrap, and the saved preferred name from reply context. It disables memory
+retrieval tools and local saved-fact answers. Recent
 dialogue and conversation summaries still support follow-ups. Ask `Memory status`
 for an application-owned answer. A persisted pause/resume overrides the initial
 `MEMORY_RECALL_ENABLED` setting.
@@ -87,8 +252,12 @@ Owner tools work without loading audio or contacting a provider:
 
 ```bash
 ciel memory stats
+ciel memory status
 ciel memory list --limit 20
 ciel memory search Atlas next step
+ciel memory get MEMORY.md --from 1 --lines 40
+ciel memory index --force
+ciel memory reset-index
 ciel memory show user:current_project
 ciel memory history user:current_project
 ciel memory project Atlas
@@ -98,13 +267,28 @@ ciel memory backup /path/to/new-memory-backup.db
 ```
 
 Use `ciel memory --db /path/to/memory.db --json list` for an explicit database
-and structured output. Inspection remains available while recall is paused.
-Backups use SQLite's consistent online backup and refuse to overwrite files.
-They contain facts, revision history, archived dialogue, and saved preferences;
-keep them private. New backup files are readable only by their owner on Linux.
+and structured output. `--db` selects its sibling workspace even if your normal
+configuration points elsewhere; add `--workspace /path/to/notes` to override it.
+Place these global options before the subcommand. Owner CLI inspection remains
+available while recall is paused. `status` reports configured lifecycle settings
+and the keyword index; it does not measure a separate live process's watcher.
+
+Backups combine SQLite's online backup with a sibling Markdown snapshot. For
+`backup /path/to/snapshot.db`, keep both `snapshot.db` and `snapshot.workspace/`.
+The directory includes source notes, provenance, `DREAMS.md`, and preimages;
+CIEL omits the rebuildable `.ciel/search.sqlite3` cache. It refuses existing
+destinations and cleans up an incomplete new backup after a detected source change.
+The SQLite file retains facts, revisions, archived dialogue, and saved preferences.
+CIEL creates private Linux files/directories (0600/0700); keep the pair private.
+Stop CIEL before restoring a saved pair. Point `MEMORY_DB_PATH` at the restored
+database and clear or update a custom `MEMORY_WORKSPACE_PATH` so both paths match.
 `ciel memory forget ID_OR_KEY` forgets one fact. `ciel memory clear-session SESSION`
 erases only that session's archived dialogue and summaries, keeping personal facts.
-Neither command changes older backup files.
+Forgetting also redacts known matching wording from working notes, review logs,
+and preimages, removes matching staged observations, and invalidates pending
+reflection plans. Existing backup copies and archived raw conversation text remain.
+Paraphrases, unknown spellings, and forensic recovery from storage are outside this
+targeted suppression guarantee. Neither command changes older backup files.
 
 ## Project decisions and unfinished work
 
@@ -133,7 +317,8 @@ conversation, without repeatedly raising it during unrelated topics.
 ## Optional local semantic recall
 
 Semantic recall supplements indexed word matching with an explicitly selected local
-Ollama embedding model. It uses the documented [local embedding API](https://docs.ollama.com/api/embed),
+Ollama embedding model. It uses the documented
+[local embedding API](https://docs.ollama.com/api/embed),
 requests CPU execution, accepts only loopback HTTP endpoints, and disables proxy
 and redirect handling. It never downloads a model or sends embeddings to a hosted
 service. The default configuration leaves it disabled.
@@ -156,22 +341,26 @@ a claim of general model quality. The report includes local query timings.
 After a passing evaluation and indexing, set `MEMORY_SEMANTIC_MODEL=MODEL_NAME` and
 `MEMORY_SEMANTIC_ENABLED=true`, then restart CIEL. Runtime checks the recorded
 acceptance for that model before using it. Re-evaluate after changing model weights
-and reindex after adding or changing facts. Indexing stays outside the conversation
-response path. Corrected, forgotten, obsolete, or hash-mismatched records cannot be
-recalled from stale vectors. Pausing recall also suppresses semantic recall.
+and reindex the structured fact vectors after adding or changing facts. Workspace
+hybrid search uses the same accepted local client and refreshes its own derived
+document vectors in the background. Corrected, forgotten, obsolete, or hash-mismatched
+records cannot be recalled from stale vectors. Pausing recall also suppresses semantic recall.
 Low-similarity results are discarded; the first lexical match remains an anchor.
 When the local service fails, recall falls back to the lexical index, with a short
 backoff before another embedding request.
 
 `scripts/benchmark_memory_recall.py --model MODEL_NAME --output /tmp/recall.json`
 runs the same synthetic evaluation without approving or modifying a personal
-database. The initial desktop check found no reachable local embedding service, so
-semantic recall remains disabled until an actual model passes evaluation.
+database. Keep semantic recall disabled until your installed model passes the gate.
 
 ## Continuity inside conversations
 
-Voice and the currently paired Telegram account now read one chronological
-conversation. Existing archives stay intact; no migration or copying is needed.
+Voice and the currently paired Telegram account read one chronological
+conversation within the current foreground launch. Each new `ciel` launch starts
+fresh desktop/chat archives while keeping saved personal facts and old archives.
+Earlier launches' dialogue and summaries stay out of automatic replay; a memory
+lookup can retrieve bounded user excerpts from the same owner's previous launches. A running
+Telegram worker follows the new launch and discards old pending confirmations.
 Messages and summaries carry their origin and recorded time. Unpairing or changing
 the paired account excludes its old chat archive immediately. Clearing one channel
 also invalidates shared summaries containing it, preserving the other channel's
@@ -179,7 +368,8 @@ history. Confirmations remain in the channel where the fact was proposed.
 
 If a summary is deferred or invalid, a bounded tail of up to 32 unsummarized turns
 can remain available within the existing character budget. Older user messages
-are also searchable by topic through a local persisted word index. Matching
+are searchable by topic through a local persisted word index. Current-launch
+context supplies ordinary continuity; old launches require a memory lookup. Matching
 passages include their recorded date and channel, labeled as historical dialogue,
 not confirmed current facts. Assistant claims are not indexed as personal evidence.
 Corrected values, forgotten details, and known secret tokens are excluded from
@@ -246,7 +436,10 @@ Older dialogue is summarized into a validated JSON state:
 | `superseded` | Corrections and abandoned choices that should not be revived |
 
 The summary instructions ask the provider to remove resolved threads and merge
-relevant earlier context. Each field has size and type limits. Invalid JSON,
+relevant earlier context. Field types are strict, and the complete serialized
+state has a hard 4,000-character budget. Per-field length/count targets guide
+generation; complete notes fitting the total budget are retained without truncation.
+Invalid JSON,
 unexpected fields, empty summaries, and failed requests leave the processing
 cursor unchanged for retry. The summary request allows up to 600 output tokens,
 up from 150, so there is room for more than a one-sentence recap. Foreground
@@ -255,8 +448,8 @@ requests retain priority over this background work.
 Existing plain-text summaries remain usable and can be merged into the next
 structured summary. Providers returning plain text retain a bounded compatibility
 path. Structured state is stored as conversation context, never as automatically
-confirmed personal facts. The session identity is unchanged, so the upgrade
-continues the existing conversation without deleting or resetting it.
+confirmed personal facts. Existing archives remain intact. Foreground launches
+now use a new conversation identity rather than resuming the preceding launch.
 
 Known forgotten wording is masked in recalled notes, derived timelines, local
 saved-fact answers, conversation history, summaries, and speech-gate requests.
@@ -301,9 +494,12 @@ the voice model. Restart CIEL to load the new application code.
 Automated tests exercise confirmation, corrections, restart recovery, contextual
 recall, summary validation, forgetting, and the real CLI callbacks using mocked
 providers and audio. They do not prove that a particular provider's dialogue
-feels natural. The complete suite passed 1,488 tests, with five integration cases
-excluded, plus Ruff and dependency checks. Tests use isolated databases and mocked
-providers; a live local embedding model and microphone acceptance remain separate.
+feels natural. Tests use isolated databases and mocked providers. Workspace tests
+cover migration, source edits, line-addressed retrieval, owner/privacy isolation,
+bounded caching, nightly score gates, and review/apply conflicts. See
+[release checks](release-checks.md) for recorded command results and pending
+acceptance. A live local embedding model, scheduled desktop run, and microphone
+acceptance remain separate.
 Check these scenarios with your selected model:
 
 1. Save a project and goal, restart, then ask what you're working toward.

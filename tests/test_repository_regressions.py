@@ -148,7 +148,9 @@ def test_wake_models_flow_from_environment_to_audio(monkeypatch):
     assert Settings(_env_file=None).audio.wake_models == ["models/custom/hey_ciel.onnx"]
 
 
-def test_failed_summary_does_not_skip_turns_on_recovery(memory):
+def test_failed_summary_does_not_skip_turns_on_recovery(memory, monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr("ciel.memory.manager.monotonic", lambda: clock[0])
     conversation = ConversationManager(memory, max_turns=2, summary_interval=1)
     for index in range(20):
         conversation.add_turn("user", f"unique detail number {index}")
@@ -158,8 +160,13 @@ def test_failed_summary_does_not_skip_turns_on_recovery(memory):
     assert memory.get_session_summary("default") is None
     provider.send.side_effect = None
     provider.send.return_value = LLMResponse("Recovered summary", "fake", "fake")
+    assert conversation.summarize_older_turns(provider) is None
+    assert provider.send.call_count == 1
+    clock[0] += 30.0
     assert conversation.summarize_older_turns(provider) == "Recovered summary"
-    assert "unique detail number 10" in provider.send.call_args.args[0][1].content
+    transcript = provider.send.call_args.args[0][1].content
+    assert all(f"unique detail number {index}" in transcript for index in range(18))
+    assert conversation.get_total_turn_count() == 20
 
 
 def test_local_summary_and_restart_keep_private_context_on_ollama(memory, providers):

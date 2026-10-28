@@ -1,4 +1,4 @@
-"""The real voice/keyboard callback uses AI choices before speech, tools, or persistence."""
+"""The main response model uses native tools within voice and keyboard safety gates."""
 
 import json
 from threading import Event
@@ -9,14 +9,47 @@ import pytest
 from ciel.config import InternetConfig
 from ciel.internet import InternetResult, InternetService, InternetSource
 from ciel.memory import MemoryItem, MemoryStore, MemoryType
-from ciel.memory.bridge import desktop_conversation_id
-from ciel.providers.base import LLMResponse
+from ciel.providers.base import LLMResponse, ToolCall
 from ciel.providers.router import ModelRouter
 from tests.test_ambient import run_callbacks
 
 
+def _tool_call(name, **arguments):
+    """Script a main-model native request rather than decision-model JSON."""
+    return LLMResponse("", "chat", "nim", tool_calls=(
+        ToolCall("call_1", name, json.dumps(arguments)),
+    ))
+
+
 def _decision(action, **fields):
+    """Legacy controller fixtures retained for tests of the disabled-controller path."""
     return LLMResponse(json.dumps({"action": action, "confidence": 0.99, **fields}), "light", "nim")
+
+
+def _main_utterance(request):
+    """Read the bounded current user fragments without the appended tool-boundary prompt."""
+    fragments = []
+    for message in reversed(request.args[0]):
+        if message.role == "system" and not fragments:
+            continue
+        if message.role != "user":
+            break
+        fragments.append(message.content)
+        if len(fragments) == 5:
+            break
+    return " ".join(reversed(fragments))
+
+
+def _main_responses(responses):
+    """Keep web evidence relevance checks on main response routing."""
+    def send(messages, **kwargs):
+        if messages[0].content.startswith("WEB GOAL CHECK"):
+            assert kwargs.get("purpose") == "verification"
+            return LLMResponse('{"relevant_claims":[1]}', "goal-check", "nim")
+        assert kwargs.get("purpose", "conversation") == "conversation"
+        return responses(messages, **kwargs)
+
+    return send
 
 
 def _internet(monkeypatch, results):
@@ -29,21 +62,17 @@ def _internet(monkeypatch, results):
     return service
 
 
-def _seed_legacy_private_summary(tmp_path) -> None:
-    """Reopen protected history created before the local command was retired."""
-    store = MemoryStore(tmp_path / "memory.db")
-    try:
-        store.save_memory(MemoryItem(
-            content="A private conversation from an earlier release.",
-            memory_type=MemoryType.CONVERSATION,
-            metadata={"session_id": desktop_conversation_id(), "local_only": True},
-        ))
-    finally:
-        store.close()
+def _seed_legacy_private_summary(store: MemoryStore, session_id: str) -> None:
+    """Add a protected legacy record to the launch under test before its first turn."""
+    store.save_memory(MemoryItem(
+        content="A private conversation from an earlier release.",
+        memory_type=MemoryType.CONVERSATION,
+        metadata={"session_id": session_id, "local_only": True},
+    ))
 
 
 @pytest.mark.parametrize("typed", [False, True])
-def test_ai_query_and_acknowledgment_precede_search_and_only_final_reply_is_saved(
+def test_native_tool_request_precedes_search_and_only_final_reply_is_saved(
     tmp_path, monkeypatch, typed,
 ):
     events = []
@@ -54,27 +83,27 @@ def test_ai_query_and_acknowledgment_precede_search_and_only_final_reply_is_save
 
     def lookup(*args, **_kwargs):
         events.append("search")
-        assert events == ["decision", "ack", "search"]
+        assert events == ["model", "ack", "search"]
         assert args[0] == query
         return InternetResult(attempted=True, sources=[source], query=query)
 
     service.lookup.side_effect = lookup
     router = MagicMock()
     choices = [
-        _decision("search", query=query, speech="I'll check that online."),
+        _tool_call("web_search", query=query),
         LLMResponse(json.dumps({"claims": [{"text": "That part ends at light novel volume 11.",
                                             "source": 1, "quote": quote}]}), "light", "nim"),
     ]
 
     def send(*_args, **_kwargs):
-        events.append("decision" if len(events) == 0 else "report")
+        events.append("model" if len(events) == 0 else "report")
         return choices.pop(0)
 
-    router.send.side_effect = send
+    router.send.side_effect = _main_responses(send)
     tts = MagicMock()
 
     def speak(text, **kwargs):
-        events.append("ack" if text == "I'll check that online." else "final")
+        events.append("ack" if "search" not in events else "final")
         if kwargs.get("on_start"):
             kwargs["on_start"]()
         return True
@@ -86,11 +115,15 @@ def test_ai_query_and_acknowledgment_precede_search_and_only_final_reply_is_save
         router=router, tts=tts, controller=True,
     )
     try:
-        assert events == ["decision", "ack", "search", "report", "final"]
+        assert events == ["model", "ack", "search", "report", "final"]
+        assert tts.speak.call_count == 2
         service.prepare.assert_not_called()
         assistant = [turn for turn in turns if turn.role == "assistant"]
         assert len(assistant) == 1
-        assert assistant[0].content == "That part ends at light novel volume 11."
+        assert assistant[0].content == (
+            "That part ends at light novel volume 11. [1]" if typed else
+            "That part ends at light novel volume 11."
+        )
         assert assistant[0].sources == [source.to_dict()]
     finally:
         store.close()
@@ -99,7 +132,7 @@ def test_ai_query_and_acknowledgment_precede_search_and_only_final_reply_is_save
 def test_background_is_rejected_before_models_speech_persistence_or_tools(tmp_path, monkeypatch):
     service = _internet(monkeypatch, [])
     router = MagicMock()
-    router.send.return_value = _decision("silent")
+    router.send.return_value = LLMResponse("Unadmitted background.", "chat", "nim")
     _, tts, _, store, turns = run_callbacks(
         tmp_path, monkeypatch, [("Mom, what's for dinner?", {})],
         router=router, controller=True,
@@ -113,12 +146,10 @@ def test_background_is_rejected_before_models_speech_persistence_or_tools(tmp_pa
         store.close()
 
 
-def test_active_spoken_followup_recovers_from_false_other_listener(tmp_path, monkeypatch):
+def test_active_spoken_followup_reaches_main_model_once_per_turn(tmp_path, monkeypatch):
     router = MagicMock()
     router.send.side_effect = [
-        _decision("answer", intent="greeting"),
         LLMResponse("Hi. What's on your mind?", "chat", "nim"),
-        _decision("silent", intent="other_listener"),
         LLMResponse("Tell me what you want to check.", "chat", "nim"),
     ]
     _, tts, _, store, turns = run_callbacks(tmp_path, monkeypatch, [
@@ -132,10 +163,10 @@ def test_active_spoken_followup_recovers_from_false_other_listener(tmp_path, mon
         assert [turn.content for turn in turns if turn.role == "assistant"] == [
             "Hi. What's on your mind?", "Tell me what you want to check.",
         ]
-        assert router.send.call_count == 4
+        assert router.send.call_count == 2
         assert [call.kwargs.get("purpose", "conversation")
                 for call in router.send.call_args_list] == [
-            "controller", "conversation", "controller", "conversation",
+            "conversation", "conversation",
         ]
         assert tts.speak.call_count == 2
     finally:
@@ -146,8 +177,7 @@ def test_capability_question_goes_to_ai_answer_without_searching_why_cant(tmp_pa
     service = _internet(monkeypatch, [])
     router = MagicMock()
     router.send.side_effect = [
-        _decision("answer"), LLMResponse("The earlier sources didn't establish that detail.",
-                                        "chat", "nim"),
+        LLMResponse("The earlier sources didn't establish that detail.", "chat", "nim"),
     ]
     _, _, _, store, turns = run_callbacks(
         tmp_path, monkeypatch,
@@ -166,17 +196,18 @@ def test_canceling_initial_acknowledgment_prevents_all_network_work(tmp_path, mo
     canceled = Event()
     service = _internet(monkeypatch, [])
     router = MagicMock()
-    router.send.return_value = _decision("search", query="Tensura season 4")
+    router.send.return_value = _tool_call("web_search", query="Tensura")
     tts = MagicMock()
     tts.speak.side_effect = lambda *_args, **_kwargs: canceled.set()
     _, _, _, store, turns = run_callbacks(
         tmp_path, monkeypatch,
-        [("Search Tensura", {"input_source": "keyboard", "cancel_event": canceled})],
+        [("Search Tensura", {"wake_verified": True, "cancel_event": canceled})],
         router=router, tts=tts, controller=True,
     )
     try:
         service.lookup.assert_not_called()
         router.send.assert_called_once()
+        tts.speak.assert_called_once()
         assert not any(turn.role == "assistant" for turn in turns)
     finally:
         store.close()
@@ -184,15 +215,18 @@ def test_canceling_initial_acknowledgment_prevents_all_network_work(tmp_path, mo
 
 def test_explicit_clock_executes_before_ai_selection(tmp_path, monkeypatch):
     router = MagicMock()
-    router.send.return_value = _decision("local")
+    router.send.return_value = LLMResponse("A safe answer.", "chat", "nim")
     _, tts, _, store, turns = run_callbacks(
         tmp_path, monkeypatch, [("What time is it?", {"input_source": "keyboard"})],
         router=router, controller=True,
     )
     try:
         router.send.assert_not_called()
+        assert [turn.content for turn in turns if turn.role == "user"] == ["What time is it?"]
+        assert len([turn for turn in turns if turn.role == "assistant"]) == 1
         assert turns[-1].provider == "local" and ":" in turns[-1].content
         tts.speak.assert_called_once()
+        assert tts.speak.call_args.args[0] == turns[-1].content
     finally:
         store.close()
 
@@ -205,7 +239,6 @@ def test_ai_cannot_authorize_an_inferred_memory_confirmation(
 ):
     router = MagicMock()
     router.send.side_effect = [
-        _decision("local"), _decision("local"),
         LLMResponse("I haven't saved that.", "chat", "nim"),
     ]
     _, _, _, store, _ = run_callbacks(tmp_path, monkeypatch, [
@@ -214,15 +247,7 @@ def test_ai_cannot_authorize_an_inferred_memory_confirmation(
     ], router=router, controller=True)
     try:
         assert (store.get_fact("user:favorite_game") is not None) is expected
-        if expected:
-            router.send.assert_not_called()
-        else:
-            from ciel.controller import _CONTEXT_MARKER
-
-            last_decision = [call for call in router.send.call_args_list
-                             if call.kwargs.get("purpose") == "controller"][-1]
-            payload = json.loads(last_decision.args[0][0].content.split(_CONTEXT_MARKER)[1])
-            assert payload["pending_local_confirmation"] is True
+        router.send.assert_not_called()  # The code gate owns both authorized and denied writes.
     finally:
         store.close()
 
@@ -230,7 +255,7 @@ def test_ai_cannot_authorize_an_inferred_memory_confirmation(
 def test_topic_change_clears_pending_memory_before_later_yes(tmp_path, monkeypatch):
     router = MagicMock()
     router.send.side_effect = [
-        _decision("answer"), LLMResponse("Hello.", "chat", "nim"), _decision("local"),
+        LLMResponse("Hello.", "chat", "nim"), LLMResponse("What did you mean?", "chat", "nim"),
     ]
     _, _, _, store, _ = run_callbacks(tmp_path, monkeypatch, [
         ("My favorite game is CS2.", {"input_source": "keyboard"}),
@@ -243,32 +268,30 @@ def test_topic_change_clears_pending_memory_before_later_yes(tmp_path, monkeypat
         store.close()
 
 
-def test_local_session_stays_private_after_restart_and_cannot_search(tmp_path, monkeypatch):
-    _seed_legacy_private_summary(tmp_path)
+def test_current_launch_stays_private_after_clock_reply_and_cannot_search(tmp_path, monkeypatch):
+    service = _internet(monkeypatch, [])
     router = MagicMock()
-    router.send.return_value = _decision("local")
+    router.send.return_value = _tool_call("web_search", query="Tensura season 4")
     _, _, _, store, turns = run_callbacks(tmp_path, monkeypatch, [
         ("What time is it?", {"input_source": "keyboard"}),
-    ], router=router, controller=True)
-    assert ":" in turns[-1].content
-    router.send.assert_not_called()
-    store.close()
-    service = _internet(monkeypatch, [])
-    router.send.return_value = _decision("search", query="Tensura season 4")
-    _, _, _, store, turns = run_callbacks(tmp_path, monkeypatch, [
         ("Search Tensura season 4", {"input_source": "keyboard"}),
-    ], router=router, controller=True)
+    ], router=router, controller=True, initialize_conversation=_seed_legacy_private_summary)
     try:
-        assert all(message.local_only for message in router.send.call_args.args[0])
+        assert ":" in turns[1].content
+        router.send.assert_called_once()
+        assert ModelRouter.requires_local(router.send.call_args.args[0])
+        assert not {"web_search", "read_page"}.intersection(
+            tool["function"]["name"] for tool in router.send.call_args.kwargs["tools"]
+        )
         service.lookup.assert_not_called()
-        assert "private" in turns[-1].content
+        assert "safely complete" in turns[-1].content
     finally:
         store.close()
 
 
 def test_superseded_background_speech_does_not_call_controller(tmp_path, monkeypatch):
     router = MagicMock()
-    router.send.return_value = _decision("silent")
+    router.send.return_value = LLMResponse("Unadmitted background.", "chat", "nim")
     _, tts, _, store, turns = run_callbacks(tmp_path, monkeypatch, [],
         observed=[("Dad, come here", {"superseded": True})],
         router=router, controller=True,
@@ -283,18 +306,15 @@ def test_superseded_background_speech_does_not_call_controller(tmp_path, monkeyp
 
 @pytest.mark.parametrize("private", [False, True])
 @pytest.mark.parametrize("middle", ["And include examples.", ""])
-def test_repeated_superseded_fragments_reach_one_final_controller_turn(
+def test_repeated_superseded_fragments_reach_one_final_main_model_turn(
     tmp_path, monkeypatch, private, middle,
 ):
     first, second, latest = Event(), Event(), Event()
     first.set()
     second.set()
     initial = "explain this setting."
-    if private:
-        _seed_legacy_private_summary(tmp_path)
     router = MagicMock()
     router.send.side_effect = [
-        _decision("answer", intent="follow_up"),
         LLMResponse("Here is the complete explanation.", "chat", "nim"),
     ]
     _, tts, _, store, turns = run_callbacks(
@@ -310,12 +330,13 @@ def test_repeated_superseded_fragments_reach_one_final_controller_turn(
             }),
         ],
         router=router, controller=True,
+        initialize_conversation=_seed_legacy_private_summary if private else None,
     )
     try:
         expected = [initial, *([middle] if middle else []), "Keep the answer short."]
-        assert router.send.call_count == 2
-        assert router.send.call_args_list[0].args[0][-1].content == " ".join(expected)
-        assert router.send.call_args_list[0].kwargs["purpose"] == "controller"
+        router.send.assert_called_once()
+        assert _main_utterance(router.send.call_args) == " ".join(expected)
+        assert router.send.call_args.kwargs["purpose"] == "conversation"
         assert [turn.content for turn in turns if turn.role == "user"] == expected
         if private:
             assert all(
@@ -334,7 +355,7 @@ def test_superseded_other_listener_cannot_join_an_addressed_fragment_chain(
     first.set()
     second.set()
     router = MagicMock()
-    router.send.side_effect = [_decision("answer"), LLMResponse("A new answer.", "chat", "nim")]
+    router.send.return_value = LLMResponse("A new answer.", "chat", "nim")
     _, _, _, store, turns = run_callbacks(
         tmp_path, monkeypatch, [("Ciel, explain something else.", {
             "cancel_event": Event(), "supersedes_cancel_event": second,
@@ -349,7 +370,7 @@ def test_superseded_other_listener_cannot_join_an_addressed_fragment_chain(
         router=router, controller=True,
     )
     try:
-        assert router.send.call_args_list[0].args[0][-1].content == "explain something else."
+        assert _main_utterance(router.send.call_args) == "explain something else."
         assert [turn.content for turn in turns if turn.role == "user"] == [
             "explain something else.",
         ]
@@ -364,12 +385,10 @@ def test_active_nameless_superseded_followup_is_gated_as_one_complete_turn(
     canceled = Event()
     canceled.set()
     greeting = "Ciel, hello."
-    if private:
-        _seed_legacy_private_summary(tmp_path)
     router = MagicMock()
     router.send.side_effect = [
-        _decision("answer", intent="greeting"), LLMResponse("Hello.", "chat", "nim"),
-        _decision("answer", intent="follow_up"), LLMResponse("A short explanation.", "chat", "nim"),
+        LLMResponse("Hello.", "chat", "nim"),
+        LLMResponse("A short explanation.", "chat", "nim"),
     ]
     _, tts, _, store, turns = run_callbacks(
         tmp_path, monkeypatch,
@@ -380,12 +399,12 @@ def test_active_nameless_superseded_followup_is_gated_as_one_complete_turn(
             "superseded": True, "cancel_event": canceled,
         })]},
         router=router, controller=True,
+        initialize_conversation=_seed_legacy_private_summary if private else None,
     )
     try:
-        request = router.send.call_args_list[2]
-        assert request.kwargs["purpose"] == "controller"
-        assert request.args[0][-1].content == "Explain this setting. And keep it brief."
-        assert '"direct_address": false' in " ".join(message.content for message in request.args[0])
+        request = router.send.call_args_list[1]
+        assert request.kwargs["purpose"] == "conversation"
+        assert _main_utterance(request) == "Explain this setting. And keep it brief."
         assert [turn.content for turn in turns if turn.role == "user"] == [
             greeting.removeprefix("Ciel, "), "Explain this setting.", "And keep it brief.",
         ]
@@ -420,8 +439,8 @@ def test_superseded_unverified_background_cannot_join_a_new_request(
         info.update(stt_needs_repeat=True, stt_raw_text="uncertain speech")
     router = MagicMock()
     router.send.side_effect = [
-        _decision("answer", intent="greeting"), LLMResponse("Hello.", "chat", "nim"),
-        _decision("answer"), LLMResponse("A separate answer.", "chat", "nim"),
+        LLMResponse("Hello.", "chat", "nim"),
+        LLMResponse("A separate answer.", "chat", "nim"),
     ]
     _, _, _, store, turns = run_callbacks(
         tmp_path, monkeypatch,
@@ -432,7 +451,7 @@ def test_superseded_unverified_background_cannot_join_a_new_request(
         observed_after={0: [(fragment, info)]}, router=router, controller=True,
     )
     try:
-        assert router.send.call_args_list[2].args[0][-1].content == "explain something else."
+        assert _main_utterance(router.send.call_args_list[1]) == "explain something else."
         assert [turn.content for turn in turns if turn.role == "user"] == [
             "hello.", "explain something else.",
         ]
@@ -445,8 +464,7 @@ def test_retained_nameless_followup_does_not_authorize_saving_memory(tmp_path, m
     canceled.set()
     router = MagicMock()
     router.send.side_effect = [
-        _decision("answer", intent="greeting"), LLMResponse("Hello.", "chat", "nim"),
-        _decision("local"),
+        LLMResponse("Hello.", "chat", "nim"),
     ]
     _, tts, _, store, _turns = run_callbacks(
         tmp_path, monkeypatch,
@@ -461,9 +479,7 @@ def test_retained_nameless_followup_does_not_authorize_saving_memory(tmp_path, m
     try:
         assert store.get_fact("user:favorite_game") is None
         assert "I haven't saved that" in tts.speak.call_args.args[0]
-        assert router.send.call_args.args[0][-1].content == (
-            "My favorite game changed. Remember my favorite game is CS2."
-        )
+        router.send.assert_called_once()  # Memory authority remains a local boundary.
     finally:
         store.close()
 
@@ -473,8 +489,8 @@ def test_stopped_followup_fragments_cannot_be_revived_by_later_speech(tmp_path, 
     canceled.set()
     router = MagicMock()
     router.send.side_effect = [
-        _decision("answer", intent="greeting"), LLMResponse("Hello.", "chat", "nim"),
-        _decision("answer"), LLMResponse("A separate answer.", "chat", "nim"),
+        LLMResponse("Hello.", "chat", "nim"),
+        LLMResponse("A separate answer.", "chat", "nim"),
     ]
 
     def utterances():
@@ -495,10 +511,10 @@ def test_stopped_followup_fragments_cannot_be_revived_by_later_speech(tmp_path, 
         router=router, controller=True,
     )
     try:
-        assert router.send.call_args_list[2].args[0][-1].content == "explain something else."
-        assert router.send.call_count == 4
+        assert _main_utterance(router.send.call_args_list[1]) == "explain something else."
+        assert router.send.call_count == 2
         assert [turn.content for turn in turns if turn.role == "user"] == [
-            "hello.", "explain something else.",
+            "hello.", "Stop.", "explain something else.",
         ]
     finally:
         store.close()
@@ -529,11 +545,10 @@ def test_legacy_gate_does_not_inherit_unclassified_followup_fragments(tmp_path, 
         store.close()
 
 
-def test_controller_reply_streams_and_keeps_transcription_context(tmp_path, monkeypatch):
+def test_main_model_reply_streams_and_keeps_transcription_context(tmp_path, monkeypatch):
     from ciel.providers.base import LLMStreamChunk
 
     router, tts = MagicMock(), MagicMock()
-    router.send.return_value = _decision("answer")
     router.stream.return_value = iter([LLMStreamChunk("A concise answer.", "chat", "nim")])
     tts.supports_sentence_pipeline = False
     _, _, _, store, turns = run_callbacks(tmp_path, monkeypatch, [
@@ -541,6 +556,7 @@ def test_controller_reply_streams_and_keeps_transcription_context(tmp_path, monk
     ], router=router, tts=tts, controller=True, streaming=True)
     try:
         router.stream.assert_called_once()
+        router.send.assert_not_called()
         assert "transcribed from speech" in router.stream.call_args.args[0][0].content
         assert turns[-1].content == "A concise answer."
         assert turns[-1].provider == "nim"
@@ -557,10 +573,8 @@ def test_logged_garbled_request_then_greeting_never_executes_old_search(
     service = _internet(monkeypatch, [])
     router = MagicMock()
     router.send.side_effect = [
-        _decision('clarify', intent='unclear', speech='Could you repeat the exact title?'),
-        _decision('search', intent='greeting', query='Tensor Anime Assistant'),
+        LLMResponse('Could you repeat the exact title?', 'chat', 'nim'),
         LLMResponse('Hello! What can I help with?', 'chat', 'nim'),
-        _decision('clarify', intent='unclear', speech='Should I retry, or explain the background?'),
         LLMResponse('Should I retry, or explain the background?', 'chat', 'nim'),
     ]
     _, _, _, store, turns = run_callbacks(tmp_path, monkeypatch, [
@@ -575,8 +589,9 @@ def test_logged_garbled_request_then_greeting_never_executes_old_search(
         assert replies[1] == 'Hello! What can I help with?'
         assert replies[2] == 'Should I retry, or explain the background?'
         assert garbled in capsys.readouterr().out
-        prompt = router.send.call_args_list[2].args[0][0].content
-        assert 'current message is a greeting' in prompt
+        assert router.send.call_count == 3
+        assert all(call.kwargs["purpose"] == "conversation"
+                   for call in router.send.call_args_list)
     finally:
         store.close()
 
@@ -652,7 +667,7 @@ def test_local_preflight_preserves_address_confidence_and_cancellation(
     execute = MagicMock()
     monkeypatch.setattr(OpenAppAction, "execute", execute)
     router = MagicMock()
-    router.send.return_value = _decision("local")
+    router.send.return_value = LLMResponse("A safe answer.", "chat", "nim")
     _, _, _, store, _ = run_callbacks(
         tmp_path, monkeypatch, [("Open Discord", info)], router=router, controller=True,
     )
@@ -703,16 +718,17 @@ def test_local_only_session_does_not_schedule_provider_summaries(tmp_path, monke
         store.close()
 
 
-def test_compound_clock_request_keeps_controller_routing(tmp_path, monkeypatch):
+def test_compound_clock_request_uses_one_main_model_reply(tmp_path, monkeypatch):
     router = MagicMock()
-    router.send.side_effect = [_decision("answer"), LLMResponse("Time zones vary.", "chat", "nim")]
+    router.send.return_value = LLMResponse("Time zones vary.", "chat", "nim")
     _, _, _, store, turns = run_callbacks(
         tmp_path, monkeypatch,
         [("What time is it and explain time zones?", {"input_source": "keyboard"})],
         router=router, controller=True,
     )
     try:
-        assert router.send.call_args_list[0].kwargs["purpose"] == "controller"
+        router.send.assert_called_once()
+        assert router.send.call_args.kwargs["purpose"] == "conversation"
         assert turns[-1].content == "Time zones vary."
     finally:
         store.close()
@@ -727,7 +743,7 @@ def test_local_topic_change_clears_pending_memory(tmp_path, monkeypatch, topic):
 
     monkeypatch.setattr(OpenAppAction, "execute", MagicMock(return_value="Launch requested."))
     router = MagicMock()
-    router.send.return_value = _decision("local")
+    router.send.return_value = LLMResponse("A safe answer.", "chat", "nim")
     _, _, _, store, _ = run_callbacks(tmp_path, monkeypatch, [
         ("My favorite game is CS2.", {"input_source": "keyboard"}),
         (topic, {"input_source": "keyboard"}),
@@ -749,7 +765,7 @@ def test_local_topic_change_clears_pending_persona(tmp_path, monkeypatch, topic)
     monkeypatch.setattr(OpenAppAction, "execute", MagicMock(return_value="Launch requested."))
     persona = tmp_path / "persona.txt"
     router = MagicMock()
-    router.send.return_value = _decision("local")
+    router.send.return_value = LLMResponse("A safe answer.", "chat", "nim")
     _, _, _, store, _ = run_callbacks(tmp_path, monkeypatch, [
         ("Can you change your style?", {"input_source": "keyboard"}),
         (topic, {"input_source": "keyboard"}),
@@ -775,7 +791,7 @@ def test_local_topic_change_clears_pending_action(tmp_path, monkeypatch, topic):
     monkeypatch.setattr(action, "execute", execute)
     monkeypatch.setattr(ActionRegistry, "discover", lambda: ActionRegistry([action]))
     router = MagicMock()
-    router.send.return_value = _decision("local")
+    router.send.return_value = LLMResponse("A safe answer.", "chat", "nim")
     _, _, _, store, _ = run_callbacks(tmp_path, monkeypatch, [
         ("Open Discord", {"input_source": "keyboard"}),
         (topic, {"input_source": "keyboard"}),
@@ -871,7 +887,7 @@ def test_active_memory_correction_reports_no_write_instead_of_model_promise(
 ):
     router = MagicMock()
     router.send.side_effect = [
-        _decision("local"), LLMResponse("I'll update my memory.", "chat", "nim"),
+        LLMResponse("I'll update my memory.", "chat", "nim"),
     ]
     _, _, _, store, turns = run_callbacks(tmp_path, monkeypatch, [
         ("What time is it?", {"input_source": "keyboard"}),
@@ -881,7 +897,7 @@ def test_active_memory_correction_reports_no_write_instead_of_model_promise(
         assert store.get_fact("user:favorite_game") is None
         assert "haven't saved" in turns[-1].content
         assert "Ciel" in turns[-1].content
-        assert router.send.call_count == 1
+        router.send.assert_not_called()  # Ambient wording does not authorize a memory update.
     finally:
         store.close()
 

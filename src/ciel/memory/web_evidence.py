@@ -110,6 +110,11 @@ def normalize_web_evidence(value: Any) -> dict[str, Any]:
             "", "published", "modified", "reported", "published_or_modified",
         }:
             fields["date_kind"] = ""
+        content_kind = source.get("content_kind", "")
+        fields["content_kind"] = (
+            content_kind if isinstance(content_kind, str)
+            and content_kind in {"", "provider_excerpt"} else ""
+        )
         seen.add(url)
         result.append({"url": url, **fields})
         if len(result) == MAX_WEB_EVIDENCE_SOURCES:

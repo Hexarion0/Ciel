@@ -1,6 +1,4 @@
-"""Unmatched local decisions still answer with saved memory and recent user corrections."""
-
-import json
+"""The main responder receives saved context while local memory permissions stay enforced."""
 from datetime import datetime
 from threading import Event
 from unittest.mock import MagicMock
@@ -13,11 +11,6 @@ from ciel.providers.base import LLMResponse
 from tests.test_ambient import run_callbacks
 
 
-def decision(action: str) -> LLMResponse:
-    """Supply a controller choice independently of the final conversational reply."""
-    return LLMResponse(json.dumps({"action": action, "confidence": 0.99}), "light", "nim")
-
-
 @pytest.mark.parametrize("typed", [False, True])
 @pytest.mark.parametrize("query,reply", [
     ("Which development day would that make today?", "It's development day 17."),
@@ -26,7 +19,7 @@ def decision(action: str) -> LLMResponse:
 def test_unmatched_memory_tool_uses_recalled_context(
     tmp_path, monkeypatch, typed, query, reply,
 ):
-    """The controller cannot turn a readable saved fact into a tool-match failure."""
+    """Conversational memory questions receive recalled facts in one main request."""
     seed = MemoryStore(tmp_path / "memory.db")
     seed.save_memory(MemoryItem(
         content="RAPHAEL project development began on 2026-09-28.",
@@ -42,10 +35,10 @@ def test_unmatched_memory_tool_uses_recalled_context(
         ),
     )
     router = MagicMock()
-    choices = [decision("local"), LLMResponse(reply, "chat", "nim")]
+    choices = [LLMResponse(reply, "chat", "nim")]
     utterances = [(query, {"input_source": "keyboard"} if typed else {})]
     if not typed:
-        choices = [decision("answer"), LLMResponse("Hello.", "chat", "nim"), *choices]
+        choices = [LLMResponse("Hello.", "chat", "nim"), *choices]
         utterances.insert(0, ("Hey Ciel.", {"wake_verified": True}))
     router.send.side_effect = choices
 
@@ -55,14 +48,17 @@ def test_unmatched_memory_tool_uses_recalled_context(
     try:
         assert turns[-1].content == reply
         call = router.send.call_args
-        assert call.kwargs.get("purpose") != "controller"
+        assert call.kwargs["purpose"] == "conversation"
+        assert router.send.call_count == (1 if typed else 2)
         prompt = call.args[0][0].content
         assert "development day 17" in prompt
         assert "2026-09-28" in prompt
         assert "The application stores history" in prompt
-        assert "No local action or memory write was performed" in prompt
+        assert {tool["function"]["name"] for tool in call.kwargs["tools"]} <= {
+            "memory_search", "memory_get", "web_search", "read_page", "check_screen",
+        }
         assert store.count_memories() == 1
-        assert call.args[0][-1].content == query
+        assert [message.content for message in call.args[0] if message.role == "user"][-1] == query
     finally:
         store.close()
 
@@ -70,10 +66,7 @@ def test_unmatched_memory_tool_uses_recalled_context(
 def test_unauthorized_local_memory_request_uses_application_acknowledgment(tmp_path, monkeypatch):
     """An inferred follow-up cannot save a fact or ask a model to claim it did."""
     router = MagicMock()
-    router.send.side_effect = [
-        decision("answer"), LLMResponse("Hello.", "chat", "nim"),
-        decision("local"),
-    ]
+    router.send.return_value = LLMResponse("Hello.", "chat", "nim")
     _, _, _, store, turns = run_callbacks(tmp_path, monkeypatch, [
         ("Hey Ciel.", {"wake_verified": True}),
         ("Remember my favorite game is CS2.", {}),
@@ -82,18 +75,18 @@ def test_unauthorized_local_memory_request_uses_application_acknowledgment(tmp_p
         assert store.get_fact("user:favorite_game") is None
         assert turns[-1].content.startswith("I haven't saved that.")
         assert turns[-1].provider == "local"
-        assert router.send.call_count == 3
-        assert router.send.call_args.kwargs["purpose"] == "controller"
+        assert router.send.call_count == 1
+        assert router.send.call_args.kwargs["purpose"] == "conversation"
     finally:
         store.close()
 
 
-def test_controller_and_reply_preserve_name_history_corrections(tmp_path, monkeypatch):
+def test_main_reply_preserves_name_history_corrections(tmp_path, monkeypatch):
     """A previous assistant name remains context without becoming its current name."""
     router = MagicMock()
     router.send.side_effect = [
-        decision("answer"), LLMResponse("Understood, you renamed me.", "chat", "nim"),
-        decision("answer"), LLMResponse("Yes, Raphael was my previous name.", "chat", "nim"),
+        LLMResponse("Understood, you renamed me.", "chat", "nim"),
+        LLMResponse("Yes, Raphael was my previous name.", "chat", "nim"),
     ]
     # These conversational phrasings exercise the reply model. Exact declarative
     # renames already have a deterministic, read-only handler.
@@ -103,10 +96,9 @@ def test_controller_and_reply_preserve_name_history_corrections(tmp_path, monkey
         ("Before that, I called you Raphael.", {"input_source": "keyboard"}),
     ], router=router, controller=True)
     try:
-        controller_call = router.send.call_args_list[2]
-        controller_prompt = controller_call.args[0][0].content
-        assert correction in controller_prompt
-        assert "current or former name" in controller_prompt
+        assert router.send.call_count == 2
+        assert all(call.kwargs["purpose"] == "conversation"
+                   for call in router.send.call_args_list)
         reply_messages = router.send.call_args.args[0]
         assert any(message.role == "user" and message.content == correction
                    for message in reply_messages)
@@ -117,11 +109,10 @@ def test_controller_and_reply_preserve_name_history_corrections(tmp_path, monkey
         store.close()
 
 
-@pytest.mark.parametrize("invalid_decision", [False, True])
 def test_spoken_development_date_and_memory_correction_never_search_online(
-    tmp_path, monkeypatch, invalid_decision,
+    tmp_path, monkeypatch,
 ):
-    """Replay the supplied failure through the real callback with a misrouting model."""
+    """Admitted local memory reads do not depend on a model's availability or routing."""
     from ciel.memory import read
     from tests.test_controller_runtime import _internet
 
@@ -140,15 +131,9 @@ def test_spoken_development_date_and_memory_correction_never_search_online(
             return cls(2026, 10, 16, 3, 54, tzinfo=tz)
 
     monkeypatch.setattr(read, "datetime", Clock)
-    wrong = LLMResponse(
-        "not JSON" if invalid_decision else json.dumps({
-            "action": "search", "confidence": .95, "query": "development date",
-        }), "light", "nim",
-    )
     router = MagicMock()
     router.send.side_effect = [
-        decision("answer"), LLMResponse("Hello.", "chat", "nim"),
-        *([wrong] * (4 if invalid_decision else 2)),
+        LLMResponse("Hello.", "chat", "nim"), RuntimeError("provider is offline"),
     ]
     _, _, _, store, turns = run_callbacks(tmp_path, monkeypatch, [
         ("Hey Ciel.", {"wake_verified": True}),
@@ -163,7 +148,7 @@ def test_spoken_development_date_and_memory_correction_never_search_online(
         assert all("September 28, 2026" in turn.content for turn in replies[-2:])
         assert all(turn.provider == "local" for turn in replies[-2:])
         assert store.count_memories() == 1
-        assert router.send.call_count == (6 if invalid_decision else 4)
+        assert router.send.call_count == 1
     finally:
         store.close()
 
@@ -176,11 +161,8 @@ def test_memory_correction_supersedes_garbled_interrupted_request(tmp_path, monk
     first, second = Event(), Event()
     router = MagicMock()
     router.send.side_effect = [
-        decision("answer"), LLMResponse("Hello.", "chat", "nim"),
-        LLMResponse("not JSON", "light", "nim"),
-        LLMResponse("not JSON", "light", "nim"),
-        LLMResponse('{"action":"search","confidence":0.95,"query":"development date"}',
-                    "light", "nim"),
+        LLMResponse("Hello.", "chat", "nim"),
+        RuntimeError("synthetic clarification outage"),
     ]
     tts = MagicMock()
 
@@ -203,8 +185,9 @@ def test_memory_correction_supersedes_garbled_interrupted_request(tmp_path, monk
         assert turns[-1].content == "I don't have a confirmed project start date saved."
         assert turns[-1].provider == "local"
         assert store.count_memories() == 0
-        latest_request = router.send.call_args.args[0][-1].content
-        assert "No, I meant to development it." in latest_request
-        assert "Development date." in latest_request
+        assert router.send.call_count == 2
+        user_turns = [turn.content for turn in turns if turn.role == "user"]
+        assert "No, I meant to development it." in user_turns
+        assert "Development date." in user_turns
     finally:
         store.close()

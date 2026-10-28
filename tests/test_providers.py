@@ -5,7 +5,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ciel.config import DEFAULT_NIM_MODEL, ProviderConfig
+from ciel.config import (
+    DEFAULT_NIM_COMPLEX_MODEL,
+    DEFAULT_NIM_FALLBACK_MODEL,
+    DEFAULT_NIM_MODEL,
+    ProviderConfig,
+)
 from ciel.providers.base import ChatMessage, LLMProvider, LLMResponse, LLMStreamChunk
 from ciel.providers.groq import GroqProvider
 from ciel.providers.manager import ProviderManager
@@ -310,8 +315,12 @@ def test_nim_caller_can_explicitly_enable_reasoning(mock_post):
     assert template == {"enable_thinking": True, "low_effort": True}
 
 
-def test_nim_template_options_are_model_specific_for_streams():
-    payload = {"model": "nvidia/nemotron-3-super-120b-a12b", "stream": True}
+@pytest.mark.parametrize("model", [
+    "nvidia/nemotron-3-super-120b-a12b",
+    "nvidia/nemotron-3.5-super-vl-120b-a12b",
+])
+def test_nim_template_options_are_model_specific_for_streams(model):
+    payload = {"model": model, "stream": True}
     assert NimProvider._model_payload(payload, payload["model"])["chat_template_kwargs"] == {
         "enable_thinking": False,
     }
@@ -521,14 +530,16 @@ def test_controller_nim_never_falls_back_to_heavy_model(monkeypatch, streaming):
 
 @pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("status", [404, 410])
-def test_nim_default_primary_and_backup_do_not_repeat_missing_model(
+def test_nim_identical_primary_and_backup_do_not_repeat_missing_model(
     monkeypatch, streaming, status,
 ):
     """One available default must not become an implicit heavy or duplicate retry."""
     import httpx
 
     requests = []
-    provider = NimProvider(api_key="test", config=ProviderConfig())
+    provider = NimProvider(api_key="test", config=ProviderConfig(
+        nim_fallback_model=DEFAULT_NIM_MODEL,
+    ))
 
     def handle(request):
         requests.append(json.loads(request.content))
@@ -543,9 +554,10 @@ def test_nim_default_primary_and_backup_do_not_repeat_missing_model(
             list(provider.stream("Hello"))
         else:
             provider.send("Hello")
-    assert provider.default_model == provider.complex_model == provider.fallback_model == (
+    assert provider.default_model == provider.fallback_model == (
         DEFAULT_NIM_MODEL
     )
+    assert provider.complex_model == DEFAULT_NIM_COMPLEX_MODEL
     assert [request["model"] for request in requests] == [DEFAULT_NIM_MODEL]
 
 
@@ -562,7 +574,7 @@ def test_nim_provider_preserves_custom_model_overrides():
 
 def test_nim_blank_backup_uses_the_available_default():
     provider = NimProvider(api_key="test", config=ProviderConfig(nim_fallback_model=""))
-    assert provider.fallback_model == DEFAULT_NIM_MODEL
+    assert provider.fallback_model == DEFAULT_NIM_FALLBACK_MODEL
 
 
 @pytest.mark.parametrize("content", ["", "   ", None])

@@ -10,9 +10,9 @@ import pytest
 from ciel.config import InternetConfig
 from ciel.internet import InternetResult, InternetService, InternetSource
 from ciel.memory import MemoryItem, MemoryStore, MemoryType
-from ciel.memory.bridge import desktop_conversation_id
 from ciel.providers.base import LLMResponse, LLMStreamChunk
 from tests.test_ambient import run_callbacks
+from tests.test_controller import _web_model_responses
 
 
 def stub_internet(monkeypatch, result):
@@ -41,6 +41,9 @@ def test_voice_and_text_use_evidence_and_persist_sources(
     router.send.return_value = LLMResponse(json.dumps({"claims": [
         {"text": reply, "source": 1, "quote": reply},
     ]}), "test", "test")
+    router.send.side_effect = _web_model_responses(
+        lambda *_args, **_kwargs: router.send.return_value,
+    )
     router.stream.side_effect = lambda *_args, **_kwargs: iter([
         LLMStreamChunk(reply, "test", "test"),
     ])
@@ -51,7 +54,9 @@ def test_voice_and_text_use_evidence_and_persist_sources(
     )
     try:
         router.stream.assert_not_called()  # Web claims must be validated before playback.
-        messages = router.send.call_args.args[0]
+        report_call = next(call for call in reversed(router.send.call_args_list)
+                           if call.kwargs.get("purpose") == "conversation")
+        messages = report_call.args[0]
         assert any(message.role == "system" and source.url in message.content
                    and reply in message.content
                    for message in messages)
@@ -65,8 +70,13 @@ def test_voice_and_text_use_evidence_and_persist_sources(
         assert all(message.role != "system"
                    for message in service.prepare.call_args.kwargs["recent_messages"])
         assistant = [turn for turn in turns if turn.role == "assistant"]
-        assert len(assistant) == 1 and assistant[0].content == reply
+        expected_reply = reply + " [1]" if typed else reply
+        assert len(assistant) == 1 and assistant[0].content == expected_reply
         assert assistant[0].sources == [{"title": source.title, "url": source.url}]
+        if typed:
+            tts.speak.assert_called_once()
+            assert tts.speak.call_args.args[0] == reply
+            tts.begin_stream.assert_not_called()
         assert all(source.url not in call.args[0] for call in tts.speak.call_args_list)
         assert "[system]: Source 1: Product announcement" in capsys.readouterr().out
         assert all(source.url not in message.content
@@ -177,15 +187,13 @@ def test_canceled_lookup_cannot_generate_speak_or_save_an_answer(tmp_path, monke
 
 def test_local_only_session_skips_retrieval_for_followup(tmp_path, monkeypatch):
     """Legacy private history remains protected after the local command's removal."""
-    seed = MemoryStore(tmp_path / "memory.db")
-    try:
-        seed.save_memory(MemoryItem(
+    def initialize(store, session_id):
+        store.save_memory(MemoryItem(
             content="A private conversation from an earlier release.",
             memory_type=MemoryType.CONVERSATION,
-            metadata={"session_id": desktop_conversation_id(), "local_only": True},
+            metadata={"session_id": session_id, "local_only": True},
         ))
-    finally:
-        seed.close()
+
     service = stub_internet(monkeypatch, InternetResult())
     router = MagicMock()
     router.send.return_value = LLMResponse("I can answer locally.", "test", "ollama")
@@ -193,7 +201,7 @@ def test_local_only_session_skips_retrieval_for_followup(tmp_path, monkeypatch):
         tmp_path, monkeypatch,
         [("Today's news?", {"input_source": "keyboard"}),
          ("What about tomorrow?", {"input_source": "keyboard"})],
-        router=router,
+        router=router, initialize_conversation=initialize,
     )
     try:
         service.prepare.assert_not_called()
@@ -227,13 +235,9 @@ def test_logged_wrong_topic_results_cannot_reach_generation_or_speech(
     tmp_path, monkeypatch, streaming,
 ):
     from ciel.memory import ConversationManager
-    from ciel.persona import PERSONA_CONTEXT_VERSION
 
-    seed = MemoryStore(str(tmp_path / "memory.db"))
-    try:
-        conversation = ConversationManager(
-            seed, session_id=f"desktop_session:{PERSONA_CONTEXT_VERSION}",
-        )
+    def initialize(store, session_id):
+        conversation = ConversationManager(store, session_id=session_id)
         conversation.add_turn("user", (
             "Can you find like the Teensura anime in last episode and when it ends on the "
             "light normal so I can read it from there?"
@@ -241,8 +245,7 @@ def test_logged_wrong_topic_results_cannot_reach_generation_or_speech(
         conversation.add_turn("assistant", (
             "I cannot search the internet. Season 2 ends in volume 8 chapter 54."
         ))
-    finally:
-        seed.close()
+
     search = MagicMock(return_value=[{
         "title": "How to Search the Internet", "href": "https://example.com/search-tips",
         "body": "Learn how to search the internet and select a search engine.",
@@ -254,13 +257,19 @@ def test_logged_wrong_topic_results_cannot_reach_generation_or_speech(
         tmp_path, monkeypatch,
         [("Can you search like the last episode? Like search the internet?",
           {"input_source": "keyboard"})], router=router, streaming=streaming,
+        initialize_conversation=initialize,
     )
     try:
         assert "teensura" in search.call_args.args[0].casefold()
         assert all(call.kwargs["purpose"] == "controller" for call in router.send.call_args_list)
         router.stream.assert_not_called()
-        assert "couldn't" in tts.speak.call_args.args[0]
-        assert "Another unsupported answer" not in tts.speak.call_args.args[0]
+        assert tts.speak.call_count == 2  # Search acknowledgement and the honest fallback.
+        assert tts.speak.call_args.args[0] == turns[-1].content
+        assert all("Another unsupported answer" not in call.args[0]
+                   for call in tts.speak.call_args_list)
+        tts.begin_stream.assert_not_called()
+        assert "couldn't" in turns[-1].content
+        assert "Another unsupported answer" not in turns[-1].content
         assert turns[-1].provider == "local" and turns[-1].sources == []
         assert "volume 8" not in turns[-1].content
     finally:
@@ -296,6 +305,9 @@ def test_web_sources_are_visible_during_playback_and_survive_interruption(
     router.send.return_value = LLMResponse(json.dumps({"claims": [
         {"text": reply, "source": 1, "quote": reply},
     ]}), "test", "test")
+    router.send.side_effect = _web_model_responses(
+        lambda *_args, **_kwargs: router.send.return_value,
+    )
     router.stream.side_effect = lambda *_args, **_kwargs: iter([
         LLMStreamChunk(reply, "test", "test"),
     ])
@@ -350,15 +362,18 @@ def test_nonempty_schedule_sources_cannot_produce_invented_reading_volume(
     router.send.return_value = LLMResponse(content, "test", "test")
     _, tts, _, store, turns = run_callbacks(
         tmp_path, monkeypatch,
-        [("so what volume should i read?", {"input_source": "keyboard"})],
+        [("Where does Tensura season 4 part 2 anime continue in the light novel?",
+          {"input_source": "keyboard"})],
         router=router, streaming=streaming,
     )
     try:
         router.stream.assert_not_called()
-        spoken = tts.speak.call_args.args[0]
-        assert "couldn't verify" in spoken and "last episode" in spoken
-        assert "17" not in spoken and "claims" not in spoken
-        assert turns[-1].content == spoken
+        tts.speak.assert_called_once()
+        assert tts.speak.call_args.args[0] == turns[-1].content
+        tts.begin_stream.assert_not_called()
+        reply = turns[-1].content
+        assert "couldn't verify" in reply and "last episode" in reply
+        assert "17" not in reply and "claims" not in reply
         assert "17" not in turns[-1].content
     finally:
         store.close()

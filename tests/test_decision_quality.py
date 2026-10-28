@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from ciel.config import ControllerConfig
-from ciel.controller import AIController
+from ciel.controller import _CONTEXT_MARKER, AIController
 from ciel.providers.base import ChatMessage, LLMResponse
 
 
@@ -73,7 +73,9 @@ def test_long_turn_keeps_subject_and_last_correction_within_context_limit():
         "What volume should I read?", [ChatMessage("user", original + correction)],
         addressed=True, active=True, internet_enabled=True,
     )
-    payload = json.loads(router.send.call_args.args[0][-1].content)
+    sent = router.send.call_args.args[0]
+    payload = json.loads(sent[0].content.split(_CONTEXT_MARKER, 1)[1])
+    assert sent[-1].content == "What volume should I read?"
     context = payload["previous_dialogue"][0]["text"]
     assert context.startswith("The series is Amber Works.")
     assert correction in context
@@ -174,4 +176,4 @@ def test_model_cannot_silence_an_admitted_message(intent, addressed, active):
     assert result.action == "answer"
     router.send.assert_called_once()
     prompt = router.send.call_args.args[0][0].content
-    assert '"action":"answer|clarify|search|read_page|local"' in prompt
+    assert '"action":"answer|clarify|search|read_page|memory_search|memory_get|local"' in prompt

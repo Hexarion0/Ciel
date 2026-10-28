@@ -1,6 +1,5 @@
 """Spoken cancellation is application-owned before either listener/model path."""
 
-import json
 from threading import Event
 from unittest.mock import MagicMock
 
@@ -9,7 +8,7 @@ import pytest
 from ciel.config import InternetConfig
 from ciel.controller import conversation_control, is_explicit_web_request
 from ciel.internet import InternetResult
-from ciel.providers.base import LLMResponse
+from ciel.providers.base import LLMResponse, ToolCall
 from tests.test_ambient import run_callbacks
 
 
@@ -21,12 +20,14 @@ def _services(monkeypatch):
     monkeypatch.setattr("ciel.internet.InternetService", lambda *_args, **_kwargs: service)
     router = MagicMock()
 
-    def respond(_messages, **kwargs):
-        if kwargs.get("purpose") == "controller":
-            return LLMResponse(json.dumps({
-                "intent": "request", "action": "search", "confidence": 0.99,
-                "query": "anti-cheat program", "speech": "I'll check that online.",
-            }), "test", "test")
+    def respond(messages, **kwargs):
+        assert kwargs.get("purpose") != "controller"
+        query = next(message.content for message in reversed(messages) if message.role == "user")
+        if "tools" in kwargs and query == "Search anti-cheat program.":
+            assert "web_search" in {tool["function"]["name"] for tool in kwargs["tools"]}
+            return LLMResponse("", "test", "test", tool_calls=(
+                ToolCall("anti_cheat_search", "web_search", '{"query":"anti-cheat program"}'),
+            ))
         return LLMResponse("Let's think it through together.", "test", "test")
 
     router.send.side_effect = respond
@@ -71,8 +72,11 @@ def test_no_search_blocks_model_chosen_lookup_until_fresh_user_lookup(
         assert "anti-cheat" in retrieval.call_args.args[0]
         assert "Let's think it through together." in [turn.content for turn in turns]
         assert any("paused online lookups" in call.args[0][0].content
-                   for call in router.send.call_args_list
-                   if call.kwargs.get("purpose") != "controller")
+                   for call in router.send.call_args_list)
+        if controller:
+            assert "web_search" not in {
+                tool["function"]["name"] for tool in router.send.call_args_list[0].kwargs["tools"]
+            }
     finally:
         store.close()
 
@@ -131,7 +135,9 @@ def test_do_not_search_instead_explain_keeps_new_question_and_blocks_network(
         internet.lookup.assert_not_called()
         internet.prepare.assert_not_called()
         assert router.send.call_count == 1
-        assert router.send.call_args.args[0][-1].content == text
+        messages = router.send.call_args.args[0]
+        current_user = next(message for message in reversed(messages) if message.role == "user")
+        assert current_user.content == text
         assert turns[-1].content == "Let's think it through together."
     finally:
         store.close()

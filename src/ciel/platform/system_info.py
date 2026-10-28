@@ -200,6 +200,7 @@ def generate_system_prompt(
     snapshot: SystemSnapshot | None = None,
     settings: Settings | None = None,
     memories: list[str] | None = None,
+    *, channel: str = "voice",
 ) -> str:
     """Generate a rich, context-aware system agenda and advanced persona prompt for CIEL."""
     from ciel.persona import build_advanced_persona, load_persona_preferences
@@ -229,4 +230,5 @@ def generate_system_prompt(
         preferred_name=cfg.ciel_preferred_name,
         persona_preferences=load_persona_preferences(cfg.ciel_persona_file),
         internet_enabled=cfg.internet.enabled,
+        channel=channel,
     )

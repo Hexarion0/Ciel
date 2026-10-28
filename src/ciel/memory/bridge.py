@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 from ciel.persona import PERSONA_CONTEXT_VERSION
 
 if TYPE_CHECKING:
     from ciel.config import Settings
+    from ciel.memory.store import MemoryStore
+
+_ACTIVE_DESKTOP_KEY = f"active_desktop_conversation:{PERSONA_CONTEXT_VERSION}"
 
 
 @dataclass(frozen=True)
@@ -24,8 +29,44 @@ class ConversationContext:
 
 
 def desktop_conversation_id() -> str:
-    """Return the current desktop archive, retaining existing voice history."""
+    """Return the legacy desktop archive prefix without changing retained history."""
     return f"desktop_session:{PERSONA_CONTEXT_VERSION}"
+
+
+def start_desktop_conversation(store: MemoryStore) -> str:
+    """Select fresh foreground/chat archives while retaining all earlier turns and facts."""
+    session_id = f"{desktop_conversation_id()}:run:{uuid4().hex}"
+    store.set_setting(_ACTIVE_DESKTOP_KEY, session_id)
+    return session_id
+
+
+def _run_id(session_id: str) -> str | None:
+    match = re.fullmatch(re.escape(desktop_conversation_id()) + r":run:([a-f0-9]{32})", session_id)
+    return match.group(1) if match else None
+
+
+def _active_desktop_id(settings: Settings, store: MemoryStore | None = None) -> str | None:
+    """Read the current launch across processes; invalid state never selects another archive."""
+    try:
+        if store is not None:
+            with store._lock:
+                row = store._get_connection().execute(
+                    "SELECT value_json FROM memory_settings WHERE name=?", (_ACTIVE_DESKTOP_KEY,),
+                ).fetchone()
+        else:
+            path = Path(settings.memory.db_path).resolve()
+            if not path.is_file():
+                return desktop_conversation_id()
+            with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=1.0) as connection:
+                row = connection.execute(
+                    "SELECT value_json FROM memory_settings WHERE name=?", (_ACTIVE_DESKTOP_KEY,),
+                ).fetchone()
+        if row is None:
+            return desktop_conversation_id()
+        value = json.loads(row[0])
+    except (OSError, sqlite3.Error, ValueError, TypeError):
+        return None
+    return value if isinstance(value, str) and _run_id(value) is not None else None
 
 
 def telegram_conversation_id(bot_id: int, owner_id: int) -> str:
@@ -64,17 +105,43 @@ def _paired_telegram_id(settings: Settings) -> str | None:
     return None
 
 
-def conversation_context(settings: Settings, write_session_id: str) -> ConversationContext:
+def current_conversation_id(
+    settings: Settings, session_id: str, *, store: MemoryStore | None = None,
+) -> str:
+    """Attach only the currently paired Telegram owner to the latest foreground launch.
+
+    A foreground writer keeps its fixed launch identity. A persistent chat service
+    calls this before accepting a new request and rotates its local pending state.
+    """
+    base, separator, run = session_id.partition(":run:")
+    if not base.startswith("telegram:") or separator and not re.fullmatch(r"[a-f0-9]{32}", run):
+        return session_id
+    paired = _paired_telegram_id(settings)
+    if paired is None or base != paired:
+        return session_id
+    desktop = _active_desktop_id(settings, store)
+    run = _run_id(desktop) if desktop is not None else None
+    return f"{paired}:run:{run}" if run else session_id
+
+
+def conversation_context(
+    settings: Settings, write_session_id: str, *, store: MemoryStore | None = None,
+) -> ConversationContext:
     """Bridge only desktop and the currently paired owner; everything else stays isolated.
 
     Resolve on every read so a running desktop immediately respects unpairing or
     re-pairing. Old bot/owner archives remain intact and are never selected by a
     different binding. Failed or ambiguous state reads fall back to isolation.
     """
-    desktop = desktop_conversation_id()
+    desktop = _active_desktop_id(settings, store)
+    if desktop is None:
+        return ConversationContext(write_session_id, (write_session_id,))
     if write_session_id != desktop and not write_session_id.startswith("telegram:"):
         return ConversationContext(write_session_id, (write_session_id,))
     paired = _paired_telegram_id(settings)
+    run = _run_id(desktop)
+    if paired is not None and run is not None:
+        paired = f"{paired}:run:{run}"
     if paired is None or write_session_id not in {desktop, paired}:
         return ConversationContext(write_session_id, (write_session_id,))
     sessions = (desktop, paired)

@@ -47,7 +47,7 @@ def recall_context_memories(
     store: MemoryStore, query: str = "", now: datetime | None = None,
     *, recent_messages: list[ChatMessage] | None = None,
     enabled: bool = True, limit: int = 4, max_chars: int = 6000,
-    semantic_recall: SemanticRecall | None = None,
+    semantic_recall: SemanticRecall | None = None, local_only: bool = False,
 ) -> list[str]:
     """Recall ranked facts plus bounded profile anchors, unless recall has been paused.
 
@@ -92,6 +92,8 @@ def recall_context_memories(
                 memory = current
             if identity_key in seen_keys:
                 continue
+        if memory.metadata.get("local_only") and not local_only:
+            continue
         identity = memory.id if memory.id is not None else memory.content
         if identity in seen:
             continue
