@@ -7,10 +7,10 @@ import pytest
 
 from ciel.internet import InternetResult, InternetSource
 from ciel.providers.base import ChatMessage, LLMResponse
-from ciel.search_context import corrected_search, subject_correction
+from ciel.search_context import corrected_search, replace_search_subject, subject_correction
 from ciel.tool_progress import valid_line
 from tests.test_ambient import run_callbacks
-from tests.test_controller_runtime import _internet, _main_responses
+from tests.test_controller_runtime import _internet, _main_responses, _tool_call
 
 
 @pytest.mark.parametrize("text,expected", [
@@ -28,17 +28,30 @@ def test_only_explicit_short_subject_repairs_are_recognized(text, expected):
     ("Can you search TensorFlow for me?", "Tensura*", "Tensura"),
     ("Search CedarDD release notes for version 4", "CedarDB*",
      "CedarDB release notes for version 4"),
+    ("Search CedarDD Linux offline support", "CedarDB*", "CedarDB Linux offline support"),
+    ("Search CedarDD Windows 11 compatibility", "CedarDB*",
+     "CedarDB Windows 11 compatibility"),
+    ("Search CedarDD Linux Offline Support", "CedarDB*", "CedarDB Linux Offline Support"),
     ("Search where Amber Harbour season 3 continues in the light novel", "Amber Harbor*",
      "where Amber Harbor season 3 continues in the light novel"),
     ("Search tensorflow memory usage on linux", "CedarDB*", "CedarDB memory usage on linux"),
     ("Search how tensorflow compares with pytorch", "CedarDB*",
      "how CedarDB compares with pytorch"),
+    ("Search Linux offline support", "Debian*", "Debian offline support"),
+    ("Search Arch Linux offline support", "Debian*", "Debian offline support"),
+    ("Search Arxh Linux offline support", "Arch Linux*", "Arch Linux offline support"),
 ])
 def test_name_repair_preserves_the_users_requested_scope(original, term, expected):
     messages = [ChatMessage("user", original), ChatMessage("user", term)]
     result = corrected_search(term, messages)
     assert result is not None and result.query == expected
     assert messages[0].content == original
+
+
+def test_linux_can_be_the_corrected_subject_itself():
+    assert replace_search_subject("Search Linus offline support", "Linux") == (
+        "Search Linux offline support"
+    )
 
 
 @pytest.mark.parametrize("intervening", ["Thanks", "Tell me a joke", "What's the weather?"])
@@ -69,6 +82,7 @@ def test_typed_name_repair_keeps_recent_spoken_search_progress_and_teaches_only_
     service = _internet(monkeypatch, [InternetResult(attempted=True, sources=[source])])
     replies = iter([
         LLMResponse("What do you want to know about TensorFlow?", "test", "test"),
+        _tool_call("web_search", query="Tensura"),
         LLMResponse(json.dumps({"claims": [
             {"text": quote, "source": 1, "quote": quote},
         ]}), "test", "test"),
@@ -98,7 +112,7 @@ def test_typed_name_repair_keeps_recent_spoken_search_progress_and_teaches_only_
         assert valid_line(spoken[1]) == spoken[1]
         assert spoken[2] == quote
         assert sum(call.kwargs.get("purpose", "conversation") == "conversation"
-                   for call in router.send.call_args_list) == 2
+                   for call in router.send.call_args_list) == 3
         stt = audio.SpeechToText.return_value
         stt.set_correction_scope_provider.assert_called_once()
         stt.remember_correction.assert_called_once()

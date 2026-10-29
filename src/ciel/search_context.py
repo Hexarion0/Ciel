@@ -12,6 +12,13 @@ _SEARCH = re.compile(
     r"\b(?:search(?:\s+(?:the\s+)?(?:web|internet|online))?(?:\s+for)?|"
     r"look\s+(?:it\s+)?up|look\s+online\s+for|find)\s+", re.I,
 )
+_SUBJECT_LEAD = re.compile(
+    r"^(?:(?:hey|hi|hello)[, ]+ciel[,.!? ]+|(?:hey|hi|hello)[,.!?]\s*|ciel[,!:]\s*)?"
+    r"(?:(?:do|did)\s+(?:you|u)\s+know(?:\s+about)?\s+|"
+    r"have\s+you\s+heard\s+(?:of|about)\s+|"
+    r"(?:(?:can|could|would|will)\s+(?:you|u)\s+)?tell\s+me\s+about\s+)?",
+    re.I,
+)
 _TASK_WORDS = set(
     "a an the for about of to from with on in where what which when how why who "
     "does do did is are was were "
@@ -26,6 +33,15 @@ _NO_SEARCH = re.compile(
     r"[^.!?]{0,80}\b(?:search|searching|browse|browsing|look\s+up)\b|"
     r"\bno\s+(?:more\s+)?(?:search(?:es|ing)?|brows(?:e|ing)|lookups?)\b", re.I,
 )
+_PLATFORMS = {"linux", "windows", "macos", "android", "ios", "ipados", "freebsd"}
+_CAPABILITIES = {
+    "offline", "online", "support", "supported", "compatibility", "compatible",
+    "installation", "install", "requirements", "availability", "available",
+}
+_PLATFORM_NAMES = {
+    "arch linux", "alpine linux", "amazon linux", "kali linux", "oracle linux",
+    "rocky linux", "red hat enterprise linux", "gentoo linux",
+}
 
 
 def _unquoted(text: str) -> str:
@@ -86,7 +102,10 @@ def replace_search_subject(request: str, subject: str) -> str:
     actually belongs to an existing task and whether a lookup is authorized.
     """
     match = _SEARCH.search(_unquoted(request))
-    offset = match.end() if match else 0
+    # Skip conversational framing by span, rather than treating names such as
+    # "Ciel" or "Know" as generic subject words everywhere.
+    lead = _SUBJECT_LEAD.match(request)
+    offset = match.end() if match else lead.end() if lead else 0
     body = request[offset:]
     words = list(re.finditer(r"[\w][\w.+#'’-]*", body))
     start = next((i for i, word in enumerate(words)
@@ -97,6 +116,14 @@ def replace_search_subject(request: str, subject: str) -> str:
     while words[start][0][0].isupper() and end < len(words) and end - start < 6:
         word = words[end][0]
         if word.casefold() in _TASK_WORDS or not word[0].isupper():
+            break
+        # A platform followed by capability details usually constrains the named
+        # product. Keep it unless the correction or a known OS name owns that word.
+        prefix = " ".join(item[0].casefold() for item in words[start:end + 1])
+        if (word.casefold() in _PLATFORMS
+                and word.casefold() not in subject.casefold().split()
+                and prefix not in _PLATFORM_NAMES
+                and any(item[0].casefold() in _CAPABILITIES for item in words[end + 1:end + 4])):
             break
         end += 1
     return (request[:offset] + body[:words[start].start()] + subject

@@ -1,21 +1,36 @@
-"""Bounded, anonymous access to Parallel's free Search MCP endpoint."""
+"""Bounded, anonymous search and page extraction through Parallel's free MCP endpoint."""
 
 import codecs
+import ipaddress
 import json
 import math
 import time
+from dataclasses import dataclass
 from threading import Event
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 import httpx
 
 from ciel.logging import SecretMaskingFilter
 from ciel.search_providers import SearchProviderError
 
-_ENDPOINT = "https://search.parallel.ai/mcp"
+_ENDPOINT = "https://mcp.parallel.ai/mcp"
 _PROTOCOL = "2025-03-26"
 _MAX_RESPONSE_BYTES = 1_048_576
+_EXCERPT_GAP = "\n\n[... omitted source text ...]\n\n"
+
+
+@dataclass
+class _ResponseBudget:
+    """Share one response-size ceiling across protocol setup and extracted evidence."""
+
+    remaining: int
+
+    def consume(self, amount: int) -> None:
+        self.remaining -= amount
+        if self.remaining < 0:
+            raise SearchProviderError("Parallel search response exceeded the size limit.")
 
 
 def _remaining(deadline: float, cancel_event: Event | None = None) -> float:
@@ -50,6 +65,7 @@ def _rpc_result(payload: Any, request_id: int, *, event: bool = False) -> dict |
 
 def _read_result(
     response: httpx.Response, request_id: int, deadline: float, cancel_event: Event | None,
+    budget: _ResponseBudget,
 ) -> dict:
     """Bound JSON/SSE bytes, decode split Unicode, and close after our SSE response."""
     media_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
@@ -59,11 +75,10 @@ def _read_result(
     if response.headers.get("content-encoding", "identity").lower() != "identity":
         raise _invalid()
     length = response.headers.get("content-length", "")
-    if length.isdigit() and int(length) > _MAX_RESPONSE_BYTES:
+    if length.isdigit() and int(length) > budget.remaining:
         raise SearchProviderError("Parallel search response exceeded the size limit.")
     decoder = codecs.getincrementaldecoder("utf-8")()
     body, pending, data = [], "", []
-    size = 0
 
     def event_result() -> dict | None:
         if not data:
@@ -74,9 +89,7 @@ def _read_result(
 
     for chunk in response.iter_bytes():
         _remaining(deadline, cancel_event)
-        size += len(chunk)
-        if size > _MAX_RESPONSE_BYTES:
-            raise SearchProviderError("Parallel search response exceeded the size limit.")
+        budget.consume(len(chunk))
         text = decoder.decode(chunk)
         if media_type == "application/json":
             body.append(text)
@@ -109,6 +122,7 @@ def _read_result(
 
 def _request(
     client: httpx.Client, headers: dict[str, str], payload: dict, deadline: float,
+    budget: _ResponseBudget,
     *, notification: bool = False, cancel_event: Event | None = None,
 ) -> tuple[dict | None, str]:
     """Send to the fixed anonymous endpoint without redirects, retries, or credentials."""
@@ -124,7 +138,7 @@ def _request(
         if len(session) > 256 or any(ord(char) < 33 or ord(char) > 126 for char in session):
             raise _invalid()
         result = None if notification else _read_result(
-            response, payload["id"], deadline, cancel_event,
+            response, payload["id"], deadline, cancel_event, budget,
         )
         return result, session
 
@@ -133,7 +147,68 @@ def _text(value: Any, limit: int) -> str:
     return SecretMaskingFilter._redact(value).strip()[:limit] if isinstance(value, str) else ""
 
 
-def _rows(result: dict, maximum: int) -> list[dict[str, str]]:
+def _public_url(value: Any) -> str:
+    """Reject private URL literals and credentials before sending pages to a service."""
+    message = "Parallel fetch requires public HTTP(S) pages without credentials."
+    if (
+        not isinstance(value, str) or not value or len(value) > 2048
+        or any(ord(char) <= 32 or ord(char) == 127 or char == "\\" for char in value)
+        or SecretMaskingFilter._redact(value) != value or "[REDACTED_SECRET" in value
+    ):
+        raise SearchProviderError(message)
+    try:
+        parsed = urlsplit(value)
+        host = (parsed.hostname or "").rstrip(".").casefold()
+        if (
+            parsed.scheme not in {"http", "https"} or not host
+            or parsed.username is not None or parsed.password is not None
+            or parsed.port not in {None, 80 if parsed.scheme == "http" else 443}
+            or host == "localhost"
+            or host.endswith((".localhost", ".local", ".internal", ".home"))
+            or any(key.casefold() in {"token", "access_token", "api_key", "password", "secret"}
+                   for key, _value in parse_qsl(parsed.query))
+        ):
+            raise ValueError
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            if "." not in host or "%" in host or all(
+                part.isdigit() or part.startswith("0x") for part in host.split(".")
+            ):
+                raise ValueError from None
+        else:
+            addresses = [address]
+            if isinstance(address, ipaddress.IPv6Address):
+                addresses.extend(item for item in (address.ipv4_mapped, address.sixtofour) if item)
+                addresses.extend(address.teredo or ())
+            if any(not item.is_global or item.is_multicast or item.is_reserved
+                   for item in addresses):
+                raise ValueError
+        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, parsed.query, ""))
+    except ValueError:
+        raise SearchProviderError(message) from None
+
+
+def _queries(values: list[str] | None, fallback: str = "") -> list[str]:
+    """Keep at most three distinct, redacted keyword queries in their supplied order."""
+    found, seen = [], set()
+    for value in values if isinstance(values, list) else []:
+        query = " ".join(_text(value, 2000).split())
+        if len(query) > 200:
+            prefix = query[:201]
+            query = prefix.rsplit(" ", 1)[0] if " " in prefix else prefix[:200]
+        if not query or query.casefold() in seen:
+            continue
+        found.append(query)
+        seen.add(query.casefold())
+        if len(found) == 3:
+            break
+    if not found and fallback:
+        return _queries([fallback])
+    return found
+
+
+def _rows(result: dict, maximum: int, *, full_content: bool = False) -> list[dict[str, str]]:
     """Parse Parallel's observed structuredContent or equivalent JSON text fallback."""
     if result.get("isError", False) is not False:
         raise SearchProviderError("Parallel search tool failed.")
@@ -151,27 +226,21 @@ def _rows(result: dict, maximum: int) -> list[dict[str, str]]:
         raise _invalid()
     found = []
     for row in payload["results"]:
-        if not isinstance(row, dict):
+        if not isinstance(row, dict) or "error" in row or row.get("error_type"):
             continue
         excerpts = row.get("excerpts")
         if not isinstance(excerpts, list) or any(not isinstance(part, str) for part in excerpts):
             continue
-        url = _text(row.get("url"), 2048)
-        if "[REDACTED_SECRET]" in url:
-            continue
         try:
-            parsed = urlsplit(url)
-            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-                continue
-            if parsed.username or parsed.password:
-                continue
-        except ValueError:
+            url = _public_url(row.get("url"))
+        except SearchProviderError:
             continue
-        excerpt = _text("\n\n".join(excerpts), 25_000)
+        excerpt = _text(_EXCERPT_GAP.join(excerpts), 25_000)
+        content = _text(row.get("full_content"), 25_000) if full_content else ""
         date = _text(row.get("publish_date"), 100)
         found.append({
             "href": url, "title": _text(row.get("title"), 500),
-            "body": excerpt, "content": excerpt,
+            "body": excerpt, "content": content or excerpt,
             "date": date, "date_kind": "published" if date else "", "publisher": "",
         })
         if len(found) >= maximum:
@@ -179,31 +248,23 @@ def _rows(result: dict, maximum: int) -> list[dict[str, str]]:
     return found
 
 
-def search_parallel(
-    query: str, *, timeout: float, maximum: int, session_id: str,
-    cancel_event: Event | None = None, objective: str = "",
-) -> list[dict[str, str]]:
-    """Search Parallel's anonymous free tier with a stable per-conversation identifier.
-
-    The MCP protocol session is local to this call. The supplied conversation identifier
-    is reused across calls for the service's anonymous rate accounting. Dense excerpts
-    are returned as evidence; callers still validate relevance, URLs, and citations.
-    """
+def _validate_request(timeout: float, session_id: str) -> None:
+    """Keep invalid budgets and identifiers out of the network client."""
     if not math.isfinite(timeout) or timeout <= 0:
         raise SearchProviderError("Search request timeout must be a positive finite number.")
-    query = _text(query, 2000)
-    objective = _text(objective, 5000) or query
-    if not query or maximum <= 0:
-        return []
     if not isinstance(session_id, str) or not session_id or len(session_id) > 100:
         raise SearchProviderError("Parallel search requires a valid conversation identifier.")
     if any(ord(char) < 33 or ord(char) > 126 for char in session_id):
         raise SearchProviderError("Parallel search requires a valid conversation identifier.")
+
+
+def _call_tool(
+    name: str, arguments: dict, *, timeout: float, maximum: int,
+    cancel_event: Event | None = None, full_content: bool = False,
+) -> list[dict[str, str]]:
+    """Share a bounded anonymous MCP handshake and result parser for both read tools."""
     deadline = time.monotonic() + timeout
-    keywords = " ".join(query.split())
-    if len(keywords) > 200:
-        prefix = keywords[:201]
-        keywords = prefix.rsplit(" ", 1)[0] if " " in prefix else prefix[:200]
+    budget = _ResponseBudget(_MAX_RESPONSE_BYTES)
     headers = {"Accept": "application/json, text/event-stream", "Accept-Encoding": "identity"}
     try:
         _remaining(deadline, cancel_event)
@@ -213,7 +274,7 @@ def search_parallel(
                     "protocolVersion": _PROTOCOL, "capabilities": {},
                     "clientInfo": {"name": "ciel", "version": "0.3.6"},
                 },
-            }, deadline, cancel_event=cancel_event)
+            }, deadline, budget, cancel_event=cancel_event)
             if initialized is None or initialized.get("protocolVersion") != _PROTOCOL:
                 raise _invalid()
             headers["MCP-Protocol-Version"] = _PROTOCOL
@@ -221,18 +282,15 @@ def search_parallel(
                 headers["Mcp-Session-Id"] = session
             _request(client, headers, {
                 "jsonrpc": "2.0", "method": "notifications/initialized",
-            }, deadline, notification=True, cancel_event=cancel_event)
+            }, deadline, budget, notification=True, cancel_event=cancel_event)
             result, _session = _request(client, headers, {
                 "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
-                    "name": "web_search", "arguments": {
-                        "objective": objective, "search_queries": [keywords],
-                        "session_id": session_id,
-                    },
+                    "name": name, "arguments": arguments,
                 },
-            }, deadline, cancel_event=cancel_event)
+            }, deadline, budget, cancel_event=cancel_event)
             if result is None:
                 raise _invalid()
-            found = _rows(result, min(maximum, 20))
+            found = _rows(result, min(maximum, 20), full_content=full_content)
             _remaining(deadline, cancel_event)
             return found
     except httpx.TimeoutException:
@@ -241,3 +299,56 @@ def search_parallel(
         raise SearchProviderError("Parallel search connection failed.") from None
     except (TypeError, ValueError):
         raise _invalid() from None
+
+
+def search_parallel(
+    query: str, *, timeout: float, maximum: int, session_id: str,
+    cancel_event: Event | None = None, objective: str = "", search_queries: list[str] | None = None,
+) -> list[dict[str, str]]:
+    """Search related keyword queries in one anonymous call with one overall budget.
+
+    The MCP protocol session is local to this call. The supplied conversation identifier
+    is reused across calls for the service's anonymous rate accounting. Dense excerpts
+    are returned as evidence; callers still validate relevance, URLs, and citations.
+    """
+    _validate_request(timeout, session_id)
+    query = _text(query, 2000)
+    if not query or maximum <= 0:
+        return []
+    return _call_tool("web_search", {
+        "objective": _text(objective, 5000) or query,
+        "search_queries": _queries(search_queries, query), "session_id": session_id,
+    }, timeout=timeout, maximum=maximum, cancel_event=cancel_event)
+
+
+def fetch_parallel(
+    urls: list[str], *, timeout: float, maximum: int, session_id: str,
+    cancel_event: Event | None = None, objective: str = "", search_queries: list[str] | None = None,
+    full_content: bool = False,
+) -> list[dict[str, str]]:
+    """Extract evidence from up to twenty public pages, retaining successful partial results.
+
+    Callers validate requested and returned URLs against their own public-page policy.
+    Provider diagnostics and failed-page content are never projected as source evidence.
+    """
+    _validate_request(timeout, session_id)
+    if not urls or maximum <= 0:
+        return []
+    selected = []
+    for value in urls:
+        url = _public_url(value)
+        if url not in selected:
+            selected.append(url)
+        if len(selected) == 20:
+            break
+    arguments: dict[str, Any] = {
+        "urls": selected, "session_id": session_id, "full_content": bool(full_content),
+    }
+    objective = _text(objective, 200)
+    queries = _queries(search_queries)
+    if objective:
+        arguments["objective"] = objective
+    if queries:
+        arguments["search_queries"] = queries
+    return _call_tool("web_fetch", arguments, timeout=timeout, maximum=maximum,
+                      cancel_event=cancel_event, full_content=bool(full_content))

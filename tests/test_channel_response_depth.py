@@ -87,6 +87,53 @@ def test_text_preferences_and_capability_authority_still_apply():
     assert "Generated replies cannot save, update, or delete facts" in prompt
 
 
+def test_text_depth_rules_follow_generic_saved_speech_brevity_preferences():
+    preference = "Use simple, direct replies, usually one to three short sentences."
+    prompt = persona(channel="text", persona_preferences=preference)
+    text_rules = prompt.split("End of user-configured personality preferences.", 1)[1]
+    assert "Generic short-reply or spoken-delivery preferences do not cap written answers" in (
+        text_rules
+    )
+    assert "without waiting for the user to ask for more detail" in text_rules
+    assert "Honor a current request for a brief answer or an explicit text-specific preference" in (
+        text_rules
+    )
+
+
+@pytest.mark.parametrize("typed", [False, True])
+def test_desktop_uses_text_depth_for_typing_with_a_saved_short_reply_persona(
+    tmp_path, monkeypatch, typed,
+):
+    from unittest.mock import MagicMock
+
+    from tests.test_ambient import run_callbacks
+
+    preference = "Usually answer in one to three short sentences."
+    persona_file = tmp_path / "persona.txt"
+    persona_file.write_text(preference)
+    query = "How should I organize the CLI, settings, and logic in a small Python app?"
+    answer = ("Keep the command line thin and put the application logic in its own module. "
+              "Parse arguments at the boundary and pass validated settings into that module.\n\n"
+              "Use a configuration object to collect defaults, file values, and environment "
+              "overrides in one place. Pass it to functions instead of reading globals.\n\n"
+              "Test application functions with ordinary values so they can run without "
+              "starting the terminal interface or loading your production configuration.")
+    router = MagicMock()
+    router.send.return_value = LLMResponse(answer, "synthetic", "fixture")
+    _, _, _, store, turns = run_callbacks(tmp_path, monkeypatch, [
+        (query, {"input_source": "keyboard"} if typed else {"wake_verified": True}),
+    ], router=router, controller=True, persona_file=persona_file)
+    try:
+        messages = router.send.call_args.args[0]
+        assert preference in messages[0].content
+        text_depth = "Generic short-reply or spoken-delivery preferences do not cap written answers"
+        assert (text_depth in messages[0].content) is typed
+        assert router.send.call_args.kwargs["max_tokens"] == (4096 if typed else 400)
+        assert turns[-1].content == answer
+    finally:
+        store.close()
+
+
 def test_chat_passes_larger_budget_and_preserves_complete_explanation(chat):
     explanation = ("A detailed explanation with a concrete example. " * 180).strip()
     chat.router.answer = explanation + "\n\n```python\ndef example():\n    return 42\n```"

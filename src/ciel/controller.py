@@ -373,7 +373,9 @@ def _web_goal_context(text: str, messages: list[ChatMessage], query: str = "") -
     from ciel.task_context import resolve_task_context
 
     task = resolve_task_context(text, messages)
-    if task.kind in {"retry", "continue", "correction", "detail", "followup"} and task.request:
+    if task.kind in {
+        "retry", "continue", "correction", "detail", "followup", "acceptance",
+    } and task.request:
         # The projection contains only the user's task and latest amendments. It
         # also recognizes bare retries after errors and survives more than one
         # correction, without accepting assistant-invented subjects or numbers.
@@ -466,8 +468,14 @@ def resolve_web_goal(
     A model goal may describe the task, but cannot add numeric scope absent from user words.
     """
     inherited = _web_goal_context(text, messages, query)
+    current = [text]
+    if inherited:
+        from ciel.task_context import resolve_task_context
+
+        if resolve_task_context(text, messages).kind == "acceptance":
+            current = []  # The acknowledgement selects the task; it is not question data.
     parts: list[str] = []
-    for value in [*inherited, text]:
+    for value in [*inherited, *current]:
         value = _scope_text(value)
         parts = [_current_scope(previous, value) for previous in parts]
         parts.append(value)

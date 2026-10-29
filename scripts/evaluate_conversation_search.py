@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate eight synthetic task/search conversations without reading personal history.
+"""Evaluate synthetic task/search conversations without reading personal history.
 
 Default operation is offline. ``--live`` explicitly opts into the configured response
 provider; web reads remain fixtures, memory uses a temporary database, and screen/audio
@@ -41,6 +41,16 @@ class EvaluationCase:
 
 
 CASES = (
+    EvaluationCase(
+        "accepted_corrected_lookup_offer",
+        (("user", "Hey Ciel, do you know about Tinsura anime mod in Minecraft?"),
+         ("assistant", "I'm not familiar with that mod."),
+         ("user", "I meant Tensura."),
+         ("assistant", "I haven't heard of a Tensura mod for Minecraft either. "
+          "Want me to look it up?")),
+        "Yes, sure.", ("Tensura", "mod", "Minecraft"), ("Tinsura", "Yes, sure"),
+        "Tensura is a Minecraft mod inspired by the anime series.", ("Tensura", "Minecraft"),
+    ),
     EvaluationCase(
         "spoken_name_typed_correction",
         (("user", "Hey Ciel, can you search TensorFlow for me?"),
@@ -154,21 +164,49 @@ class BudgetRouter:
             record.update(provider=response.provider, model=response.model,
                           tool_names=[call.name for call in response.tool_calls],
                           response=response.content[:12000])
+            queries = []
+            for call in response.tool_calls:
+                if call.name == "web_search":
+                    try:
+                        arguments = json.loads(call.arguments)
+                        queries.extend([arguments.get("query", ""),
+                                        *arguments.get("search_queries", [])])
+                    except (ValueError, TypeError, AttributeError):
+                        pass
+            try:
+                queries.extend(json.loads(response.content).get("search_queries", []))
+            except (ValueError, TypeError, AttributeError):
+                pass
+            record["search_queries"] = [q for q in queries if isinstance(q, str) and q.strip()]
             return response
         finally:
             record["seconds"] = round(time.monotonic() - started, 3)
+
+    def emitted_queries(self) -> set[str]:
+        """Snapshot model proposals before the corresponding external lookup runs."""
+        with self._lock:
+            return {" ".join(query.split()) for record in self.calls
+                    for query in record.get("search_queries", [])}
 
 
 class FixtureInternet:
     """Serve only synthetic reference bytes and record real lookup objectives."""
 
-    def __init__(self, case: EvaluationCase, config: Any) -> None:
+    def __init__(self, case: EvaluationCase, config: Any, budget: BudgetRouter) -> None:
         self.case, self.config = case, config
+        self.budget = budget
         self.calls: list[dict[str, Any]] = []
 
     def lookup(self, query: str, **kwargs) -> InternetResult:
+        proposals = self.budget.emitted_queries()
+        outgoing = [query, *kwargs.get("search_queries", [])]
         self.calls.append({"query": query, "objective": kwargs.get("objective", ""),
-                           "read_page": bool(kwargs.get("read_page"))})
+                           "search_queries": kwargs.get("search_queries", []),
+                           "read_page": bool(kwargs.get("read_page")),
+                           "queries_written_by_model": all(
+                               isinstance(probe, str) and " ".join(probe.split()) in proposals
+                               for probe in outgoing
+                           )})
         return InternetResult(attempted=True, query=query, sources=[InternetSource(
             "Synthetic evaluation reference", "https://example.org/synthetic/reference",
             content=self.case.fact,
@@ -193,7 +231,7 @@ def evaluate(case: EvaluationCase, router: Any, *, deadline: float, maximum: int
         )
         session = ChatSession(settings, channel="evaluation", session_id="synthetic-owner",
                               router=budget)
-        internet = FixtureInternet(case, settings.internet)
+        internet = FixtureInternet(case, settings.internet, budget)
         session.internet = internet
         try:
             for role, text in case.history:
@@ -203,9 +241,13 @@ def evaluate(case: EvaluationCase, router: Any, *, deadline: float, maximum: int
                               workers=_EVALUATION_WORKERS)
             turns = session.conversation.get_recent_turns(limit=30)
             goal = " ".join(call["objective"] for call in internet.calls).casefold()
+            searches = [call for call in internet.calls if not call["read_page"]]
             sources = turns[-1].sources if turns and turns[-1].role == "assistant" else []
             result["checks"] = {
-                "searched": bool(internet.calls),
+                "searched": bool(searches),
+                "queries_written_by_model": bool(searches) and all(
+                    call["queries_written_by_model"] for call in searches
+                ),
                 "task_scope_preserved": all(term.casefold() in goal
                                             for term in case.required_goal),
                 "stale_scope_absent": not any(term.casefold() in goal

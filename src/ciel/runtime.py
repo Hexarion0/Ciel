@@ -159,7 +159,7 @@ def run_desktop(
         voice_delivery_instruction,
     )
     from ciel.dialogue import DialogueContext
-    from ciel.internet import InternetResult, InternetService, _bounded, public_urls
+    from ciel.internet import InternetResult, InternetService, public_urls
     from ciel.latency import active_trace, latency_phase, mark
     from ciel.memory import ConversationManager, MemoryStore
     from ciel.memory.models import normalize_sources
@@ -174,7 +174,6 @@ def run_desktop(
     from ciel.providers.intents import answer_clock_query
     from ciel.providers.router import ModelRouter
     from ciel.research import (
-        DeadlineCancellation,
         ResearchCancellation,
         evidence_payload,
         previous_observations,
@@ -605,7 +604,7 @@ def run_desktop(
                 return False
         task = dialogue_context.task_context(query)
         contextual_web = task.task_type == "web" and task.kind in {
-            "retry", "continue", "correction", "detail", "followup",
+            "retry", "continue", "correction", "detail", "followup", "acceptance",
         }
         if contextual_web and reliable and current() and dialogue_context.web_paused():
             # A wait keeps its task; stop/no-search remove its web anchor in the
@@ -987,41 +986,6 @@ def run_desktop(
                 objective=task.request, contextual_web=contextual_web and reliable,
                 explanation_only=task.kind == "explanation",
             )
-            if correction is not None and any(
-                tool["function"]["name"] == "web_search" for tool in native_tools.schemas
-            ):
-                from ciel.providers.base import ToolCall
-                from ciel.web_answers import web_answer_messages
-
-                lookup = native_tools.execute(ToolCall(
-                    "corrected_subject_search", "web_search",
-                    json.dumps({"query": correction.query}, ensure_ascii=False),
-                ))
-                if not native_tools.is_current():
-                    return False
-                if lookup.terminal_text:
-                    return finish(lookup.terminal_text, sources=lookup.sources,
-                                  lookup=native_tools.lookup, research_scope=turn_scope)
-                if lookup.is_error or native_tools.lookup is None:
-                    return finish("I couldn't complete that search. Please try again.")
-                deadline = native_tools.response_deadline()
-                lookup_cancel = DeadlineCancellation(
-                    ResearchCancellation(cancel_event, native_tools.is_current), deadline,
-                )
-                try:
-                    response = _bounded(lambda: router.send(
-                        web_answer_messages(messages, native_tools.lookup, channel=reply_channel),
-                        temperature=0.2, max_tokens=4096, cancel_event=lookup_cancel,
-                    ), deadline, lookup_cancel, workers=_REPLY_WORKERS)
-                finally:
-                    lookup_cancel.set()
-                if not native_tools.is_current():
-                    return False
-                verified = native_tools.answer_filter(response.content)
-                return finish(
-                    verified.terminal_text, response.provider, response.model,
-                    verified.sources, lookup=native_tools.lookup, research_scope=turn_scope,
-                )
             agent = MainAgent(
                 router, native_tools.schemas, native_tools.execute,
                 is_current=native_tools.is_current,

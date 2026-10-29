@@ -75,6 +75,13 @@ class DialogueContext:
                 "the answer. Do not invent an inspection result or restart the search. "
                 "Keep the underlying task available for a later correction or retry."
             )
+        if task.kind == "acceptance":
+            note += (
+                "\nThe user accepted your preceding offer to search this topic. "
+                "Use the web tool for the projected request above. The acknowledgement "
+                "is not a search query. Keep the user's corrected name and requested scope; "
+                "do not ask for the same confirmation again."
+            )
         if task.kind == "followup":
             note += (
                 "\nThe user changed the requested outcome while keeping the subject. "

@@ -100,7 +100,7 @@ def test_reading_followup_reaches_lookup_with_new_outcome(tmp_path, monkeypatch,
             'Continue reading from light novel volume 12.')
     source = _source(fact)
     internet = _internet(monkeypatch, [InternetResult(attempted=True, sources=[source])])
-    router = _router([_tool_call('web_search', query='Tensura season 4 latest episode'),
+    router = _router([_tool_call('web_search', query='Tensura season 4 light novel continuation'),
                       _report(fact)])
     if entrypoint.startswith('desktop'):
         info = {'wake_verified': True} if entrypoint == 'desktop_voice' else {

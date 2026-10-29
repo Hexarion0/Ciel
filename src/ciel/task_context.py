@@ -20,6 +20,7 @@ from ciel.search_context import (
 
 TaskKind = Literal[
     "new", "retry", "continue", "correction", "detail", "followup", "explanation", "wait", "stop",
+    "acceptance",
 ]
 TaskType = Literal["conversation", "web", "screen"]
 
@@ -51,6 +52,26 @@ _WAIT = re.compile(
 _GREETING = re.compile(
     r"(?:(?:hi|hello|hey)(?:\s+ciel)?|how are you|are you there|thanks|thank you)[.!? ]*",
     re.I,
+)
+_ACCEPTANCE = re.compile(
+    r"(?:(?:yes|yeah|yep|sure|okay|ok)[,!. ]+)?"
+    r"(?:yes|yeah|yep|sure|okay|ok|go\s+ahead|do\s+it|please\s+do)"
+    r"(?:[, ]+please)?[.! ]*", re.I,
+)
+_WEB_OFFER = re.compile(
+    r"(?:want\s+me\s+to|(?:would|do)\s+you\s+(?:like|want)\s+me\s+to|"
+    r"(?:shall|should|can)\s+i)\s+"
+    r"(?:search(?:\s+(?:the\s+)?(?:web|internet))?(?:\s+for)?|"
+    r"look\s+(?:(?:it|that|this)\s+up|up|online(?:\s+for)?))"
+    r"(?P<target>[^?\n]{0,200})\?", re.I,
+)
+_OFFER_ALTERNATIVE = re.compile(
+    r"\b(?:or|and|then|also)\b[^?]*\b(?:search|look|read|explain|install|open|save|"
+    r"send|check|tell|browse|download)\b", re.I,
+)
+_OFFER_FILLER = set(
+    "a an the for about of on in it its that this online please you some information details"
+    .split()
 )
 _QUOTED_OR_REPORTED = re.compile(
     r"^[\"'“‘]|\b(?:she|he|they|someone|the\s+page)\s+(?:said|says|wrote|asked)\b",
@@ -229,6 +250,26 @@ def _task_type(text: str) -> TaskType:
     return "conversation"
 
 
+def _offered_web_lookup(assistant: str, previous: TaskContext) -> bool:
+    """Bind one direct lookup offer to owner-provided scope, not assistant claims."""
+    if (previous.task_type == "screen" or previous.kind in {"stop", "wait"}
+            or _GREETING.fullmatch(previous.request.strip())
+            or _ACCEPTANCE.fullmatch(previous.request.strip())
+            or _QUOTED_OR_REPORTED.search(previous.request)
+            or _NEGATED_LOOKUP.search(previous.request)
+            or _QUOTED_OR_REPORTED.search(assistant) or assistant.count("?") != 1):
+        return False
+    # Only the last sentence can supply the pending offer. A reported offer or a
+    # later question about another action must not accept the earlier search.
+    clause = re.split(r"(?<=[.!])\s+|\n", assistant.strip())[-1].strip()
+    offer = _WEB_OFFER.fullmatch(clause)
+    if offer is None or _OFFER_ALTERNATIVE.search(offer["target"]):
+        return False
+    target = set(re.findall(r"[^\W_]+", offer["target"].casefold())) - _OFFER_FILLER
+    owner = set(re.findall(r"[^\W_]+", previous.request.casefold()))
+    return bool(owner - _GENERIC) and target <= owner
+
+
 def _next_task(
     text: str, previous: TaskContext | None, assistant: str, index: int,
 ) -> TaskContext:
@@ -243,6 +284,8 @@ def _next_task(
         return TaskContext(_bounded(text), "new", anchor_index=index, task_type=_task_type(clean))
     if _QUOTED_OR_REPORTED.search(clean) or _NEGATED_LOOKUP.search(clean):
         return TaskContext(_bounded(text), "new", anchor_index=index)
+    if _ACCEPTANCE.fullmatch(clean) and _offered_web_lookup(assistant, previous):
+        return replace(previous, kind="acceptance", task_type="web")
     if _RETRY.fullmatch(clean):
         return replace(previous, kind="retry")
     if _CONTINUE.fullmatch(clean):

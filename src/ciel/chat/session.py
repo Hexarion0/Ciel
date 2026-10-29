@@ -348,7 +348,7 @@ class ChatSession:
                 return ""
             return self._finish(explanation)
         contextual_web = task.task_type == "web" and task.kind in {
-            "retry", "continue", "correction", "detail", "followup",
+            "retry", "continue", "correction", "detail", "followup", "acceptance",
         }
         if (contextual_web and not canceled.is_set()
                 and scope == self.conversation.context_session_ids()

@@ -35,6 +35,10 @@ _T = TypeVar("_T")
 _WORKERS = threading.BoundedSemaphore(2)
 _MAX_BYTES = 262_144
 _MAX_TEXT = 9000
+_GAP_MARKER = "[... omitted source text ...]"
+_SOURCE_GAP = re.compile(
+    re.escape(_GAP_MARKER) + r"|^[ \t]*(?:\.{3}|…)[ \t]*\r?$", re.M,
+)
 _URL = re.compile(r"https?://[^\s<>\"']+", re.I)
 _BARE_URL = re.compile(
     r"(?<![\w@/:.\\-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
@@ -140,6 +144,12 @@ _TERM_ALIASES = {
 _NUMBER_LABELS = (
     "season|episode|version|release|edition|album|book|chapter|volume|series|model|gen|part|cour"
 )
+_SCOPE_WORD_NUMBERS = {
+    word: str(index) for index, word in enumerate(
+        "zero one two three four five six seven eight nine ten eleven twelve thirteen "
+        "fourteen fifteen sixteen seventeen eighteen nineteen twenty".split(),
+    )
+}
 _QUERY_SCAFFOLD = set(
     "a an the i i'm still am have been considering would could can you me my "
     "is are was were do does did what what's whats when where which who how and or "
@@ -232,6 +242,17 @@ def _clean(text: str, limit: int = 500) -> str:
         "[REDACTED_SECRET]", text, flags=re.I,
     )
     return " ".join(text.split())[:limit]
+
+
+def _clean_content(text: str, limit: int = 48_000) -> str:
+    """Redact page evidence while retaining paragraph and Markdown heading boundaries."""
+    text = SecretMaskingFilter._redact(text)
+    text = re.sub(
+        r"\b(?:password|api[_ -]?key|access[_ -]?token|secret)\s*[:=]\s*\S+",
+        "[REDACTED_SECRET]", text, flags=re.I,
+    )
+    lines = [" ".join(line.split()) for line in text.splitlines()]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()[:limit]
 
 
 def _remaining(deadline: float, canceled: threading.Event | None) -> float:
@@ -489,11 +510,227 @@ def source_identity(url: str) -> str:
 
 
 def _source_score(query: str, source: InternetSource) -> tuple[int, int]:
-    """Prefer previews with the requested named topic in the title, stably on ties."""
+    """Compare duplicate records using the requested topic and their actual evidence."""
     expected = _topic_terms(query) - _GENERIC_ANCHORS
     title = _topic_terms(source.title)
-    preview = _topic_terms(source.snippet)
+    preview = _topic_terms(source.snippet + " " + source.content)
     return len(expected & title), len(expected & (title | preview))
+
+
+def _goal_kind(goal: str) -> str:
+    """Recognize evidence shapes, without changing the user's topic or requested facts."""
+    if re.search(r"\b(?:novel|manga|book|reading|read)\b", goal, re.I) and re.search(
+        r"\b(?:anime|adapt\w*|episode|season|finale)\b", goal, re.I,
+    ) and re.search(r"\b(?:end\w*|after|continu\w*|start|where)\b", goal, re.I):
+        return "mapping"
+    if _TEMPORAL.search(goal) or _INSTALLMENT.search(goal):
+        return "current"
+    if re.search(r"\bwhat happens\b[^.!?]{0,240}\b(?:when|if)\b", goal, re.I):
+        return "compound"
+    if re.search(r"\b(?:overview|explain|what (?:is|are)|tell me about)\b", goal, re.I):
+        return "overview"
+    if len(_goal_terms(goal)) >= 5 and re.search(
+        r"\b(?:and|requirements?|support\w*|compatib\w*|compare|versus)\b|[,;]", goal, re.I,
+    ):
+        return "compound"
+    return "general"
+
+
+def _goal_terms(goal: str) -> set[str]:
+    """Keep substantive requested features instead of scoring question scaffolding."""
+    return _topic_terms(goal) - set(
+        "requirement support compatible explain overview detail include provide right now "
+        "released release request answer response information feature".split()
+    )
+
+
+def _scope_numbers(text: str) -> list[tuple[str, str]]:
+    """Read explicit installment shorthand without guessing an omitted scope."""
+    text = re.sub(
+        r"\b(" + "|".join(_SCOPE_WORD_NUMBERS) + r")\b",
+        lambda match: _SCOPE_WORD_NUMBERS[match[0].casefold()], text, flags=re.I,
+    )
+    text = re.sub(
+        r"\bS(\d+)(?:E(\d+))?\b", lambda match: "season " + match[1]
+        + (" episode " + match[2] if match[2] else ""), text, flags=re.I,
+    )
+    text = re.sub(r"\b(?:ep?|episode)\.?\s*(\d+)\b", r"episode \1", text, flags=re.I)
+    text = re.sub(r"\b(season|part|cour)\s*(\d+)\b", r"\1 \2", text, flags=re.I)
+    return _labeled_numbers(text)
+
+
+def _mapping_topic_terms(text: str) -> set[str]:
+    """Separate the named reading topic from generic mapping and section vocabulary."""
+    return _goal_terms(text) - _GENERIC_ANCHORS - _SCOPE_WORD_NUMBERS.keys() - set(
+        "adapt adaptation after before begin continuation endpoint finale guide mapping "
+        "order point start".split()
+    )
+
+
+def _goal_passages(text: str, goal: str) -> list[str]:
+    """Keep requested installment scope local to a passage or proved heading stack."""
+    requested = [(label, number) for label, number in _scope_numbers(goal)
+                 if label in {"season", "episode", "part", "cour"}]
+    kind = _goal_kind(goal)
+    mapping = kind == "mapping"
+    topic = _mapping_topic_terms(goal) if mapping or kind == "current" else set()
+    heading_pattern = re.compile(r"(?m)^[ \t]{0,3}(#{1,6})[ \t]+([^\r\n]{1,240})$")
+    events = [(match.start(), match.end(), len(match[1]), match[2])
+              for match in heading_pattern.finditer(text)]
+    gaps = list(_SOURCE_GAP.finditer(text))
+    events.extend((match.start(), match.end(), 0, "") for match in gaps)
+    events.sort()
+    headings: list[tuple[int, str]] = []
+    boundary = offset = event_index = 0
+    passages = []
+    for passage in re.split(r"(?<=[.!?])\s+|\n\s*\n", text):
+        start = text.find(passage, offset)
+        end = start + len(passage)
+        offset = end
+        if not passage.strip():
+            continue
+        while event_index < len(events) and events[event_index][1] <= start:
+            _position, boundary, level, heading = events[event_index]
+            event_index += 1
+            headings = [(depth, title) for depth, title in headings if depth < level]
+            if level:
+                headings.append((level, heading))
+        if any(match.start() < end and match.end() > start for match in gaps) or any(
+            match.start() > start for match in heading_pattern.finditer(text, start, end)
+        ):
+            continue
+        context = " ".join(heading for _level, heading in headings)
+        labels = _scope_numbers(context + " " + text[max(boundary, start - 240):end])
+        if mapping:
+            # Generic child headings can inherit a named parent; a different named
+            # section cannot borrow the topic from a parent or an earlier paragraph.
+            section = next((heading for _level, heading in reversed(headings)
+                            if _mapping_topic_terms(heading)), "")
+            if not topic or not (topic <= _topic_terms(passage)
+                                 or topic <= _topic_terms(section)):
+                continue
+        elif kind == "current":
+            # A release/sidebar sentence cannot borrow the requested subject from
+            # unrelated text elsewhere on the page. Generic release headings may
+            # inherit a named parent, while a different named section ends it.
+            section_words = {
+                "changelog", "documentation", "download", "history", "note", "overview",
+                "update",
+            }
+            section = next((heading for _level, heading in reversed(headings)
+                            if _mapping_topic_terms(heading) - section_words), "")
+            if topic and not topic <= _topic_terms(passage + " " + section):
+                continue
+        if all({value for unit, value in labels if unit == label} == {number}
+               for label, number in requested):
+            passages.append(passage)
+    return passages
+
+
+def _goal_score(goal: str, source: InternetSource) -> tuple[float, int]:
+    """Reward a passage connecting the requested entities, beyond keyword repetition.
+
+    This only ranks evidence; generation must still verify each factual claim. Titles
+    alone cannot earn an answer score, and a missing relation leaves provider order intact.
+    """
+    text = source.content or source.snippet
+    expected = _goal_terms(goal)
+    covered = len(expected & _topic_terms(text))
+    kind = _goal_kind(goal)
+    passages = _goal_passages(text, goal)
+    if kind == "mapping":
+        for passage in passages:
+            if re.search(r"\b(?:volume|vol\.?|chapter|book)\s*\d+", passage, re.I) and re.search(
+                r"\b(?:ends? (?:at|in|with)|adapt\w*|covers?|continu\w*|"
+                r"(?:start|begin|read|pick)\w* (?:reading |up )?(?:at|from|with))\b",
+                passage, re.I,
+            ):
+                return 5.0, covered
+    elif kind == "current":
+        for passage in passages:
+            if re.search(r"\b(?:will (?:air|release)|upcoming|unreleased|expected|scheduled)\b",
+                         passage, re.I):
+                continue
+            if re.search(r"\b(?:latest|current|newest|as of)\b", passage, re.I) and re.search(
+                r"\b(?:released|aired|available|published|stable|is|are)\b", passage, re.I,
+            ) and (covered >= min(2, len(expected))):
+                return 4.0, covered
+    elif kind == "overview":
+        if covered >= min(2, len(expected)) and re.search(
+            r"\b(?:is (?:an? |the )?|are |refers to |provides? |means? )\S", text, re.I,
+        ):
+            return 3.0, covered
+    elif kind == "compound":
+        ratio = covered / max(1, len(expected))
+        if covered >= 3 and ratio >= 0.4 and re.search(
+            r"\b(?:supports?|requires?|provides?|allows?|enables?|implements?|"
+            r"compatible|must|can|uses?)\b", text, re.I,
+        ):
+            return 2.0 + ratio, covered
+    return 0.0, covered
+
+
+def _rank_sources(goal: str, sources: list[InternetSource]) -> list[InternetSource]:
+    """Stably prefer answer-bearing evidence and complementary sources when warranted."""
+    scores = {id(source): _goal_score(goal, source) for source in sources}
+    if not any(score[0] for score in scores.values()):
+        return list(sources)
+    remaining = list(sources)
+    ranked: list[InternetSource] = []
+    domains: dict[str, int] = {}
+    covered: set[str] = set()
+    expected = _goal_terms(goal)
+    while remaining:
+        def score(source: InternetSource) -> tuple[float, int]:
+            domain = (urlsplit(source.url).hostname or "").removeprefix("www.")
+            strength, _coverage = scores[id(source)]
+            novel = len((expected & _topic_terms(source.content or source.snippet)) - covered)
+            return strength - 0.4 * domains.get(domain, 0), novel
+
+        selected = max(remaining, key=score)
+        remaining.remove(selected)
+        ranked.append(selected)
+        domain = (urlsplit(selected.url).hostname or "").removeprefix("www.")
+        domains[domain] = domains.get(domain, 0) + 1
+        covered |= expected & _topic_terms(selected.content or selected.snippet)
+    return ranked
+
+
+def _incomplete_sources(
+    goal: str, sources: list[InternetSource], pages: int,
+) -> list[InternetSource]:
+    """Choose promising pages only when supplied excerpts omit the requested relation."""
+    kind = _goal_kind(goal)
+    if pages <= 0 or kind == "general":
+        return []
+    if kind != "compound" and any(_goal_score(goal, source)[0] for source in sources):
+        return []
+    expected = _goal_terms(goal)
+    if kind == "compound":
+        covered = set().union(*(_topic_terms(source.content or source.snippet)
+                                for source in sources if _goal_score(goal, source)[0]))
+        if expected <= covered:
+            return []
+    promising: list[tuple[int, InternetSource]] = []
+    for source in sources:
+        if not source.content or source.content_kind != "provider_excerpt":
+            continue
+        text = source.title + " " + source.content
+        if kind == "mapping":
+            priority = len(re.findall(
+                r"\b(?:reading|continu\w*|adapt\w*|novel|manga|volume|chapter)\b", text, re.I,
+            ))
+        elif kind == "current":
+            priority = int(bool(re.search(
+                r"\b(?:episode|season|version|release|edition|schedule|availability|price)\b",
+                text, re.I,
+            )))
+        else:
+            priority = len(expected & _topic_terms(source.content))
+        if priority:
+            promising.append((priority, source))
+    promising.sort(key=lambda item: item[0], reverse=True)
+    return [source for _priority, source in promising[:min(pages, 2)]]
 
 
 def _date_score(value: str) -> float:
@@ -560,7 +797,7 @@ def _news_relevant(query: str, source: InternetSource) -> bool:
 
 def _excerpt(content: str, query: str, limit: int = _MAX_TEXT) -> str:
     """Keep the introduction and query-bearing passage instead of blindly slicing a page."""
-    content = _clean(content, _MAX_BYTES)
+    content = _clean_content(content, _MAX_BYTES)
     if len(content) <= limit:
         return content
     terms = _topic_terms(query) - {"news", "headlines"}
@@ -568,15 +805,33 @@ def _excerpt(content: str, query: str, limit: int = _MAX_TEXT) -> str:
         return content[:limit]
     windows = [(start, content[start:start + limit - 1500])
                for start in range(0, len(content), 1000)]
-    start, passage = max(windows, key=lambda item: len(terms & _topic_terms(item[1])))
+    start, passage = max(windows, key=lambda item: (
+        _goal_score(query, InternetSource("", "", content=item[1]))[0],
+        len(terms & _topic_terms(item[1])),
+    ))
     if start < 1500:
         return content[:limit]
-    return content[:1400] + " […] " + passage
+    # Carry only headings proved active at the selected range. Gaps between provider
+    # excerpts reset scope because omitted sections might contain another heading.
+    headings: list[tuple[int, str]] = []
+    for line in content[:start].splitlines():
+        if _SOURCE_GAP.search(line):
+            headings.clear()
+        match = re.fullmatch(r"(#{1,6})\s+(.+)", line)
+        if match:
+            level = len(match[1])
+            headings = [heading for heading in headings if heading[0] < level]
+            headings.append((level, line))
+    context = "\n\n".join(line for _level, line in headings)
+    if len(context) > 400:
+        context = ""
+    return (content[:1000] + "\n\n" + _GAP_MARKER + "\n\n"
+            + (context + "\n\n" if context else "") + passage)[:limit]
 
 
 def _relevant(query: str, source: InternetSource) -> bool:
     """Reject obvious topic mismatches; topical evidence still does not verify an answer."""
-    expected = _topic_terms(query)
+    expected = _goal_terms(query) or _topic_terms(query)
     if not expected:
         return False
     text = source.title + " " + source.snippet + " " + source.content
@@ -844,6 +1099,10 @@ class _PageText(HTMLParser):
             self._title = True
         if tag in {"main", "article"}:
             self._preferred.append(tag)
+        if re.fullmatch(r"h[1-6]", tag):
+            self._boundary("\n\n" + "#" * int(tag[1]) + " ")
+        elif tag in {"p", "div", "li", "tr", "section", "br"}:
+            self._boundary("\n\n")
         if tag == "time" and attributes.get("datetime"):
             if not self.published_at:
                 self.published_at = _clean(attributes["datetime"], 100)
@@ -865,6 +1124,8 @@ class _PageText(HTMLParser):
             return
         if tag == "title":
             self._title = False
+        if re.fullmatch(r"h[1-6]", tag) or tag in {"p", "div", "li", "tr", "section"}:
+            self._boundary("\n\n")
         if tag in self._preferred:
             self._preferred.remove(tag)
         if tag == "a" and self._link is not None:
@@ -885,6 +1146,12 @@ class _PageText(HTMLParser):
             self._link[1].append(data)
         if self._preferred:
             self.article.append(data)
+
+    def _boundary(self, text: str) -> None:
+        """Preserve proved section structure without accepting page instructions."""
+        self.text.append(text)
+        if self._preferred:
+            self.article.append(text)
 
     def _metadata(self, text: str) -> None:
         """Read publication metadata only; JSON-LD article bodies remain untrusted scripts."""
@@ -1052,6 +1319,7 @@ class InternetService:
         cancel_event: threading.Event | None = None, local_only: bool = False,
         urls: list[str] | None = None,
         objective: str = "",
+        search_queries: list[str] | None = None,
     ) -> InternetResult:
         """Execute an AI-selected query without keyword intent detection or query stripping."""
         if not self.config.enabled or local_only or (
@@ -1060,6 +1328,10 @@ class InternetService:
             return InternetResult()
         clean = _clean(query)
         objective = _clean(objective, 1600)
+        search_queries = list(dict.fromkeys(
+            _clean(item) for item in (search_queries or [])[:5]
+            if isinstance(item, str) and _clean(item)
+        )) or None
         if not clean:
             return InternetResult(reply="What should I look up?")
         if urls is None:
@@ -1082,7 +1354,7 @@ class InternetService:
             return _bounded(
                 lambda: self._retrieve(
                     clean, urls, research, deadline, cancel_event, remember_sources,
-                    objective=objective,
+                    objective=objective, search_queries=search_queries,
                 ),
                 deadline, cancel_event,
             )
@@ -1101,14 +1373,14 @@ class InternetService:
             return InternetResult(
                 attempted=True, query=clean, sources=sources,
                 context=self._context(sources, failed=not sources, query=clean),
-                kind="news" if is_news_query(clean) else "web",
+                kind="news" if is_news_query(objective or clean) else "web",
                 reply=(str(error) if not sources and isinstance(error, SearchProviderError)
                        else None),
             )
 
     def _search(
         self, query: str, maximum: int, deadline: float, canceled: threading.Event | None,
-        *, objective: str = "",
+        *, objective: str = "", search_queries: list[str] | None = None,
     ) -> list[dict]:
         remaining = _remaining(deadline, canceled)
         if self.config.provider == "parallel":
@@ -1118,6 +1390,7 @@ class InternetService:
                 query, timeout=remaining, maximum=min(maximum * 2, 20),
                 session_id=self._parallel_session_id, cancel_event=canceled,
                 **({"objective": objective} if objective else {}),
+                **({"search_queries": search_queries} if search_queries else {}),
             )
             _remaining(deadline, canceled)
             return results
@@ -1156,13 +1429,20 @@ class InternetService:
         self, query: str, urls: list[str], research: bool, deadline: float,
         canceled: threading.Event | None,
         remember_sources: Callable[[list[InternetSource]], None],
-        *, objective: str = "",
+        *, objective: str = "", search_queries: list[str] | None = None,
     ) -> InternetResult:
         _remaining(deadline, canceled)
         maximum = self.config.research_max_results if research else self.config.max_results
         pages = self.config.research_max_pages if research else self.config.max_pages
-        news = is_news_query(query)
+        goal = objective or query
+        news = is_news_query(goal)
         relevant = _news_relevant if news else _relevant
+        save_progress = remember_sources
+
+        def remember_sources(available: list[InternetSource]) -> None:
+            ranked = available if news or urls else _rank_sources(goal, available)
+            save_progress(ranked[:maximum])
+
         sources: list[InternetSource] = []
         if urls:
             read_deadline = deadline - min(0.15, _remaining(deadline, canceled) * 0.1)
@@ -1173,7 +1453,7 @@ class InternetService:
                         url, min(read_deadline, time.monotonic() + (12.0 if research else 8.0)),
                         canceled,
                     )
-                    page.content = _excerpt(page.content, query)
+                    page.content = _excerpt(page.content, goal)
                     sources.append(page)
                     remember_sources(sources)
                 except (ValueError, OSError, httpx.HTTPError, TimeoutError):
@@ -1182,7 +1462,10 @@ class InternetService:
                         break
         else:
             results = self._search(query, maximum, deadline, canceled,
-                                   **({"objective": objective} if objective else {}))
+                                   **({"objective": objective} if objective else {}),
+                                   **({"search_queries": search_queries}
+                                      if search_queries and self.config.provider == "parallel"
+                                      else {}))
             candidates: dict[str, InternetSource] = {}
             for result in results[:min(maximum * 2, 20)]:
                 if not isinstance(result, dict):
@@ -1203,7 +1486,7 @@ class InternetService:
                 # Keep their provenance and exact bounded text for answer verification.
                 excerpt = result.get("content") if self.config.provider == "parallel" else ""
                 content = (
-                    _excerpt(_clean(excerpt, 48_000), objective or query)
+                    _excerpt(_clean_content(excerpt), goal)
                     if isinstance(excerpt, str) else ""
                 )
                 if not snippet and not content and not (news and pages and result.get("title")):
@@ -1219,25 +1502,35 @@ class InternetService:
                     date_kind=_clean(str(result.get("date_kind") or "reported"), 32)
                               if result.get("date") or result.get("published") else "",
                 )
-                if relevant(query, source):
+                if relevant(goal, source):
                     identity = source_identity(url)
                     previous = candidates.get(identity)
-                    if previous is None or _source_score(query, source) > _source_score(
-                        query, previous,
+                    if previous is None or _source_score(goal, source) > _source_score(
+                        goal, previous,
                     ):
                         candidates[identity] = source
             def score(source: InternetSource) -> tuple:
                 if news:
                     return (_article_url(source.url), _date_score(source.published_at),
-                            _source_score(query, source))
-                return _source_score(query, source)
+                            _source_score(goal, source))
+                return _goal_score(goal, source)
 
-            sources = sorted(candidates.values(), key=score, reverse=True)[:maximum]
+            sources = (
+                sorted(candidates.values(), key=score, reverse=True) if news else
+                _rank_sources(goal, list(candidates.values()))
+            )
             remember_sources(sources)
             read_deadline = deadline - min(0.15, _remaining(deadline, canceled) * 0.1)
-            pending = list(sources)
+            selected = _incomplete_sources(goal, sources, pages)
+            if self.config.provider == "parallel" and selected:
+                self._expand_excerpts(
+                    goal, selected, sources, read_deadline, canceled,
+                    remember_sources, search_queries=search_queries,
+                )
+            pending = [source for source in sources[:maximum]
+                       if not source.content or source.content_kind != "provider_excerpt"]
             visited: set[str] = set()
-            for _read in range(pages):
+            for _read in range(max(0, pages - len(selected))):
                 if not pending:
                     break
                 source = pending.pop(0)
@@ -1245,10 +1538,6 @@ class InternetService:
                 if identity in visited:
                     continue
                 visited.add(identity)
-                if source.content and source.content_kind == "provider_excerpt":
-                    # The search provider already supplied source text. Explicit URL reads
-                    # still use the public reader; ordinary searches need no second fetch.
-                    continue
                 try:
                     page = self._read_page(
                         source.url,
@@ -1257,14 +1546,19 @@ class InternetService:
                     )
                     # Redirects and generic landing pages can differ from the search
                     # preview. Check the page alone before promoting it to read evidence.
-                    if not relevant(query, page):
+                    if not relevant(goal, page):
                         continue
-                    page.snippet = source.snippet
-                    page.published_at = page.published_at or source.published_at
-                    page.date_kind = page.date_kind or source.date_kind
-                    page.publisher = page.publisher or source.publisher
-                    page.content = _excerpt(page.content, query)
-                    sources[sources.index(source)] = page
+                    page.content = _excerpt(page.content, goal)
+                    if source_identity(page.url) == identity:
+                        page.snippet = source.snippet
+                        page.published_at = page.published_at or source.published_at
+                        page.date_kind = page.date_kind or source.date_kind
+                        page.publisher = page.publisher or source.publisher
+                        sources[sources.index(source)] = page
+                    else:
+                        # A redirect observes a different document. Keep the
+                        # original preview attached to its own citation URL.
+                        sources.append(page)
                     if news and not _article_url(page.url):
                         additions = []
                         known = {source_identity(item.url) for item in sources}
@@ -1274,7 +1568,7 @@ class InternetService:
                                                        date_kind="reported" if published_at else "")
                             if source_identity(link) in known or source_identity(link) in visited:
                                 continue
-                            if _article_url(link) and not relevant(query, candidate):
+                            if _article_url(link) and not relevant(goal, candidate):
                                 continue
                             if not _article_url(link) and title != "News feed":
                                 continue
@@ -1304,6 +1598,8 @@ class InternetService:
             sources.sort(key=lambda item: (bool(item.content) and _article_url(item.url),
                                           _article_url(item.url), _date_score(item.published_at)),
                          reverse=True)
+        elif not urls:
+            sources = _rank_sources(goal, sources)
         sources = sources[:maximum]
         remember_sources(sources)
         _remaining(deadline, canceled)
@@ -1314,6 +1610,92 @@ class InternetService:
             context=self._context(sources, failed=not sources, query=query),
             kind="news" if news else "web",
         )
+
+    def _expand_excerpts(
+        self, goal: str, selected: list[InternetSource],
+        sources: list[InternetSource], deadline: float, canceled: threading.Event | None,
+        remember_sources: Callable[[list[InternetSource]], None],
+        *, search_queries: list[str] | None = None,
+    ) -> None:
+        """Read at most two selected pages, retaining existing evidence on any failure."""
+        from ciel.parallel_search import fetch_parallel
+        from ciel.search_providers import SearchProviderError
+
+        requested = {source_identity(_public_url(source.url)): source for source in selected}
+        completed: set[str] = set()
+        try:
+            rows = fetch_parallel(
+                [source.url for source in requested.values()],
+                timeout=_remaining(deadline, canceled), maximum=len(requested),
+                session_id=self._parallel_session_id, cancel_event=canceled,
+                objective=goal, search_queries=search_queries, full_content=True,
+            )
+            _remaining(deadline, canceled)
+            for row in rows[:len(requested) * 2]:
+                if not isinstance(row, dict) or not isinstance(row.get("content"), str):
+                    continue
+                try:
+                    url = _public_url(str(row.get("href") or row.get("url") or ""))
+                except ValueError:
+                    continue
+                identity = source_identity(url)
+                source = requested.get(identity)
+                if source is None:
+                    continue
+                page = InternetSource(
+                    _clean(str(row.get("title") or source.title), 160), url,
+                    content=_excerpt(row["content"], goal), content_kind="provider_excerpt",
+                    published_at=_clean(str(row.get("date") or source.published_at), 100),
+                    date_kind=_clean(str(row.get("date_kind") or source.date_kind), 32),
+                    fetched_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    publisher=_clean(str(row.get("publisher") or source.publisher), 160),
+                )
+                if not page.content or not _relevant(goal, page):
+                    continue
+                # Useful new facts may contain fewer query keywords than the
+                # preview. Keep both bounded observations instead of discarding
+                # a successful page read on that lexical comparison.
+                if source.content and page.content not in source.content:
+                    page.content = _clean_content(
+                        source.content + "\n\n" + _GAP_MARKER + "\n\n" + page.content,
+                    )
+                elif source.content:
+                    page.content = source.content
+                page.snippet = source.snippet
+                sources[sources.index(source)] = page
+                completed.add(identity)
+                remember_sources(sources)
+        except (SearchProviderError, ValueError, OSError, httpx.HTTPError, TimeoutError):
+            _remaining(deadline, canceled)
+        for identity, source in requested.items():
+            if identity in completed:
+                continue
+            _remaining(deadline, canceled)
+            try:
+                page = self._read_page(source.url, deadline, canceled)
+                _public_url(page.url)
+                if not _relevant(goal, page):
+                    continue
+                page.content = _excerpt(page.content, goal)
+                if source_identity(page.url) == identity:
+                    if source.content and page.content not in source.content:
+                        page.content = _clean_content(
+                            source.content + "\n\n" + _GAP_MARKER + "\n\n" + page.content,
+                        )
+                    elif source.content:
+                        page.content = source.content
+                    page.snippet = source.snippet
+                    page.published_at = page.published_at or source.published_at
+                    page.date_kind = page.date_kind or source.date_kind
+                    page.publisher = page.publisher or source.publisher
+                    sources[sources.index(source)] = page
+                else:
+                    # Earlier excerpts and metadata belong to the requested URL,
+                    # even when its redirect target is relevant to the same task.
+                    sources.append(page)
+                remember_sources(sources)
+            except (ValueError, OSError, httpx.HTTPError, TimeoutError):
+                _remaining(deadline, canceled)
 
     def _read_page(
         self, url: str, deadline: float, canceled: threading.Event | None,
@@ -1379,7 +1761,7 @@ class InternetService:
                 title = " ".join(parser.title) or host
                 published_at, publisher, links = parser.published_at, parser.publisher, parser.links
                 date_kind = parser.date_kind
-            content = _clean(decoded, 48_000)
+            content = _clean_content(decoded)
             if not content or re.search(
                 r"(?:just a moment|verify you are human|access denied|captcha)",
                 title + " " + content[:300], re.I,

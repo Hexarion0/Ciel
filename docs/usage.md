@@ -101,6 +101,12 @@ minutes of a spoken search keeps the same spelling-repair context. Both typed an
 spoken searches receive one spoken lookup acknowledgement and a spoken final answer.
 Repeated web steps share one progress announcement; the full typed answer stays in chat.
 
+Typed TUI questions receive developed explanations, steps, and examples when the topic
+needs them. You do not need to ask for more detail after each short answer. General
+saved preferences for brief spoken replies do not limit written answers; an explicit
+request for a short text answer still applies. Voice conversations keep their brief
+delivery, and spoken excerpts of typed replies leave the full answer in chat.
+
 Evidence checks use the configured normal responder without thinking, regardless
 of chat reasoning mode. A timeout is reported as an evidence-check timeout; it is
 not treated as proof that the retrieved pages lack an answer.
@@ -108,7 +114,16 @@ not treated as proof that the retrieved pages lack an answer.
 Public search defaults to Parallel's free anonymous service. No account or API key
 is required; the free service has lower usage limits than paid access. Ciel reads
 the returned source excerpts and, when needed, public pages to support her answer.
-See the [Parallel search documentation](https://docs.parallel.ai/integrations/mcp/search-mcp).
+The main responding AI writes the search keywords from your conversation and latest
+corrections. It can use aliases and send up to three distinct queries together. Ciel
+keeps your full question separately to check whether the sources answer it. Missing
+or invalid queries go back to the same AI for a rewrite before a search runs.
+She can fetch fuller passages when the excerpts omit a requested detail.
+A useful new lead gets one bounded recovery
+attempt when the AI proposes another query, within the original research deadline.
+Earlier supported findings survive failed lookups and page refreshes. Unverified
+details remain explicit gaps.
+See the [Parallel MCP documentation](https://docs.parallel.ai/integrations/mcp/quickstart).
 
 `ciel setup` offers Parallel, the free DuckDuckGo/public Brave option (`ddgs`),
 Brave Search, and Tavily. `INTERNET_PROVIDER=parallel` selects Parallel in `.env`.

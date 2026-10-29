@@ -37,15 +37,29 @@ class SearchReplay:
     subject: str = "Amber Harbor"
     fact: str = ("Amber Harbor anime episode 12 ends at light novel volume 3. "
                  "Continue reading from light novel volume 4.")
+    rewrite: str = ""
 
 
 REPLAYS = (
+    SearchReplay(
+        "accepted_offer_keeps_corrected_minecraft_mod",
+        (("user", "Hey Ciel, do you know about Tinsura anime mod in Minecraft?"),
+         ("assistant", "I'm not familiar with that mod."),
+         ("user", "I meant Tensura."),
+         ("assistant", "I haven't heard of a Tensura mod for Minecraft either. "
+          "Want me to look it up?")),
+        "Yes, sure.", "Yes, sure.", ("Tensura", "mod", "Minecraft"),
+        ("Tinsura", "Yes, sure"), "Tensura",
+        "Tensura is a Minecraft mod inspired by the anime series.",
+        rewrite="Tensura Minecraft mod CurseForge",
+    ),
     SearchReplay(
         "tensorflow_to_tensura_overview",
         (("user", "Hey Ciel, what's up? Can you search TensorFlow for me?"),
          ("assistant", "What do you want to know about TensorFlow?")),
         "Tensura*", "TensorFlow machine learning library", ("Tensura",),
         ("TensorFlow", "season 3"), "Tensura", "Tensura is a fantasy anime series.",
+        rewrite="Tensura overview",
     ),
     SearchReplay(
         "corrected_title_keeps_episode_and_medium",
@@ -53,6 +67,7 @@ REPLAYS = (
          ("assistant", "Could you spell the title?")),
         "Amber Harbor*", "Amber Harbour", ("Amber Harbor", "12", "light novel"),
         ("Amber Harbour",),
+        rewrite="Amber Harbor episode 12 light novel continuation",
     ),
     SearchReplay(
         "light_node_to_light_novel",
@@ -150,10 +165,6 @@ def _router(responses):
 
     def respond(_messages, **kwargs):
         response = next(iterator)
-        # Explicit corrections can perform an application-owned lookup before asking
-        # for synthesis. That request supplies evidence and no native tool catalogue.
-        if "tools" not in kwargs and response.tool_calls:
-            response = next(iterator)
         return response
 
     router.send.side_effect = _main_responses(respond)
@@ -167,7 +178,11 @@ def test_scoped_search_replay_reaches_real_boundary_and_supported_final(
 ):
     source = _source(case.fact)
     internet = _internet(monkeypatch, [InternetResult(attempted=True, sources=[source])])
-    router = _router([_tool_call("web_search", query=case.planned), _report(case.fact)])
+    router = _router([
+        _tool_call("web_search", query=case.planned),
+        *([_tool_call("web_search", query=case.rewrite)] if case.rewrite else []),
+        _report(case.fact),
+    ])
     if entrypoint == "desktop":
         _, tts, _, store, turns = run_callbacks(
             tmp_path, monkeypatch, [(case.current, {"input_source": "keyboard"})],
@@ -205,6 +220,82 @@ def test_scoped_search_replay_reaches_real_boundary_and_supported_final(
         close()
 
 
+@pytest.mark.parametrize("entrypoint", ["voice", "keyboard", "chat"])
+def test_correction_then_accepted_offer_searches_the_mod_in_a_running_conversation(
+    tmp_path, monkeypatch, entrypoint,
+):
+    question = "Do you know about Tinsura anime mod in Minecraft?"
+    correction = "I meant Tensura."
+    acceptance = "Yes, sure."
+    fact = "Tensura is a Minecraft mod inspired by the anime series."
+    source = _source(fact)
+    internet = _internet(monkeypatch, [InternetResult(attempted=True, sources=[source])])
+    router = _router([
+        LLMResponse("I'm not familiar with that mod.", "synthetic", "fixture"),
+        LLMResponse("I haven't heard of a Tensura mod for Minecraft either. "
+                    "Want me to look it up?", "synthetic", "fixture"),
+        _tool_call("web_search", query=acceptance),
+        _tool_call("web_search", query="Tensura Minecraft mod wiki"), _report(fact),
+    ])
+    # Accepting the offer is an explicit lookup even when automatic search is off.
+    monkeypatch.setenv("INTERNET_AUTOMATIC", "false")
+    if entrypoint == "chat":
+        session = ChatSession(_settings(tmp_path), channel="telegram", session_id="mod-owner",
+                              router=router)
+        session.internet = internet
+        for text in (question, correction, acceptance):
+            session.reply(text)
+        turns = session.conversation.get_recent_turns()
+        close = session.close
+    else:
+        info = {"input_source": "keyboard"} if entrypoint == "keyboard" else {}
+        _, tts, _, store, turns = run_callbacks(tmp_path, monkeypatch, [
+            (question, info or {"wake_verified": True}), (correction, info), (acceptance, info),
+        ], router=router, controller=True)
+        close = store.close
+        assert fact in tts.speak.call_args.args[0]
+    try:
+        internet.lookup.assert_called_once()
+        request = internet.lookup.call_args
+        expected = question.replace("Tinsura", "Tensura")
+        assert request.args[0] == "Tensura Minecraft mod wiki"
+        assert request.kwargs["objective"] == expected
+        assert fact in turns[-1].content and turns[-1].sources == [source.to_dict()]
+        assert [turn.content for turn in turns if turn.role == "user"] == [
+            question, correction, acceptance,
+        ]
+    finally:
+        close()
+
+
+@pytest.mark.parametrize("boundary", ["reset", "private", "cancel", "ambiguous"])
+def test_a_search_offer_does_not_bypass_the_current_chat_scope(tmp_path, boundary):
+    router = _router([LLMResponse("Which task should I check?", "synthetic", "fixture")])
+    session = ChatSession(_settings(tmp_path), channel="telegram", session_id="offer-owner",
+                          router=router)
+    session.settings.internet_automatic = False
+    session.conversation.add_turn("user", "Tensura mod for Minecraft?")
+    session.conversation.add_turn("assistant", "Want me to look it up?" if boundary != "ambiguous"
+                                  else "Want me to look it up or explain what I remember?")
+    if boundary == "reset":
+        session.reply("/reset")
+    elif boundary == "cancel":
+        session.reply("Don't search")
+    elif boundary == "private":
+        session.store.save_memory(MemoryItem(
+            content="Synthetic private context.", memory_type=MemoryType.CONVERSATION,
+            metadata={"session_id": session.conversation.session_id, "local_only": True},
+        ))
+    session.internet.lookup = Mock(side_effect=AssertionError("Unexpected public read"))
+    try:
+        session.reply("Yes, sure.")
+        session.internet.lookup.assert_not_called()
+        request = router.send.call_args
+        assert "web_search" not in {tool["function"]["name"] for tool in request.kwargs["tools"]}
+    finally:
+        session.close()
+
+
 @pytest.mark.parametrize("spoken_final", [False, True], ids=["typed_final", "spoken_final"])
 def test_voice_keyboard_voice_repair_keeps_one_current_task(
     tmp_path, monkeypatch, spoken_final,
@@ -217,7 +308,8 @@ def test_voice_keyboard_voice_repair_keeps_one_current_task(
     ])
     router = _router([
         LLMResponse("Which medium do you want to continue in?", "synthetic", "fixture"),
-        _tool_call("web_search", query="TensorFlow"), _report(fact),
+        _tool_call("web_search", query="TensorFlow"),
+        _tool_call("web_search", query="Tensura anime continuation"), _report(fact),
         _tool_call("web_search", query="Tensura"), _report(fact),
     ])
     _, tts, _, store, turns = run_callbacks(tmp_path, monkeypatch, [

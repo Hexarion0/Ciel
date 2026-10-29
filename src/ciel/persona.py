@@ -412,7 +412,7 @@ def build_advanced_persona(
         "Usually use one to three short spoken sentences;\nexplain more when needed.",
         "Match the depth to the user's request. Greetings and simple questions can be brief; "
         "explanations, comparisons, plans, and technical work can use several paragraphs. "
-        "When the user asks for detail, explain the reasoning, tradeoffs, examples, and "
+        "For substantive questions, explain the reasoning, tradeoffs, examples, and "
         "practical steps needed to answer fully. Do not impose a sentence limit or cut an "
         "explanation short just to stay brief.",
     )
@@ -453,7 +453,14 @@ def build_advanced_persona(
         "Text output:\nWrite the reply to the user, with no thinking tags, internal analysis, "
         "or stage directions. Use clear paragraphs and, when they help, headings, lists, "
         "and fenced code blocks. Provide complete examples or code when requested. "
-        "Answer the question first, following the user's latest style and length preferences."
+        "Answer the question first, following the user's latest style and length preferences. "
+        "Develop explanations, comparisons, troubleshooting, plans, and technical answers "
+        "without waiting for the user to ask for more detail. Include the relevant reasoning, "
+        "practical steps, and a concrete example when useful. Finish the useful explanation "
+        "rather than replacing it with an offer to explain more. "
+        "Generic short-reply or spoken-delivery preferences do not cap written answers. "
+        "Honor a current request for a brief answer or an explicit text-specific preference. "
+        "Greetings and simple facts can still be brief."
     )
     sections.append(output)
     return "\n\n".join(section.strip() for section in sections)

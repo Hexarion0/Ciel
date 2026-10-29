@@ -530,7 +530,7 @@ def test_public_page_read_pins_dns_host_and_sni_and_extracts_article(monkeypatch
     _resolver, settings = mock_http(monkeypatch, page)
     result = InternetService(InternetConfig()).prepare("Read https://example.com/news")
     assert result.sources[0].title == "Useful & current"
-    assert result.sources[0].content == "Release four Shipped today."
+    assert result.sources[0].content == "# Release four\n\nShipped today."
     assert result.sources[0].url == "https://example.com/news"
     assert requests[0].url.host == "93.184.216.34"
     assert requests[0].headers["host"] == "example.com"

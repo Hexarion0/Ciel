@@ -6,6 +6,7 @@ from threading import Event
 import httpx
 import pytest
 
+from ciel import parallel_search
 from ciel.parallel_search import search_parallel
 from ciel.search_providers import SearchProviderError
 
@@ -71,11 +72,13 @@ def test_anonymous_mcp_preserves_order_and_dense_excerpts(transport, structured)
         "href": "https://docs.python.org/3/tutorial/datastructures.html",
         "title": "Python list comprehensions", "date": "2026-10-24",
         "date_kind": "published", "publisher": "",
-        "body": "First supporting passage.\n\nSecond supporting passage.",
-        "content": "First supporting passage.\n\nSecond supporting passage.",
+        "body": "First supporting passage.\n\n[... omitted source text ...]\n\n"
+                "Second supporting passage.",
+        "content": "First supporting passage.\n\n[... omitted source text ...]\n\n"
+                   "Second supporting passage.",
     }]
     assert len(requests) == 3
-    assert all(str(request.url) == "https://search.parallel.ai/mcp" for request in requests)
+    assert all(str(request.url) == "https://mcp.parallel.ai/mcp" for request in requests)
     assert all("authorization" not in request.headers for request in requests)
     assert all(request.headers["accept"] == "application/json, text/event-stream"
                for request in requests)
@@ -332,3 +335,228 @@ def test_long_objective_keeps_full_question_and_uses_bounded_keyword_query(trans
     keywords = arguments["search_queries"][0]
     assert len(keywords) <= 200
     assert query.startswith(keywords + " ")
+
+
+def test_related_queries_are_sanitized_deduplicated_and_batched(transport):
+    requests, _options, responses = transport
+    _handshake(responses)
+    _results(responses, [])
+    secret = "sk-syntheticprivatekey12345"
+    search_parallel(
+        "original question", timeout=8, maximum=5, session_id=SESSION,
+        objective="Find the requested explanation",
+        search_queries=["  Python\nlist comprehension ", "python list comprehension", "",
+                        f"Python filters {secret}", "Python nested loops " * 30, "extra query"],
+    )
+    arguments = json.loads(requests[-1].content)["params"]["arguments"]
+    queries = arguments["search_queries"]
+    assert arguments["objective"] == "Find the requested explanation"
+    assert len(queries) == 3
+    assert queries[0] == "Python list comprehension"
+    assert "[REDACTED_SECRET]" in queries[1]
+    assert all(0 < len(query) <= 200 and "\n" not in query for query in queries)
+    assert all(secret not in request.content.decode() for request in requests)
+    assert len(requests) == 3
+
+
+def test_empty_related_queries_fall_back_to_original_query(transport):
+    requests, _options, responses = transport
+    _handshake(responses)
+    _results(responses, [])
+    search_parallel("original question", timeout=8, maximum=5, session_id=SESSION,
+                    search_queries=["", "  ", None])
+    assert json.loads(requests[-1].content)["params"]["arguments"]["search_queries"] == [
+        "original question",
+    ]
+
+
+@pytest.mark.parametrize("structured", [True, False])
+def test_fetch_batches_urls_and_preserves_full_content_with_partial_errors(transport, structured):
+    requests, options, responses = transport
+    _handshake(responses)
+    data = {
+        "extract_id": "extract_example", "session_id": SESSION,
+        "results": [{"url": "https://example.org/read", "title": "Useful page",
+                     "excerpts": ["Relevant excerpt."], "full_content": "Full source passage."},
+                    {"url": "https://example.com/other", "excerpts": ["Other source."]}],
+        "errors": [{"url": "https://example.org/failed", "error_type": "private-query",
+                    "content": "private-error-secret"}],
+    }
+    result = {"content": [{"type": "text", "text": json.dumps(data)}]}
+    if structured:
+        result["structuredContent"] = data
+    responses.append({"status_code": 200, "json": {
+        "jsonrpc": "2.0", "id": 2, "result": result,
+    }})
+    found = parallel_search.fetch_parallel(
+        ["https://example.org/read", "https://example.org/read", "https://example.org/failed",
+         "https://example.com/other"], timeout=8, maximum=2, session_id=SESSION,
+        objective="Focus on Python behavior " * 20, search_queries=["Python nested loops"],
+        full_content=True,
+    )
+    assert [row["href"] for row in found] == [
+        "https://example.org/read", "https://example.com/other",
+    ]
+    assert found[0]["body"] == "Relevant excerpt."
+    assert found[0]["content"] == "Full source passage."
+    assert found[1]["body"] == found[1]["content"] == "Other source."
+    assert options[0]["trust_env"] is False
+    assert options[0]["follow_redirects"] is False
+    assert all(str(request.url) == "https://mcp.parallel.ai/mcp" for request in requests)
+    assert all("authorization" not in request.headers for request in requests)
+    params = json.loads(requests[-1].content)["params"]
+    assert params["name"] == "web_fetch"
+    arguments = params["arguments"]
+    assert arguments["urls"] == [
+        "https://example.org/read", "https://example.org/failed", "https://example.com/other",
+    ]
+    assert len(arguments["objective"]) <= 200
+    assert arguments["session_id"] == SESSION
+    assert arguments["search_queries"] == ["Python nested loops"]
+    assert arguments["full_content"] is True
+
+
+@pytest.mark.parametrize("url", [
+    "file:///private", "https://username:password@example.com/path", "http://127.0.0.1/",
+    "http://[::1]/", "http://[::ffff:127.0.0.1]/", "https://localhost/",
+    "https://computer.local/", "https://10.0.0.1/path", "http://169.254.169.254/",
+    "http://2130706433/", "https://example.org/?api_key=private", "https://example.org/\nsecret",
+])
+def test_fetch_rejects_private_or_credential_urls_before_network(transport, url):
+    requests, options, _responses = transport
+    with pytest.raises(SearchProviderError, match="public HTTP") as error:
+        parallel_search.fetch_parallel([url], timeout=8, maximum=5, session_id=SESSION)
+    assert url not in str(error.value)
+    assert not requests and not options
+
+
+def test_fetch_bounds_url_batch_and_result_count(transport):
+    requests, _options, responses = transport
+    _handshake(responses)
+    rows = [{"url": f"https://example.org/{index}", "excerpts": [f"Passage {index}."]}
+            for index in range(25)]
+    _results(responses, rows)
+    found = parallel_search.fetch_parallel([row["url"] for row in rows], timeout=8, maximum=30,
+                                          session_id=SESSION)
+    assert len(json.loads(requests[-1].content)["params"]["arguments"]["urls"]) == 20
+    assert len(found) == 20
+
+
+def test_fetch_skips_error_rows_and_does_not_expose_provider_diagnostics(transport):
+    _requests, _options, responses = transport
+    _handshake(responses)
+    _results(responses, [
+        {"url": "https://example.org/failed", "error": "private-error", "excerpts": ["wrong"]},
+        {"url": "https://example.org/ok", "excerpts": ["Supported."],
+         "title": "sk-syntheticprivatekey12345"},
+    ])
+    found = parallel_search.fetch_parallel(["https://example.org/failed", "https://example.org/ok"],
+                                          timeout=8, maximum=5, session_id=SESSION)
+    assert [row["href"] for row in found] == ["https://example.org/ok"]
+    assert found[0]["title"] == "[REDACTED_SECRET]"
+
+
+def test_fetch_all_page_errors_returns_empty_evidence(transport):
+    _requests, _options, responses = transport
+    _handshake(responses)
+    responses.append({"status_code": 200, "json": {
+        "jsonrpc": "2.0", "id": 2, "result": {"structuredContent": {
+            "results": [], "errors": [{"url": "https://example.org", "content": "private"}],
+        }},
+    }})
+    assert parallel_search.fetch_parallel(["https://example.org"], timeout=8, maximum=5,
+                                         session_id=SESSION) == []
+
+
+def test_fetch_cancellation_stops_before_disclosing_urls(transport):
+    requests, options, _responses = transport
+    canceled = Event()
+    canceled.set()
+    with pytest.raises(SearchProviderError, match="canceled"):
+        parallel_search.fetch_parallel(["https://example.org/private-query"], timeout=8,
+                                       maximum=5, session_id=SESSION, cancel_event=canceled)
+    assert not requests and not options
+
+
+def test_fetch_shares_stream_size_limit_and_closes_on_failure(transport):
+    _requests, _options, responses = transport
+    _handshake(responses)
+    chunks = _Chunks([b" " * 600_000, b" " * 600_000, b"private-query"])
+    responses.append({"status_code": 200, "headers": {"Content-Type": "application/json"},
+                      "stream": chunks})
+    with pytest.raises(SearchProviderError, match="response exceeded"):
+        parallel_search.fetch_parallel(["https://example.org"], timeout=8, maximum=5,
+                                       session_id=SESSION)
+    assert chunks.closed
+
+
+def test_byte_budget_covers_handshake_and_tool_response_together(transport, monkeypatch):
+    requests, _options, responses = transport
+    _handshake(responses)
+    _results(responses, [{"url": "https://example.org", "excerpts": ["passage" * 40]}])
+    result_size = len(json.dumps(responses[-1]["json"], separators=(",", ":")).encode())
+    monkeypatch.setattr("ciel.parallel_search._MAX_RESPONSE_BYTES", result_size + 10)
+    with pytest.raises(SearchProviderError, match="response exceeded"):
+        parallel_search.fetch_parallel(["https://example.org"], timeout=8, maximum=5,
+                                       session_id=SESSION)
+    assert len(requests) == 3
+
+
+@pytest.mark.parametrize("url", ["http://127.1/", "http://0x7f.0.0.1/", "http://0177.0.0.1/"])
+def test_fetch_rejects_obscured_loopback_literals_before_network(transport, url):
+    requests, options, _responses = transport
+    with pytest.raises(SearchProviderError, match="public HTTP"):
+        parallel_search.fetch_parallel([url], timeout=8, maximum=5, session_id=SESSION)
+    assert not requests and not options
+
+
+def test_fetch_cancellation_during_result_stream_closes_it(transport):
+    _requests, _options, responses = transport
+    _handshake(responses)
+    canceled = Event()
+
+    class CanceledStream(_Chunks):
+        def __iter__(self):
+            yield b": keepalive\n\n"
+            canceled.set()
+            yield b": interrupted\n\n"
+            pytest.fail("read continued after cancellation")
+
+    chunks = CanceledStream([])
+    responses.append({"status_code": 200, "headers": {"Content-Type": "text/event-stream"},
+                      "stream": chunks})
+    with pytest.raises(SearchProviderError, match="canceled"):
+        parallel_search.fetch_parallel(["https://example.org"], timeout=8, maximum=5,
+                                       session_id=SESSION, cancel_event=canceled)
+    assert chunks.closed
+
+
+def test_fetch_timeout_budget_includes_handshake(transport, monkeypatch):
+    requests, _options, responses = transport
+    _handshake(responses)
+    now = [0.0]
+    monkeypatch.setattr("ciel.parallel_search.time.monotonic", lambda: now[0])
+    original_send = httpx._client.Client.send
+
+    def send(self, request, **kwargs):
+        response = original_send(self, request, **kwargs)
+        now[0] += 3.0
+        return response
+
+    monkeypatch.setattr(httpx._client.Client, "send", send)
+    with pytest.raises(SearchProviderError, match="timed out"):
+        parallel_search.fetch_parallel(["https://example.org"], timeout=5, maximum=5,
+                                       session_id=SESSION)
+    assert len(requests) == 2
+
+
+@pytest.mark.parametrize("status", [301, 401, 429, 500])
+def test_fetch_http_failures_are_safe_and_do_not_retry(transport, status):
+    requests, _options, responses = transport
+    _handshake(responses)
+    responses.append({"status_code": status, "text": "private-response sk-syntheticsecret123"})
+    with pytest.raises(SearchProviderError) as error:
+        parallel_search.fetch_parallel(["https://example.org"], timeout=8, maximum=5,
+                                       session_id=SESSION)
+    assert str(error.value) == f"Parallel search failed (HTTP {status})."
+    assert len(requests) == 3

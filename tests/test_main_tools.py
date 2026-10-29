@@ -105,17 +105,19 @@ def test_cancel_before_tool_rejects_without_lookup(make_tools):
 def test_search_retains_full_user_objective_and_requires_verified_output(make_tools):
     query = "Search where anime season 3 continues in the light novel"
     tools = make_tools(query)
-    result = tools.execute(call("web_search", query="anime season 3 last episode"))
-    assert "light novel" in tools.internet.lookup.call_args.kwargs["objective"]
+    generated = "anime season 3 light novel continuation"
+    result = tools.execute(call("web_search", query=generated))
+    assert tools.internet.lookup.call_args.args[0] == generated
+    assert tools.internet.lookup.call_args.kwargs["objective"] == query
     assert tools.buffer_answer()
     assert "claims" in result.content["answer_format"]
     assert not result.sources
 
 
 @pytest.mark.parametrize("planned", [
-    "TensorFlow machine learning library", "Tensura anime release date season 3", "Tensura",
+    "TensorFlow machine learning library", "Tensura anime release date season 3",
 ])
-def test_explicit_subject_correction_binds_search_to_latest_user_name(make_tools, planned):
+def test_subject_correction_requires_a_model_query_using_the_latest_name(make_tools, planned):
     messages = [
         ChatMessage("system", "Answer the user."),
         ChatMessage("user", "Hey Ciel, what's up? Can you search TensorFlow for me?"),
@@ -123,8 +125,15 @@ def test_explicit_subject_correction_binds_search_to_latest_user_name(make_tools
         ChatMessage("user", "Tensura*"),
     ]
     tools = make_tools("Tensura*", messages=messages)
-    tools.execute(call("web_search", query=planned))
-    assert tools.internet.lookup.call_args.args[0] == "Tensura"
+    rejected = tools.execute(call("web_search", query=planned))
+    assert rejected.is_error
+    assert "Tensura" in rejected.content["task"]
+    assert "TensorFlow" not in rejected.content["task"]
+    tools.internet.lookup.assert_not_called()
+    generated = "Tensura meaning overview"
+    tools.execute(call("web_search", query=generated))
+    tools.internet.lookup.assert_called_once()
+    assert tools.internet.lookup.call_args.args[0] == generated
     objective = tools.internet.lookup.call_args.kwargs["objective"]
     assert "Tensura" in objective and "TensorFlow" not in objective and "season 3" not in objective
     assert messages[-1].content == "Tensura*"
@@ -136,9 +145,16 @@ def test_corrected_equivalent_searches_reuse_the_same_evidence(make_tools):
         ChatMessage("assistant", "What do you want to know about CedarDD?"),
         ChatMessage("user", "CedarDB*"),
     ])
-    tools.execute(call("web_search", query="CedarDD"))
-    tools.execute(call("web_search", query="CedarDB release date"))
+    rejected = tools.execute(call("web_search", query="CedarDD"))
+    assert rejected.is_error
+    tools.internet.lookup.assert_not_called()
+    tools.execute(call("web_search", query="CedarDB overview"))
+    cached = tools.execute(call("web_search", query="overview CedarDB"))
     tools.internet.lookup.assert_called_once()
+    assert tools.internet.lookup.call_args.args[0] == "CedarDB overview"
+    assert "CedarDB" in tools.internet.lookup.call_args.kwargs["objective"]
+    assert "CedarDD" not in tools.internet.lookup.call_args.kwargs["objective"]
+    assert cached.metadata["finalize"] is True
 
 
 def test_ordinary_reordered_searches_reuse_evidence_and_request_synthesis(make_tools):
@@ -151,7 +167,7 @@ def test_ordinary_reordered_searches_reuse_evidence_and_request_synthesis(make_t
 
 
 def test_search_cache_preserves_quoted_order_and_distinct_scope(make_tools):
-    tools = make_tools()
+    tools = make_tools("Search Cedar release date and season 2 and season 3")
     for query in ('Cedar "release date"', 'Cedar "date release"',
                   "Cedar season 2", "Cedar season 3"):
         tools.execute(call("web_search", query=query))
@@ -166,7 +182,7 @@ def test_search_cache_preserves_quoted_order_and_distinct_scope(make_tools):
     ("Cedar 'quick first guide'", "Cedar 'first quick guide'"),
 ])
 def test_keyword_cache_does_not_merge_order_sensitive_queries(make_tools, queries):
-    tools = make_tools()
+    tools = make_tools("Search " + " and ".join(queries))
     for query in queries:
         tools.execute(call("web_search", query=query))
     assert tools.internet.lookup.call_count == 2
@@ -189,7 +205,10 @@ def test_subject_correction_permits_new_lead_within_actual_requested_scope(make_
         ChatMessage("user", "CedarDB*"),
     ]
     tools = make_tools("CedarDB*", messages=messages)
-    tools.execute(call("web_search", query="CedarDD"))
+    rejected = tools.execute(call("web_search", query="CedarDD"))
+    assert rejected.is_error
+    tools.internet.lookup.assert_not_called()
+    tools.execute(call("web_search", query="CedarDB private chat support"))
     tools.execute(call("web_search", query="CedarDB private chat support official guide"))
     assert tools.internet.lookup.call_count == 2
     assert tools.internet.lookup.call_args.args[0] == (
@@ -395,18 +414,19 @@ def test_application_memory_paths_are_used_without_generated_write_authority(mak
     assert tools.context.store.get_fact("user:favorite_game") is None
 
 
-def test_contextual_retry_establishes_full_owner_task_before_model_keywords(make_tools):
+def test_contextual_retry_keeps_model_keywords_and_full_owner_task_separate(make_tools):
     objective = "Search Amber Harbor episode 12 light novel continuation."
     tools = make_tools("Again.", objective=objective, contextual_web=True)
-    tools.execute(call("web_search", query="TensorFlow"))
-    assert tools.internet.lookup.call_args.args[0] == objective
+    generated = 'Amber Harbor episode 12 novel reading continuation'
+    tools.execute(call("web_search", query=generated))
+    assert tools.internet.lookup.call_args.args[0] == generated
     assert tools.internet.lookup.call_args.kwargs["objective"] == objective
 
 
 def test_search_budget_reserves_time_to_answer_prior_evidence(make_tools):
     import time
 
-    tools = make_tools()
+    tools = make_tools("Search Cedar release date and Linux support")
     tools.execute(call("web_search", query="Cedar release"))
     tools._deadline = time.monotonic() + 7.9  # The eight-second final-answer reserve has begun.
     result = tools.execute(call("web_search", query="Cedar Linux guide"))
@@ -487,8 +507,12 @@ def test_invalid_report_repair_cannot_loop_or_bypass_source_checks(make_tools):
 def test_initial_latest_search_cannot_invent_a_season(make_tools):
     query = 'Search the latest episode of Amber Harbor'
     tools = make_tools(query, objective=query)
-    tools.execute(call('web_search', query='Amber Harbor season 3 latest episode'))
-    assert tools.internet.lookup.call_args.args[0] == query
+    rejected = tools.execute(call('web_search', query='Amber Harbor season 3 latest episode'))
+    assert rejected.is_error and rejected.content['task'] == query
+    tools.internet.lookup.assert_not_called()
+    generated = 'Amber Harbor latest episode'
+    tools.execute(call('web_search', query=generated))
+    assert tools.internet.lookup.call_args.args[0] == generated
     assert tools.internet.lookup.call_args.kwargs['objective'] == query
 
 
