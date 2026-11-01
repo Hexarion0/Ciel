@@ -37,7 +37,11 @@ def plan_search_queries(
     seen: set[str] = set()
     goal_words = {word.casefold() for word in _words(goal)}
     allowed = _scope(goal)
-    numbers = set(re.findall(r'\d+(?:\.\d+)*', goal)) | {number for _label, number in allowed}
+    from datetime import datetime
+    current_year = str(datetime.now().year)
+    recent_years = {current_year, str(int(current_year) - 1), str(int(current_year) + 1)}
+    scope_nums = {number for _label, number in allowed}
+    numbers = set(re.findall(r'\d+(?:\.\d+)*', goal)) | scope_nums | recent_years
     superseded = {word.casefold() for word in superseded_terms}
     for probe in proposed[:6]:
         if not isinstance(probe, str):

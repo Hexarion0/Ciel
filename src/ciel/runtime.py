@@ -183,15 +183,21 @@ def run_desktop(
     from ciel.tool_progress import ToolProgress
 
     logger.info("Initializing wake-word, TTS, and STT engines (STT loads in background)...")
-    detector = WakeWordDetector(
-        wake_phrase=settings.audio.wake_word,
-        models=settings.audio.wake_models,
-        threshold=settings.audio.wake_threshold,
-        cooldown_seconds=settings.audio.wake_cooldown,
-        spotter_model_size=settings.audio.wake_stt_model,
-        min_rms=settings.audio.wake_min_rms,
-        window_seconds=settings.audio.wake_window_seconds,
-    )
+    if web_mode:
+        from ciel.webapp.worker import BrowserWakeDetector, HostedAudioBackend
+
+        detector = BrowserWakeDetector()
+        audio_backend = HostedAudioBackend()
+    else:
+        detector = WakeWordDetector(
+            wake_phrase=settings.audio.wake_word,
+            models=settings.audio.wake_models,
+            threshold=settings.audio.wake_threshold,
+            cooldown_seconds=settings.audio.wake_cooldown,
+            spotter_model_size=settings.audio.wake_stt_model,
+            min_rms=settings.audio.wake_min_rms,
+            window_seconds=settings.audio.wake_window_seconds,
+        )
     stt = SpeechToText(
         model_size=settings.audio.stt_model,
         device=settings.audio.stt_device,
@@ -204,11 +210,11 @@ def run_desktop(
         wake_phrase=settings.audio.wake_word,
         load_timeout=settings.audio.stt_startup_timeout_seconds,
     )
-    show_ai_transcripts = (
+    show_ai_transcripts = not web_mode and (
         settings.audio.show_ai_transcripts
         if args.show_ai_transcripts is None else args.show_ai_transcripts
     )
-    track_speech = show_ai_transcripts or web_mode
+    track_speech = show_ai_transcripts
     tts = TextToSpeech(
         voice_name=settings.audio.tts_voice,
         engine=settings.audio.tts_engine,
@@ -232,7 +238,7 @@ def run_desktop(
     ambient_enabled = [
         settings.audio.ambient_listening if args.ambient is None else args.ambient
     ]
-    microphone_available = True
+    microphone_available = not web_mode
     ambient_context = AmbientConversation(
         settings.audio.wake_word, settings.audio.ambient_followup_seconds,
         followup_policy=settings.audio.ambient_followup_policy,
@@ -264,6 +270,18 @@ def run_desktop(
         from ciel.terminal_output import TerminalOutput, install_terminal_output
 
         terminal_output = TerminalOutput(sys.stdout, chat=True)
+        if getattr(args, "mode", None) != "dev":
+            import io
+
+            from ciel import __version__
+            from ciel.terminal_ui import ConsoleUI
+
+            startup = io.StringIO()
+            ConsoleUI(stream=startup).banner("Your voice. Your companion.", version=__version__)
+            ConsoleUI(stream=startup).note(
+                "Preparing voice and recognition. First startup can take a moment.",
+            )
+            terminal_output.seed_transcript(startup.getvalue())
         restore_terminal_output = install_terminal_output(terminal_output)
     captions = None
     if show_ai_transcripts:
@@ -327,6 +345,7 @@ def run_desktop(
         settings, memory_store, conv_manager, memory_service, semantic_recall=semantic_recall,
     )
     screen_service = ScreenService(settings, conv_manager)
+    initiative = None
     tool_progress = ToolProgress(router)
     tool_progress.warm(local_only=conv_manager.local_only_context())
     web_ui = None
@@ -337,6 +356,7 @@ def run_desktop(
             settings.ciel_preferred_name or getpass.getuser(),
             settings.audio.wake_word, voice_enabled=bool(tts.enabled),
         )
+        web_ui.pc_capture = False
         web_ui.load_history(conv_manager.get_recent_turns(limit=100))
 
     def recalled_context(query: str) -> list[str]:
@@ -360,6 +380,8 @@ def run_desktop(
             "Only images attached by the application establish visual access for this turn. "
             "Without attached images, do not claim to see the current desktop."
         )
+        if initiative is not None:
+            prompt += "\nApplication observation state: " + initiative.status()
         if channel == "voice" and tts.engine == "chatterbox_turbo":
             prompt += speech_event_instruction(
                 enabled=settings.audio.tts_enabled,
@@ -389,6 +411,13 @@ def run_desktop(
         kind: str, text: str, current: Callable[[], bool] | None = None,
     ) -> str | None:
         """Discard the canceled task before any listener/model can revive it."""
+        replies = {
+            "wait": "Take your time.",
+            "stop": ("Okay, canceled." if ambient_enabled[0]
+                     and settings.audio.ambient_followup_policy == "always"
+                     else "Got it, quiet now."),
+            "no_search": "Okay, I won't search.",
+        }
         with controls_lock:
             if current is not None and not current():
                 return None
@@ -400,6 +429,8 @@ def run_desktop(
             interrupted_reply[0] = {}
             if kind == "stop":
                 screen_service.clear()
+            if kind in {"stop", "wait"} and initiative is not None:
+                initiative.control("pause")
             web_paused[0] = True
             dialogue_context.pause_web(True)
             if ambient_enabled[0]:
@@ -409,15 +440,10 @@ def run_desktop(
                 # the shared history prevents a later retry from reviving a
                 # canceled task, including when it arrives from paired chat.
                 conv_manager.add_turn("user", text, origin="owner")
-                conv_manager.add_turn("assistant", {
-                    "wait": "Take your time.", "stop": "Got it, quiet now.",
-                    "no_search": "Okay, I won't search.",
-                }[kind], provider="local", model="conversation")
+                conv_manager.add_turn("assistant", replies[kind],
+                                      provider="local", model="conversation")
         mark("local_intent_resolved", intent=kind)
-        return {
-            "wait": "Take your time.", "stop": "Got it, quiet now.",
-            "no_search": "Okay, I won't search.",
-        }[kind]
+        return replies[kind]
 
     def on_wake(info: dict):
         logger.info("🎯 Wake detected! Details: %s", info)
@@ -489,7 +515,8 @@ def run_desktop(
             if captions is not None:
                 captions.close()
             logger.info('🤖 CIEL (text): "%s"', text)
-        if show_transcript and web_ui is not None and not spoken and not progress_seen[0]:
+        if (show_transcript and web_ui is not None and not spoken and not progress_seen[0]
+                and loop.is_running and (cancel_event is None or not cancel_event.is_set())):
             web_ui.text_reply(strip_speech_events(tts.clean_text_for_speech(text)))
         return spoken
 
@@ -536,10 +563,15 @@ def run_desktop(
         user_text: str, wake_info: dict, current, say,
         earlier_fragments: list[str], restored_fragments: list[str],
         retained_privacy: dict, persisted_prefix: int, *, conversation_only: bool = False,
+        show_user: Callable[[str], None] | None = None,
     ) -> bool:
         """Use exact local handlers, then let the responding model request native reads."""
-        typed = wake_info.get("input_source") == "keyboard"
-        reply_channel = "text" if typed else "voice"
+        typed = wake_info.get("input_source") in {"keyboard", "web_text"}
+        written_reply = (typed or terminal_output is not None
+                         or wake_info.get("web_request") is not None)
+        log_reply = logger.debug if written_reply or playback_captions else logger.info
+        always_reply = ambient_enabled[0] and settings.audio.ambient_followup_policy == "always"
+        reply_channel = "text" if written_reply else "voice"
         cancel_event = wake_info.get("cancel_event")
         clean = user_text if typed else strip_wake_phrase(user_text, settings.audio.wake_word)
         explicit = typed or bool(wake_info.get("wake_verified")) or (
@@ -547,7 +579,7 @@ def run_desktop(
         )
         active = active_control_turn(wake_info, earlier_fragments or restored_fragments)
         if not user_text or wake_info.get("stt_needs_repeat"):
-            if explicit and wake_info.get("stt_needs_repeat"):
+            if (explicit or always_reply) and wake_info.get("stt_needs_repeat"):
                 say("I didn't catch that clearly. Could you say it again?")
                 return True
             return False
@@ -561,7 +593,7 @@ def run_desktop(
         if explicit or earlier_fragments or restored_fragments:
             unfinished_request[0] = request
         if explicit:
-            (logger.debug if typed and terminal_output is not None else logger.info)(
+            (logger.debug if terminal_output is not None else logger.info)(
                 '%s You: "%s"', "⌨️" if typed else "🗣️", user_text,
             )
         turn_scope = conv_manager.context_session_ids()
@@ -579,7 +611,7 @@ def run_desktop(
         authorized = explicit and reliable and not earlier_fragments and not restored_fragments
         from ciel.controller import _clearly_other_listener
 
-        if not explicit and (not active or _clearly_other_listener(clean)):
+        if not explicit and not always_reply and (not active or _clearly_other_listener(clean)):
             if ambient_enabled[0]:
                 ambient_context._observe_background(user_text, end_conversation=False)
             return False
@@ -669,7 +701,11 @@ def run_desktop(
         if ambient_enabled[0]:
             ambient_context.record_addressed("user", user_text)
         if not explicit:
-            logger.info('🗣️ You: "%s"', user_text)
+            (logger.debug if terminal_output is not None else logger.info)(
+                '🗣️ You: "%s"', user_text,
+            )
+        if show_user is not None and not (restored_fragments and persisted_prefix):
+            show_user(user_text)
         owner_id = web_ui.user_message(user_text) if web_ui is not None else None
         # Accepted canceled turns are already recorded; observer-only speech is not.
         new_fragments = fragments[persisted_prefix:]
@@ -713,7 +749,7 @@ def run_desktop(
                     if screen_result.task_revision else {}
                 )):
                     return False
-            if typed:
+            if written_reply:
                 logger.debug('🤖 CIEL: "%s" [%s/%s]', text, provider, model)
                 if not displayed:
                     if terminal_output is not None:
@@ -724,10 +760,6 @@ def run_desktop(
                         web_ui.text_reply(strip_speech_events(text))
                     else:
                         logger.info('🤖 CIEL: "%s" [%s/%s]', text, provider, model)
-                if terminal_output is not None and provider != "local":
-                    from ciel.terminal_ui import ConsoleUI
-
-                    ConsoleUI(stream=terminal_output).work_status(model or provider)
             else:
                 log_reply('🤖 CIEL: "%s" [%s/%s]', text, provider, model)
 
@@ -736,7 +768,7 @@ def run_desktop(
                 if current() and web_ui is not None and metadata:
                     web_ui.set_reply_sources(metadata, user_message_id=owner_id)
 
-            said = say(text, on_start=started, displayed=typed)
+            said = say(text, on_start=started, displayed=written_reply or displayed)
             if not said and current() and web_ui is not None and metadata:
                 web_ui.set_reply_sources(metadata, user_message_id=owner_id)
             if metadata and current():
@@ -765,7 +797,7 @@ def run_desktop(
                     return current() and turn_version == screen_scope(conv_manager)
 
                 def emit(text: str) -> None:
-                    if typed:
+                    if written_reply:
                         if terminal_output is not None:
                             from ciel.terminal_ui import ConsoleUI
 
@@ -995,34 +1027,53 @@ def run_desktop(
                 answer_instructions=native_tools.answer_instructions,
                 response_deadline=native_tools.response_deadline,
             )
-            if typed:
+            if written_reply:
                 displayed = False
+                browser_text = ""
+                browser_visible = ""
+                browser_request = wake_info.get("web_request")
                 if captions is not None:
                     captions.close()
                 if settings.audio.tts_streaming:
+                    from ciel.logging import SecretMaskingFilter
                     from ciel.text_streaming import stream_text_reply
 
                     def text_delta(delta: str) -> None:
-                        nonlocal displayed
-                        if not current() or terminal_output is None:
+                        nonlocal displayed, browser_text, browser_visible
+                        if not current():
                             return
-                        if not displayed:
-                            terminal_output.write("\nCIEL\n")
-                        terminal_output.write(delta)
+                        if browser_request is not None and web_ui is not None:
+                            if not displayed:
+                                web_ui.start_sentence()
+                            browser_text += delta
+                            browser_visible = SecretMaskingFilter._redact_partial(browser_text)
+                            web_ui.progress(browser_visible)
+                        elif terminal_output is not None:
+                            if not displayed:
+                                terminal_output.write("CIEL: ")
+                            terminal_output.write(delta)
+                        else:
+                            return
                         displayed = True
 
                     streamed_text = stream_text_reply(
                         agent, messages, current, max_tokens=4096, cancel_event=cancel_event,
-                        on_delta=text_delta if terminal_output is not None else None,
+                        on_delta=text_delta if (
+                            terminal_output is not None
+                            or browser_request is not None and web_ui is not None
+                        ) else None,
                     )
-                    if displayed:
-                        terminal_output.write("\n\n")
+                    if displayed and terminal_output is not None:
+                        terminal_output.write("\n")
                     if streamed_text.canceled or agent.last_result.canceled or not current():
                         if (displayed and turn_scope == conv_manager.context_session_ids()
                                 and turn_version == screen_scope(conv_manager)):
+                            if browser_request is not None and web_ui is not None:
+                                web_ui.progress(browser_visible, interrupted=True)
+                            partial = (browser_visible if browser_request is not None else
+                                       streamed_text.response.content)
                             conv_manager.add_turn(
-                                "assistant", streamed_text.response.content
-                                + "\n[Reply was interrupted.]",
+                                "assistant", partial + "\n[Reply was interrupted.]",
                                 provider=streamed_text.response.provider,
                                 model=streamed_text.response.model,
                                 sources=normalize_sources([
@@ -1032,9 +1083,22 @@ def run_desktop(
                         return False
                     response = streamed_text.response
                     if streamed_text.error:
+                        if browser_request is not None:
+                            # Keep a withheld credential prefix out of error text and history.
+                            response.content = browser_visible
                         response.content += "\n\nMy connection cut out before I finished."
                         if displayed:
-                            terminal_output.write("My connection cut out before I finished.\n\n")
+                            if browser_request is not None:
+                                web_ui.progress(response.content)
+                            else:
+                                terminal_output.write(
+                                    "My connection cut out before I finished.\n",
+                                )
+                    if displayed and browser_request is not None and web_ui is not None:
+                        if not streamed_text.error:
+                            # The completed answer can release benign withheld suffixes.
+                            web_ui.progress(response.content)
+                        web_ui.finish_reply()
                 else:
                     response = agent.send(messages, temperature=0.7, max_tokens=4096,
                                           cancel_event=cancel_event)
@@ -1050,7 +1114,7 @@ def run_desktop(
                     agent.last_result.sources, lookup=native_tools.lookup,
                     research_scope=turn_scope, screen_result=screen_result, displayed=displayed,
                 )
-            if settings.audio.tts_streaming:
+            if settings.audio.tts_streaming and wake_info.get("web_request") is None:
                 from ciel.audio.streaming import stream_reply
 
                 def sentence_started(text: str) -> None:
@@ -1150,22 +1214,46 @@ def run_desktop(
     def on_transcription(text: str, wake_info: dict, audio_data) -> bool:
         mark("transcription_callback_started")
         cancel_event = wake_info.get("cancel_event")
-        typed = wake_info.get("input_source") == "keyboard"
-        log_reply = logger.debug if typed or playback_captions else logger.info
+        typed = wake_info.get("input_source") in {"keyboard", "web_text"}
+        written_reply = (typed or terminal_output is not None
+                         or wake_info.get("web_request") is not None)
+        log_reply = logger.debug if written_reply or playback_captions else logger.info
         web_user_message_id = None
         callback_version = screen_scope(conv_manager)
+        user_message_shown = False
 
         def current() -> bool:
-            return loop.is_running and callback_version == screen_scope(conv_manager) and not (
-                cancel_event is not None and cancel_event.is_set()
-            )
+            return (wake_info.get("web_current", lambda: True)() and loop.is_running
+                    and callback_version == screen_scope(conv_manager)
+                    and not (cancel_event is not None and cancel_event.is_set()))
+
+        def show_user(transcript: str) -> None:
+            nonlocal user_message_shown
+            if (not typed and terminal_output is not None
+                    and not user_message_shown and current()):
+                terminal_output.received_input(transcript)
+                user_message_shown = True
 
         def say(reply: str, *, on_start=None, displayed: bool = False) -> bool:
             if not current():
                 return False
+            browser_request = wake_info.get('web_request')
+            if web_mode and web_ui is not None:
+                if not displayed:
+                    web_ui.text_reply(reply)
+                if on_start is not None:
+                    on_start()
+                if browser_request is not None and settings.audio.tts_enabled and tts.enabled:
+                    try:
+                        web_ui.channels.speech.speak(
+                            reply, browser_request, cancel_event=cancel_event, current=current,
+                        )
+                    except ValueError:
+                        web_ui.feedback('Audio is unavailable. Your answer is below.', error=True)
+                return False  # Queued audio is not proof of successful playback.
             if ambient_enabled[0]:
                 ambient_context.record_addressed("assistant", reply)
-            if typed and not displayed:
+            if written_reply and not displayed:
                 if captions is not None:
                     captions.close()
                 if terminal_output is not None:
@@ -1176,7 +1264,7 @@ def run_desktop(
                     web_ui.text_reply(reply)
                 else:
                     logger.info('🤖 CIEL: "%s"', reply)
-            if typed:
+            if written_reply:
                 from ciel.audio.text_reply import spoken_text_reply
 
                 audible = spoken_text_reply(reply)
@@ -1186,7 +1274,7 @@ def run_desktop(
             if audible and settings.audio.tts_enabled and tts.enabled and current():
                 spoken = speak_reply(
                     audible, block=True, cancel_event=cancel_event, on_start=on_start,
-                    show_transcript=not typed,
+                    show_transcript=not written_reply,
                 )
             if ambient_enabled[0] and current():
                 # Give the user a full follow-up window after playback finishes.
@@ -1195,6 +1283,29 @@ def run_desktop(
 
         if not current():
             return False
+        browser_request = wake_info.get('web_request')
+        if browser_request is not None and browser_request.attachment_ids:
+            screen_service.clear()
+            if wake_info.get('stt_needs_repeat'):
+                say("I didn't catch that clearly. Could you say it again?")
+                return True
+            from ciel.webapp.images import UploadedImageService
+            try:
+                service = UploadedImageService(screen_service.vision, web_ui.channels.media)
+                response = service.answer(browser_request, cancel_event=cancel_event,
+                                          local_only=conv_manager.local_only_context())
+                if response is None or not current():
+                    return False
+                safe_user = browser_request.text + '\n[Attached image; temporary preview expires.]'
+                conv_manager.add_turn('user', safe_user)
+                web_ui.user_message(safe_user)
+                conv_manager.add_turn('assistant', response.content,
+                                      provider=response.provider, model=response.model)
+                say(response.content)
+            except Exception:
+                if current():
+                    say('I could not read that image. Check your image model or attach it again.')
+            return True
         if persona_change_pending[0] and time.monotonic() > persona_change_deadline[0]:
             persona_change_pending[0] = False
         user_text = text.strip()
@@ -1242,11 +1353,39 @@ def run_desktop(
         explicit_control = typed or bool(wake_info.get("wake_verified")) or (
             ambient_context.is_explicit(user_text) or not ambient_enabled[0]
         )
+        from ciel.screen.observation import parse_control
+
+        observation_control = parse_control(clean_control)
+        if (observation_control is not None and explicit_control
+                and not earlier_fragments and not restored_fragments
+                and not wake_info.get("stt_needs_repeat")
+                and wake_info.get("stt_confidence", 1.0) >= settings.audio.stt_retry_confidence):
+            with controls_lock:
+                if not current():
+                    return False
+                memory_service.cancel_proposal()
+                actions.cancel_pending()
+                pending_speech.clear()
+                unfinished_request[0] = {}
+                reply = session_observe(observation_control)
+                show_user(user_text)
+                if web_ui is not None:
+                    web_ui.user_message(user_text)
+                conv_manager.add_turn("user", clean_control, origin="owner")
+                conv_manager.add_turn("assistant", reply, provider="local", model="observation")
+            log_reply('🤖 CIEL: "%s" [local/observation]', reply)
+            say(reply)
+            return True
         control_candidate = conversation_control(clean_control)
         fresh_lookup = is_explicit_web_request(clean_control)
-        control_allowed = explicit_control or bool(
-            (control_candidate or fresh_lookup) and active_control_turn(
-                wake_info, earlier_fragments or restored_fragments,
+        always_reply = ambient_enabled[0] and settings.audio.ambient_followup_policy == "always"
+        control_allowed = (
+            explicit_control
+            or (always_reply and control_candidate is not None)
+            or bool(
+                (control_candidate or fresh_lookup) and active_control_turn(
+                    wake_info, earlier_fragments or restored_fragments,
+                )
             )
         )
         control = control_candidate if control_allowed and not (
@@ -1254,6 +1393,7 @@ def run_desktop(
         ) else None
         conversation_only = control is not None and conversation_only_request(clean_control)
         if control is not None:
+            show_user(user_text)
             reply = apply_conversation_control(control, clean_control, current)
             if reply is None:
                 return False
@@ -1277,7 +1417,7 @@ def run_desktop(
             return handle_main_turn(user_text, wake_info, current, say,
                                     earlier_fragments, restored_fragments, retained_privacy,
                                     previous_request.get("persisted_prefix", 0),
-                                    conversation_only=conversation_only)
+                                    conversation_only=conversation_only, show_user=show_user)
         decision = None
         mark("speech_gate_started")
         if ambient_enabled[0]:
@@ -1328,7 +1468,10 @@ def run_desktop(
             return False
 
         if not restored_fragments:
-            logger.info('%s You: "%s"', "⌨️" if typed else "🗣️", user_text)
+            (logger.debug if terminal_output is not None else logger.info)(
+                '%s You: "%s"', "⌨️" if typed else "🗣️", user_text,
+            )
+            show_user(user_text)
             if web_ui is not None:
                 web_user_message_id = web_ui.user_message(user_text)
         elif web_ui is not None:
@@ -1610,7 +1753,7 @@ def run_desktop(
             visual_scope = screen_scope(conv_manager)
             result = screen_service.answer(
                 visual, conv_manager.get_active_messages(system_prompt=build_system_prompt(
-                    channel="text" if typed else "voice",
+                    channel="text" if written_reply else "voice",
                 )),
                 cancel_event=cancel_event, current=current, progress=legacy_progress,
             )
@@ -1637,7 +1780,7 @@ def run_desktop(
         recalled_memories = recalled_context(cleaned_query)
         system_prompt = build_system_prompt(
             cleaned_query, recalled_memories=recalled_memories,
-            channel="text" if typed else "voice",
+            channel="text" if written_reply else "voice",
         )
         if not allow_memory:
             system_prompt += (
@@ -1838,7 +1981,7 @@ def run_desktop(
                     lambda _: None, lambda: not research_cancel.refresh(),
                     cancel_event=research_cancel, initial_lookup=internet_result,
                     evidence_only=retained_lookup is not None,
-                    channel="text" if typed else "voice",
+                    channel="text" if written_reply else "voice",
                 )
                 if report.canceled or research_cancel.refresh():
                     return False
@@ -1851,7 +1994,7 @@ def run_desktop(
                     "internet" if internet_result.reply is not None else report.model or "internet",
                     report.provider or "local",
                 )
-            elif typed and settings.audio.tts_streaming:
+            elif written_reply and settings.audio.tts_streaming:
                 from ciel.text_streaming import stream_text_reply
 
                 if captions is not None:
@@ -1862,7 +2005,7 @@ def run_desktop(
                     if not current() or terminal_output is None:
                         return
                     if not typed_displayed:
-                        terminal_output.write("\nCIEL\n")
+                        terminal_output.write("CIEL: ")
                     terminal_output.write(delta)
                     typed_displayed = True
 
@@ -1872,12 +2015,12 @@ def run_desktop(
                     on_delta=text_delta if terminal_output is not None else None,
                 )
                 if typed_displayed:
-                    terminal_output.write("\n\n")
+                    terminal_output.write("\n")
                 response = streamed_text.response
                 if streamed_text.error:
                     response.content += "\n\nMy connection cut out before I finished."
                     if typed_displayed:
-                        terminal_output.write("My connection cut out before I finished.\n\n")
+                        terminal_output.write("My connection cut out before I finished.\n")
             elif settings.audio.tts_streaming:
                 from ciel.audio.streaming import stream_reply
 
@@ -1896,7 +2039,7 @@ def run_desktop(
                 request["reply_started"] = streamed.first_audio_seconds is not None
             else:
                 response = router.send(
-                    context_messages, temperature=0.7, max_tokens=4096 if typed else 400,
+                    context_messages, temperature=0.7, max_tokens=4096 if written_reply else 400,
                 )
             if (
                 not current() or legacy_scope != conv_manager.context_session_ids()
@@ -1922,9 +2065,9 @@ def run_desktop(
                 logger.info("Discarded an old response because speech resumed.")
                 return False
             speech_reply = strip_internal_reply_notes(response.content)
-            if not typed:
+            if not written_reply:
                 speech_reply = strip_stage_directions(speech_reply)
-            reply_text = speech_reply if typed else strip_speech_events(speech_reply)
+            reply_text = speech_reply if written_reply else strip_speech_events(speech_reply)
             if not reply_text:
                 raise RuntimeError("Provider returned no dialogue after filtering status notes")
             if web_ui is not None:
@@ -1957,16 +2100,10 @@ def run_desktop(
                 return False
             # Summaries run separately so the next reply never waits for an extra LLM call.
             conv_manager.schedule_summary(router_or_provider=router)
-            if typed:
+            if written_reply:
                 if typed_displayed:
                     attach_reply_sources()
                 said = say(reply_text, on_start=attach_reply_sources, displayed=typed_displayed)
-                if terminal_output is not None:
-                    from ciel.terminal_ui import ConsoleUI
-
-                    ConsoleUI(stream=terminal_output).work_status(
-                        response.model or response.provider,
-                    )
             elif streamed is None:
                 request["reply_started"] = True
                 said = say(
@@ -2120,9 +2257,72 @@ def run_desktop(
         barge_in_speech_seconds=settings.audio.barge_in_speech_seconds,
     )
 
+    from ciel.screen.initiative import ScreenInitiative
+    from ciel.screen.observation import CodingAnalyzer
+
+    def deliver_coding_hint(observation, cancel_event, on_start) -> None:
+        """Archive only a delivered hint, without a fake user request or hidden evidence."""
+        delivered = [False]
+
+        def started() -> None:
+            if delivered[0] or cancel_event.is_set() or not on_start():
+                return
+            delivered[0] = True
+            last_response[0] = observation.provider, observation.model
+            if web_ui is not None:
+                web_ui.set_provider(observation.provider, observation.model)
+            conv_manager.add_turn("assistant", observation.hint,
+                                  provider=observation.provider, model=observation.model)
+            log_reply('🤖 CIEL: "%s" [%s/%s]', observation.hint,
+                      observation.provider, observation.model)
+            if ambient_enabled[0]:
+                ambient_context.record_addressed("assistant", observation.hint)
+                ambient_context.replied()
+
+        speech_attempted = settings.audio.tts_enabled and tts.enabled
+        if speech_attempted and not cancel_event.is_set():
+            speak_reply(observation.hint, cancel_event=cancel_event, on_start=started)
+        if not delivered[0] and not cancel_event.is_set():
+            started()
+            if delivered[0]:
+                if web_ui is not None and not speech_attempted:
+                    web_ui.text_reply(observation.hint)
+                elif terminal_output is not None:
+                    from ciel.terminal_ui import ConsoleUI
+
+                    ConsoleUI(stream=terminal_output).message("assistant", observation.hint)
+
+    initiative = ScreenInitiative(
+        backend=screen_service.backend, analyzer=CodingAnalyzer(screen_service.vision),
+        scope=lambda: screen_scope(conv_manager),
+        ready=lambda: loop.background_ready(),
+        local_only=lambda: conv_manager.local_only_context(),
+        owner_activity=lambda: max((turn.id or 0 for turn in conv_manager.get_recent_turns(limit=20)
+                                    if turn.role == "user"), default=0),
+        submit=lambda callback: loop.submit_background(callback), deliver=deliver_coding_hint,
+    )
+    if web_ui is not None:
+        web_ui.set_observation_status(initiative.status)
+
+    def session_observe(operation: str) -> str:
+        """Expose one opt-in control in terminal, desktop web and directly addressed voice."""
+        with controls_lock:
+            if operation in {"on", "resume"}:
+                from ciel.providers.vision import VisionError
+
+                try:
+                    screen_service.vision._connection()
+                except VisionError as error:
+                    return str(error)
+            result = initiative.control(operation)
+            if operation == "status" and loop.microphone_muted:
+                result += " Background hints wait while the microphone is muted."
+            return result
+
     restore_caption_logging = None
     terminal_input = None
     shutdown_requested = threading.Event()
+    restart_requested = threading.Event()
     web_error_handler = None
     if web_ui is not None:
         from ciel.web import WebErrorHandler
@@ -2135,7 +2335,7 @@ def run_desktop(
         restore_caption_logging = install_caption_logging(captions)
     try:
         voice_prepared = None
-        if tts.enabled and tts.engine in {"pocket", "chatterbox_turbo"}:
+        if not web_mode and tts.enabled and tts.engine in {"pocket", "chatterbox_turbo"}:
             logger.info(
                 "Preparing %s before enabling listening; "
                 "first startup can take several seconds.", tts.engine,
@@ -2157,7 +2357,11 @@ def run_desktop(
         from ciel.platform.base import AudioInputError
 
         try:
-            loop.start()
+            if web_mode:
+                loop.start_text_only()
+                web_ui.set_state('idle')
+            else:
+                loop.start()
         except AudioInputError:
             if not keyboard_enabled and not web_mode:
                 raise
@@ -2172,6 +2376,9 @@ def run_desktop(
 
         def stop_keyboard_reply() -> None:
             with controls_lock:
+                initiative.control("pause")
+                if web_ui is not None:
+                    web_ui.channels.cancel()
                 loop.cancel_response()
                 persona_change_pending[0] = False
                 memory_service.cancel_proposal()
@@ -2262,11 +2469,16 @@ def run_desktop(
                 last_served = " / ".join(last_response[0]) if last_response[0][1] else "none yet"
                 return "\n".join((
                     session_mode(None),
+                    "Reply policy: " + {
+                        "always": "every transcript", "conversation": "active conversation",
+                        "strict": "strict listener check",
+                    }[settings.audio.ambient_followup_policy] + ".",
                     f"Microphone: {microphone}. Listener: {str(state).replace('_', ' ')}.",
                     f"Voice: {voice}.",
                     f"Recognition: {recognition}.",
                     f"Live captions: {'on' if show_ai_transcripts else 'off'}.",
                     session_memory("status"),
+                    session_observe("status"),
                     f"Normal model: {settings.providers.nim_model}.",
                     f"Complex model: {settings.providers.nim_complex_model}.",
                     f"Fallback model: {settings.providers.nim_fallback_model}.",
@@ -2283,11 +2495,116 @@ def run_desktop(
             "mode": session_mode,
             "memory": session_memory,
             "reasoning": session_reasoning,
+            "observe": session_observe,
             "microphone_available": lambda: microphone_available,
         }
 
         if web_ui is not None:
             from ciel.terminal import TerminalInput
+            from ciel.webapp.conversations import ConversationCatalog
+            from ciel.webapp.selection import ConversationSelection
+
+            def switch_web_conversation(identity: str) -> None:
+                nonlocal desktop_session_id, conv_manager, dialogue_context, screen_service
+                with controls_lock:
+                    stop_keyboard_reply()
+                    screen_service.close()
+                    dialogue_context.tools.close()
+                    conv_manager.close()
+                    desktop_session_id = identity
+                    conv_manager = ConversationManager(
+                        store=memory_store, session_id=identity,
+                        max_turns=settings.memory.max_short_term_turns,
+                        max_context_chars=settings.memory.max_context_chars,
+                        memory_config=settings.memory,
+                        context_resolver=lambda: conversation_context(
+                            settings, desktop_session_id, store=memory_store,
+                        ),
+                    )
+                    dialogue_context = DialogueContext(
+                        settings, memory_store, conv_manager, memory_service,
+                        semantic_recall=semantic_recall,
+                    )
+                    screen_service = ScreenService(settings, conv_manager)
+                    internet.reset_session()
+                    conv_manager.start_memory_lifecycle(router)
+                    dialogue_context.tools.start()
+                    web_ui.replace_history(conv_manager.get_recent_turns(limit=100))
+
+            catalog = ConversationCatalog(memory_store, lambda: conv_manager.context_session_ids())
+            selection = ConversationSelection(
+                memory_store, catalog, desktop_session_id, switch_web_conversation,
+            )
+            web_ui.configure_history(catalog, selection)
+            web_ui.channels.configure(
+                lambda request, audio, current: loop.submit_request(
+                    request, audio, current=current,
+                ),
+                tts,
+            )
+
+            from pathlib import Path
+
+            from ciel.paths import resolve_asset_path
+            from ciel.webapp.admin import WebAdministration
+            from ciel.webapp.network import LocalConnection
+            from ciel.webapp.settings import WebSettings
+
+            def apply_web_settings(changed: set[str]) -> None:
+                with controls_lock:
+                    stop_keyboard_reply()
+                    providers = settings.providers
+                    for name in ('nim', 'groq', 'openrouter'):
+                        provider = getattr(router.manager, name)
+                        secret = getattr(providers, name + '_api_key')
+                        provider.api_key = secret.get_secret_value() if secret else None
+                    router.manager.nim.default_model = providers.nim_model
+                    router.manager.nim.complex_model = providers.nim_complex_model
+                    router.manager.nim.fallback_model = providers.nim_fallback_model
+                    for name in ('groq', 'openrouter', 'ollama'):
+                        provider = getattr(router.manager, name)
+                        provider.default_model = getattr(providers, name + '_model')
+                    router.manager.ollama.host = providers.ollama_host.rstrip('/')
+                    router.set_reasoning_mode(providers.nim_reasoning)
+                    internet.config = settings.internet
+                    if 'memory_recall_enabled' in changed:
+                        memory_store.set_setting('recall_enabled', settings.memory_recall_enabled)
+                    memory_service.learning_mode = settings.memory_learning_mode
+                    conv_manager.lifecycle.learning_mode = settings.memory_learning_mode
+                    web_ui.owner = settings.ciel_preferred_name or getpass.getuser()
+
+            def web_memories() -> list[dict]:
+                from ciel.logging import SecretMaskingFilter
+
+                return [{'id': item.id, 'text': SecretMaskingFilter._redact(item.content)}
+                        for item in memory_store.list_memories(limit=300)
+                        if item.memory_type.value in {'fact', 'preference', 'project'}][:100]
+
+            def forget_web_memory(identity: int) -> bool:
+                with controls_lock:
+                    item = memory_store.get_memory(identity)
+                    if item is None or item.memory_type.value not in {
+                        'fact', 'preference', 'project',
+                    }:
+                        return False
+                    stop_keyboard_reply()
+                    return bool(memory_store.forget_memories([item]))
+
+            def restart_web_server() -> None:
+                restart_requested.set()
+                request_shutdown()
+
+            settings_service = WebSettings(
+                settings, Path.cwd() / '.env', apply=apply_web_settings,
+                recall=lambda: memory_service.recall_enabled,
+            )
+            web_ui.insecure_lan = settings.web_insecure_lan
+            connection = LocalConnection(settings, web_ui, resolve_asset_path('data/web/tls'),
+                                         Path.cwd() / '.env', args.web_port)
+            web_ui.admin = WebAdministration(
+                web_ui, settings_service, connection, restart=restart_web_server,
+                memories=web_memories, forget=forget_web_memory,
+            )
 
             web_controls = TerminalInput(
                 submit=loop.submit_text, write=web_ui.feedback, **session_controls,
@@ -2307,21 +2624,33 @@ def run_desktop(
                 return loop.submit_text(text)
 
             try:
-                url = web_ui.start(submit_web_message, port=args.web_port)
-            except OSError as err:
+                url = web_ui.start(
+                    submit_web_message, port=args.web_port,
+                    host=getattr(args, 'web_host', None) or settings.web_host,
+                    certificate=getattr(args, 'web_cert', None) or settings.web_cert or None,
+                    key=getattr(args, 'web_key', None) or settings.web_key or None,
+                )
+            except (OSError, ValueError) as err:
                 logger.error(
                     "Could not start the local web interface on port %d: %s. "
                     "Try 'ciel web --web-port 8766'.", args.web_port, err,
                 )
                 return 1
-            logger.info("Desktop web interface: %s", url)
+            connection.start_public_setup()
+            logger.info("Web interface: %s", url)
+            if connection.setup_server is not None:
+                logger.info("Android phone setup: %s", connection.setup_server.url)
             if args.open_browser:
                 import webbrowser
 
-                if not webbrowser.open(url):
-                    logger.warning("Open %s in your browser to use the desktop interface.", url)
+                remote_host = getattr(args, 'web_host', None) or settings.web_host
+                browser_url = (f'http://127.0.0.1:{args.web_port}'
+                               if remote_host != '127.0.0.1' else url)
+                if not webbrowser.open(browser_url):
+                    logger.warning("Open %s in your browser to use the desktop interface.",
+                                   browser_url)
         if keyboard_enabled:
-            from ciel.terminal import TerminalInput
+            from ciel.terminal import COMMAND_GROUPS, TerminalInput
             from ciel.terminal_ui import ConsoleUI
 
             terminal_input = TerminalInput(
@@ -2332,6 +2661,9 @@ def run_desktop(
                 ),
                 output=terminal_output,
                 owner_name=settings.ciel_preferred_name or None,
+                show_help=lambda: ConsoleUI(stream=terminal_output or sys.stdout).commands(
+                    COMMAND_GROUPS,
+                ),
                 **session_controls,
             )
             logger.info(
@@ -2339,7 +2671,9 @@ def run_desktop(
                 "/status: session, /mute: microphone, /stop: cancel reply, "
                 "/exit: quit, /help: all commands."
             )
-        if not microphone_available:
+        if web_mode:
+            logger.info("Web server ready. Microphone and playback are handled by your browser.")
+        elif not microphone_available:
             logger.info("Text chat ready; microphone capture is unavailable.")
         elif ambient_enabled[0]:
             logger.info(
@@ -2361,6 +2695,20 @@ def run_desktop(
                 captions=show_ai_transcripts, voice_prepared=voice_prepared,
                 microphone_available=microphone_available,
             )
+            if web_mode:
+                rows = [
+                    ('Web server', 'Ready'), ('Microphone / speaker', 'On your browser device'),
+                    ('Settings', 'Manage Ciel in the web app'),
+                    ('PC browser', f'http://127.0.0.1:{args.web_port}'
+                     if web_ui.phone_url else url),
+                ]
+                if web_ui.phone_url:
+                    rows.extend([
+                        ('Phone browser', web_ui.phone_url),
+                        ('Pair phone', 'Run ciel pair in another terminal'),
+                    ])
+            else:
+                rows.append(("Screen hints", "Off · /observe on to enable"))
             if keyboard_enabled:
                 mode = getattr(router, "reasoning_mode", settings.nim_reasoning)
                 if not isinstance(mode, str):
@@ -2370,7 +2718,7 @@ def run_desktop(
             if microphone_available and not ambient_enabled[0]:
                 console.note(f"Say ‘{settings.audio.wake_word}’ to begin.")
             if keyboard_enabled:
-                console.note("/status · /reasoning · /mute · /help · /exit")
+                console.note("/status · /observe · /reasoning · /mute · /help · /exit")
             else:
                 console.note("Press Ctrl+C to exit.")
         if terminal_input is not None:
@@ -2385,6 +2733,7 @@ def run_desktop(
         return 0
     finally:
         try:
+            initiative.close()
             if terminal_input is not None:
                 terminal_input.close()
             if web_ui is not None:
@@ -2408,3 +2757,7 @@ def run_desktop(
                     dialogue_context.tools.close()
                     conv_manager.close()
                     tts.close()
+                    if restart_requested.is_set():
+                        from ciel.webapp.restart import restart_web
+
+                        restart_web()

@@ -227,6 +227,14 @@ class NimProvider(LLMProvider):
 
             try:
                 data = complete(target_model, max_attempts)
+            except httpx.TimeoutException:
+                if target_model == fallback_model:
+                    raise
+                logger.warning(
+                    "NIM '%s' timed out; trying '%s'.", target_model, fallback_model,
+                )
+                target_model = fallback_model
+                data = complete(target_model, 1)
             except httpx.HTTPStatusError as err:
                 if (
                     err.response.status_code not in (*retryable, 404, 410)
@@ -473,12 +481,19 @@ class NimProvider(LLMProvider):
             read=min(self.timeout, STREAM_READ_TIMEOUT_SECONDS),
         )
         with streaming_client(stream_timeout, cancel_event) as client:
-            last_err: httpx.HTTPStatusError | None = None
+            last_err: httpx.HTTPStatusError | httpx.TimeoutException | None = None
             for attempt in range(MAX_RETRIES):
                 if cancel_event is not None and cancel_event.is_set():
                     return
                 try:
                     yield from _iter_stream(client, target_model)
+                except httpx.TimeoutException as err:
+                    if emitted:
+                        raise
+                    if cancel_event is not None and cancel_event.is_set():
+                        return
+                    last_err = err
+                    break  # Try one configured backup instead of repeating a stalled model.
                 except httpx.HTTPStatusError as err:
                     if emitted:
                         raise

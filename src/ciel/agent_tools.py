@@ -30,7 +30,6 @@ from ciel.web_answers import (
     unanswered_web_parts,
     verified_web_answer,
     web_answer_fallback,
-    web_answer_instruction,
     web_answer_messages,
     web_report_issues,
 )
@@ -107,6 +106,7 @@ class MainTools:
         self.explanation_only = explanation_only
         self.correction = corrected_search(query, messages)
         task = resolve_task_context(query, messages)
+        self._task = task
         self._superseded_terms = (
             _topic_terms(messages[task.anchor_index].content) - _topic_terms(task.request)
             if task.corrected_subject and task.anchor_index is not None
@@ -208,9 +208,14 @@ class MainTools:
     def _web_report(self, *, finalize: bool = False) -> ToolResult:
         """Rebuild current evidence so cached reads never replay stale source numbering."""
         assert self.lookup is not None
+        from ciel.web_answers import rag_answer_instructions
+
         instructions = web_answer_messages(self.messages, self.lookup, channel=self.channel)
+        # Send evidence once: the budgeted, relevance-ranked passages that answer
+        # verification checks claims against. A second flat copy overran the tool budget.
         content = {
             "evidence": instructions[1].content,
+            "instructions": rag_answer_instructions(channel=self.channel),
             "answer_format": "\n".join(message.content for message in instructions[2:-1]),
             "rules": instructions[0].content[-9000:],
         }
@@ -313,6 +318,8 @@ class MainTools:
         self.last_lookup_error = ""
         known = {source_identity(source.url): source
                  for source in self.lookup.sources} if self.lookup else {}
+        previous_evidence = {(identity, source.title, source.snippet, source.content)
+                             for identity, source in known.items()}
         fresh_ids = []
         for source in result.sources:
             identity = source_identity(source.url)
@@ -346,7 +353,11 @@ class MainTools:
         )
         self.lookup.context = InternetService._context(self.lookup.sources, query=goal)
         self._search_cache.add(key)
-        return self._web_report()
+        current_evidence = {(source_identity(source.url), source.title, source.snippet,
+                             source.content) for source in self.lookup.sources}
+        return self._web_report(finalize=(
+            self._read_count > 1 and current_evidence == previous_evidence
+        ))
 
     def buffer_answer(self) -> bool:
         """Never stream unchecked retrieved claims into captions or speech."""
@@ -356,7 +367,9 @@ class MainTools:
         """Supply trusted report rules without promoting source text to instructions."""
         if not self.buffer_answer():
             return ""
-        return web_answer_instruction(self.lookup, channel=self.channel)
+        from ciel.web_answers import rag_answer_instructions
+
+        return rag_answer_instructions(channel=self.channel)
 
     def response_deadline(self) -> float | None:
         """Reserve the final part of the shared research budget for evidence checks."""
@@ -479,7 +492,7 @@ class MainTools:
         arrives, retain the original draft and its source numbering together.
         """
         original = self.lookup
-        if (original is None or not original.sources or original.reply is not None
+        if (original is None or original.reply is not None
                 or self._evidence_recovery_attempted or not self._fresh_lookup
                 or self._read_count != 1 or not self._valid() or not self._web_allowed()
                 or self._deadline is None
@@ -489,7 +502,7 @@ class MainTools:
         missing = unanswered_web_parts(content, self.objective or original.query or self.query)
         missing_mapping = (reading_point_request(original.query)
                            and bool({"missing_reading_mapping", "unsupported_claim"} & set(issues)))
-        if not missing and not missing_mapping:
+        if not missing and not missing_mapping and "no_claims" not in issues:
             return content
         try:
             proposed = json.loads(content).get("search_queries", [])
@@ -549,6 +562,38 @@ class MainTools:
             if not keep:
                 self.lookup = original
 
+    def _without_repeated_claims(self, content: str) -> str:
+        """Omit exact prior sentences when advancing an explanation, preserving recaps.
+
+        Prior assistant text is used only to avoid repeating delivery, never as
+        factual evidence. New claims still need source and relevance validation.
+        """
+        if (self._task.kind not in {"detail", "followup", "continue"}
+                or self._task.interrupted or len(content) > 24_000
+                or re.search(r"\b(?:repeat|recap|remind|again|summari[sz]e)\b", self.query, re.I)
+                or not re.search(r"\b(?:understand|explain|how|more|next|learn)\b",
+                                 self.query, re.I)):
+            return content
+        previous = next((message.content for message in reversed(self.messages)
+                         if message.role == "assistant"), "")[:6000]
+
+        def sentence(text: str) -> str:
+            return " ".join(re.sub(r"\[\d+\]", "", text).split()).strip(" .!?").casefold()
+
+        prior = {sentence(part) for part in re.split(r"(?<=[.!?])\s+|\n+", previous)}
+        try:
+            report = json.loads(content)
+            claims = report.get("claims")
+            if not isinstance(claims, list):
+                return content
+            report["claims"] = [claim for claim in claims
+                                if not isinstance(claim, dict)
+                                or not isinstance(claim.get("text"), str)
+                                or sentence(claim["text"]) not in prior]
+            return json.dumps(report, ensure_ascii=False)
+        except (ValueError, TypeError, AttributeError):
+            return content
+
     def answer_filter(self, content: str) -> ToolResult:
         """Verify the main model's proposed report without a separate decision stage."""
         lookup = self.lookup
@@ -558,11 +603,38 @@ class MainTools:
             return ToolResult("", terminal_text="")
         if lookup.reply is not None:
             return ToolResult(lookup.reply, terminal_text=lookup.reply, source="web")
+
+        from ciel.web_answers import clean_voice_reply, extract_citations
+
+        is_json_report = False
+        stripped = content.strip()
+        try:
+            if stripped.startswith("{") and "claims" in stripped:
+                json.loads(stripped)
+                is_json_report = True
+        except Exception:
+            is_json_report = False
+
+        if not is_json_report and re.search(r"\[\d+\]", content) and lookup.sources:
+            cited = extract_citations(content, lookup.sources)
+            if cited:
+                verified_lookup = InternetResult(
+                    attempted=True, query=lookup.query, sources=cited,
+                    kind=lookup.kind, retrieved_at=lookup.retrieved_at,
+                )
+                verified_lookup.context = InternetService._context(cited, query=lookup.query)
+                self.lookup = verified_lookup
+                spoken = clean_voice_reply(content) if self.channel == "voice" else content
+                return ToolResult(spoken, terminal_text=content, source="web",
+                                  sources=tuple(cited), value=verified_lookup)
+
         content = normalize_web_report(content, lookup)
+        content = self._without_repeated_claims(content)
         content = self._recover_missing_evidence(content)
         lookup = self.lookup
         assert lookup is not None
         content = self._repair_report(content, lookup)
+        content = self._without_repeated_claims(content)
         if not self._valid():
             return ToolResult("", terminal_text="")
         verification_failures: list[str] = []
@@ -598,7 +670,8 @@ class MainTools:
                                          for quote, claim, source in translations
                                          if source in indexes
                                      })
-        if answer == web_answer_fallback(lookup):
+        if answer == web_answer_fallback(verified_lookup):
+            answer = web_answer_fallback(lookup)
             verified_lookup.sources = []
             if verification_failures:
                 answer = (
@@ -608,17 +681,11 @@ class MainTools:
                     "Please try again."
                 )
         else:
-            try:
-                omitted = len(json.loads(content).get("claims", [])) > len(mapped)
-            except (ValueError, TypeError, AttributeError):
-                omitted = False
             gaps = unanswered_web_parts(content, self.objective or self.query)
             if gaps:
                 answer += " I couldn't verify " + " or ".join(gaps) + "."
             elif self.last_lookup_error:
                 answer += " I couldn't complete the additional lookup."
-            elif omitted and "couldn't verify the remaining details" not in answer:
-                answer += " I couldn't verify the remaining details."
         self.lookup = verified_lookup
         return ToolResult(answer, terminal_text=answer, source="web",
                           sources=tuple(verified_lookup.sources), value=verified_lookup)

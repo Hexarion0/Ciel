@@ -121,7 +121,10 @@ class DialogueContext:
                 or version != screen_scope(self.conversation)
                 or not self.tools._owner_allowed(scope)):
             return None
-        if previous == web_answer_fallback(InternetResult(query=task.request)):
+        if previous in {
+            web_answer_fallback(InternetResult(query=task.request), sources_found=found)
+            for found in (False, True)
+        }:
             return ("I couldn't validate an answer against the retrieved evidence. "
                     "I can retry the same question.")
         if previous == (

@@ -671,3 +671,112 @@ def test_case_insensitive_provider_preference_preserves_explicit_model(streaming
     else:
         manager.send_with_fallback("Hi", preferred_provider="GROQ", model="explicit-model")
         assert provider.send.call_args.kwargs["model"] == "explicit-model"
+
+
+@pytest.mark.parametrize('streaming', [False, True])
+def test_nim_timeout_before_answer_tries_configured_backup(monkeypatch, streaming):
+    import httpx
+
+    models = []
+
+    def handle(request):
+        model = json.loads(request.content)['model']
+        models.append(model)
+        if model == 'slow-primary':
+            raise httpx.ReadTimeout('The read operation timed out.', request=request)
+        if streaming:
+            return httpx.Response(200, text=(
+                'data: {"choices":[{"delta":{"content":"Hello from backup."}}]}\n\n'
+                'data: [DONE]\n\n'
+            ))
+        return completion('Hello from backup.')
+
+    client_class = httpx.Client
+    monkeypatch.setattr('httpx.Client', lambda **kwargs: client_class(
+        transport=httpx.MockTransport(handle), **kwargs,
+    ))
+    provider = NimProvider(api_key='test', model='slow-primary')
+    provider.fallback_model = 'selected-backup'
+    if streaming:
+        chunks = list(provider.stream('Hello'))
+        assert ''.join(chunk.delta for chunk in chunks) == 'Hello from backup.'
+    else:
+        assert provider.send('Hello').content == 'Hello from backup.'
+    assert models == ['slow-primary', 'selected-backup']
+
+
+
+
+@pytest.mark.parametrize('allow_backup', [False, True])
+def test_nim_timeout_after_partial_reply_never_starts_another_model(monkeypatch, allow_backup):
+    import httpx
+
+    models = []
+
+    class PartialStream(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b'data: {"choices":[{"delta":{"content":"A partial answer."}}]}\n\n'
+            raise httpx.ReadTimeout('Interrupted after content')
+
+    def handle(request):
+        models.append(json.loads(request.content)['model'])
+        return httpx.Response(200, stream=PartialStream())
+
+    client_class = httpx.Client
+    monkeypatch.setattr('httpx.Client', lambda **kwargs: client_class(
+        transport=httpx.MockTransport(handle), **kwargs,
+    ))
+    provider = NimProvider(api_key='test', model='primary')
+    provider.fallback_model = 'backup'
+    stream = provider.stream('Hello', allow_model_fallback=allow_backup)
+    assert next(stream).delta == 'A partial answer.'
+    with pytest.raises(httpx.ReadTimeout):
+        next(stream)
+    assert models == ['primary']
+
+
+@pytest.mark.parametrize('streaming', [False, True])
+def test_nim_timeout_without_distinct_permitted_backup_is_not_retried(monkeypatch, streaming):
+    import httpx
+
+    models = []
+
+    def handle(request):
+        models.append(json.loads(request.content)['model'])
+        raise httpx.ReadTimeout('Timeout', request=request)
+
+    client_class = httpx.Client
+    monkeypatch.setattr('httpx.Client', lambda **kwargs: client_class(
+        transport=httpx.MockTransport(handle), **kwargs,
+    ))
+    provider = NimProvider(api_key='test', model='primary')
+    provider.fallback_model = 'backup'
+    with pytest.raises(httpx.ReadTimeout):
+        if streaming:
+            list(provider.stream('Hello', allow_model_fallback=False))
+        else:
+            provider.send('Hello', allow_model_fallback=False)
+    assert models == ['primary']
+
+
+def test_nim_cancellation_during_timeout_does_not_start_backup(monkeypatch):
+    from threading import Event
+
+    import httpx
+
+    canceled = Event()
+    models = []
+
+    def handle(request):
+        models.append(json.loads(request.content)['model'])
+        canceled.set()
+        raise httpx.ReadTimeout('Canceled timeout', request=request)
+
+    client_class = httpx.Client
+    monkeypatch.setattr('httpx.Client', lambda **kwargs: client_class(
+        transport=httpx.MockTransport(handle), **kwargs,
+    ))
+    provider = NimProvider(api_key='test', model='primary')
+    provider.fallback_model = 'backup'
+    assert list(provider.stream('Hello', cancel_event=canceled)) == []
+    assert models == ['primary']

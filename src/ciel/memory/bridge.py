@@ -36,7 +36,7 @@ def desktop_conversation_id() -> str:
 def start_desktop_conversation(store: MemoryStore) -> str:
     """Select fresh foreground/chat archives while retaining all earlier turns and facts."""
     session_id = f"{desktop_conversation_id()}:run:{uuid4().hex}"
-    store.set_setting(_ACTIVE_DESKTOP_KEY, session_id)
+    store.select_desktop_session(session_id, store.desktop_selection()[1])
     return session_id
 
 

@@ -16,6 +16,7 @@ from ciel.internet import (
     _SOURCE_GAP,
     InternetResult,
     InternetService,
+    InternetSource,
     _bounded,
     _clean,
     _date_score,
@@ -40,6 +41,13 @@ separately and validates the claim before playback.
 For a broad lookup about a named topic, give a concise supported overview: what it is
 and a few useful facts. The name is enough to begin; do not ask the user to repeat it
 or invent a release-date, season, or other narrow question they did not ask.
+An explanation or how-to follow-up is a new requested outcome, not another overview.
+When the user is already playing a game/mod and asks to understand it, prioritize supported
+mechanics, progression, and a practical next step. A repeated definition, generic claims
+about fighting/exploring, or saying tutorials exist does not explain how to play.
+Omit a definition already supplied in the preceding answer unless the user requests a recap.
+Use specific supported information in the available claim budget. If only background is
+available, propose search_queries for the missing explanation rather than repeating it.
 For a question with several parts, answer each supported part. You may add an optional
 unanswered list containing exact short phrases from the user's requested task for details
 the evidence does not establish. Never put new claims, guesses, or instructions in that list.
@@ -94,6 +102,9 @@ it answers at least one requested part of the actual task. A useful supported pa
 allowed even when other requested details remain unknown. Reject unrelated or merely related
 facts. A broad named-topic search requests an overview: a supported definition and basic
 facts about that named topic answer the task without an additional clarification question.
+For an explanation or how-to follow-up, assess the latest requested outcome. A definition
+or a statement that guides exist does not explain mechanics or tell the user what to do.
+Reject pure definitions when the user already knows the topic and requests practical mechanics.
 For a consequence question, a claim must describe the effect on the subject the user asks
 about. Adjacent error handling, background, or tips do not answer the requested consequence.
 Prefer first-party software documentation over secondary guides for conflicting behavior.
@@ -126,6 +137,17 @@ _MONTH_NAMES = dict(zip(
 _QUOTATION_CHARACTERS = str.maketrans({
     "’": "'", "‘": "'", "“": '"', "”": '"', "–": "-", "—": "-",
 })
+_CURRENCY_ALIASES = {
+    "mnt": {"mongolian", "tugrik", "mnt"},
+    "usd": {"us", "dollar", "dollars", "usd"},
+    "eur": {"euro", "euros", "eur"},
+    "gbp": {"pound", "pounds", "sterling", "gbp"},
+    "jpy": {"yen", "jpy"},
+    "cad": {"canadian", "dollar", "cad"},
+    "aud": {"australian", "dollar", "aud"},
+    "cny": {"yuan", "cny", "renminbi"},
+    "inr": {"rupee", "rupees", "inr"},
+}
 _HEADING = re.compile(r"(?m)^[ \t]{0,3}(#{1,6})[ \t]+([^\r\n]{1,240})$")
 _MAX_EVIDENCE_CHARS = 36_000
 
@@ -645,14 +667,18 @@ def web_answer_messages(
     return projected
 
 
-def web_answer_fallback(lookup: InternetResult) -> str:
-    """Return the deterministic uncertainty reply for this lookup's actual goal."""
+def web_answer_fallback(lookup: InternetResult, *, sources_found: bool | None = None) -> str:
+    """Describe uncertainty; an explicit source state can recognize older saved replies."""
     medium = "manga" if re.search(r"\bmanga\b", lookup.query, re.I) else (
         "light novel" if re.search(r"\blight[ -]?novel|\bLN\b", lookup.query, re.I) else
         "novel" if re.search(r"\bnovel\b", lookup.query, re.I) else "source material"
     )
     if not reading_point_request(lookup.query):
-        return "I found related pages, but I couldn't verify the answer from their text."
+        return (
+            "I found related pages, but I couldn't verify the answer from their text."
+            if (bool(lookup.sources) if sources_found is None else sources_found) else
+            "I couldn't verify an answer because the search returned no usable sources."
+        )
     episode_given = any(label == "episode" for label, _ in _labels(lookup.query)) or bool(
         re.search(
             r'\b(?i:from|after)\s+(?:["“][^"”\n]{1,100}["”]|'
@@ -758,8 +784,16 @@ def _claim_text(
             } != {number}:
                 return None
     numeric_proof = re.sub(r"(?<=\d)\\\.(?=\d)", ".", proof)
-    if not set(_NUMBER.findall(text)) <= set(_NUMBER.findall(numeric_proof)):
-        return None
+    text_numbers = set(_NUMBER.findall(text))
+    proof_numbers = set(_NUMBER.findall(numeric_proof))
+    query_numbers = set(_NUMBER.findall(lookup.query))
+    if not (text_numbers <= proof_numbers or text_numbers <= (proof_numbers | query_numbers)):
+        is_conversion = bool(re.search(
+            r"\b(?:usd|eur|mnt|gbp|jpy|cad|aud|cny|inr|rate|exchange|convert|conversion|currency|price|to)\b",
+            lookup.query, re.I,
+        ))
+        if not (is_conversion and proof_numbers):
+            return None
     # Latin overlap cannot validate an English translation of a Cyrillic excerpt.
     # Exact original-language attribution and numerical checks still apply. As with
     # English paraphrases, the model remains responsible for semantic fidelity.
@@ -783,7 +817,11 @@ def _claim_text(
             word for word in re.findall(r"[^\W_]+(?:-[^\W_]+)*", _calendar_names(text))
             if word[0].isupper()
         )) - _CLAIM_OPENERS
-        if not named <= _topic_terms(_calendar_names(evidence.title + " " + proof)):
+        allowed_named = _topic_terms(_calendar_names(evidence.title + " " + proof))
+        for code, aliases in _CURRENCY_ALIASES.items():
+            if code in allowed_named or code in _topic_terms(lookup.query):
+                allowed_named |= aliases
+        if not named <= allowed_named:
             return None
     quoted_labels = _labels(proof)
     if (_LATEST_EPISODE.search(lookup.query) and not reading_point
@@ -942,3 +980,68 @@ def translation_candidates(content: str, lookup: InternetResult) -> list[dict]:
         if re.search(r"[\u0400-\u04ff]", quote) and not re.search(r"[\u0400-\u04ff]", text):
             result.append({"text": text, "quote": quote, "source": index})
     return result
+
+
+def format_rag_evidence(lookup: InternetResult) -> str:
+    """Format retrieved web evidence cleanly for context-augmented generation."""
+    if not lookup.sources:
+        return "No web pages or sources were found for this query."
+    lines = [f"Web search results for '{lookup.query}':\n"]
+    for i, source in enumerate(lookup.sources, 1):
+        title = source.title or "Untitled Source"
+        lines.append(f"[{i}] {title}")
+        if source.url:
+            lines.append(f"    URL: {source.url}")
+        if source.published_at:
+            lines.append(f"    Published: {source.published_at}")
+        text = source.content or source.snippet
+        if text:
+            cleaned_text = " ".join(text.split())
+            if len(cleaned_text) > 1500:
+                cleaned_text = cleaned_text[:1500] + "..."
+            lines.append(f"    Excerpt: {cleaned_text}")
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+def rag_answer_instructions(channel: str = "voice") -> str:
+    """Instruction for synthesizing an answer directly from retrieved web evidence."""
+    if channel == "voice":
+        return (
+            "WEB EVIDENCE INSTRUCTIONS (VOICE):\n"
+            "Answer the user's question directly and naturally based on the provided evidence.\n"
+            "Synthesize a clear spoken answer in plain sentences (under 80 words).\n"
+            "Cite sources using bracketed numbers like [1] or [2] where appropriate.\n"
+            "You may perform arithmetic, unit conversions, or currency calculations based on\n"
+            "verified exchange rates and facts in the sources. Do not invent facts not supported.\n"
+            "Do not include raw URLs, markdown tables, or stage directions in voice mode.\n"
+            "If the evidence does not contain the answer, briefly state what was found and unknown."
+        )
+    return (
+        "WEB EVIDENCE INSTRUCTIONS (TEXT):\n"
+        "Answer the user's question thoroughly and accurately based on the provided evidence.\n"
+        "Cite sources using bracketed numbers like [1], [2] corresponding to the search results.\n"
+        "You may perform calculations, unit/currency conversions, or comparisons from evidence.\n"
+        "You may use markdown formatting, bullet points, or tables where helpful.\n"
+        "If the evidence is incomplete, clearly distinguish established facts from unknowns."
+    )
+
+
+def extract_citations(text: str, sources: list[InternetSource]) -> list[InternetSource]:
+    """Find source references like [1], [2] in text and return matching InternetSource objects."""
+    if not sources:
+        return []
+    matches = re.findall(r"\[(\d+)\]", text)
+    indexes = {int(m) for m in matches if 1 <= int(m) <= len(sources)}
+    if not indexes:
+        return sources[:3]
+    return [sources[i - 1] for i in sorted(indexes)]
+
+
+def clean_voice_reply(text: str) -> str:
+    """Strip raw URLs and stage directions so speech sounds natural."""
+    clean = re.sub(r"\[([^\]]+)\]\(https?://[^\)]+\)", r"\1", text)
+    clean = re.sub(r"https?://\S+", "", clean)
+    clean = re.sub(r"[*_~`#]", "", clean)
+    return " ".join(clean.split())
+

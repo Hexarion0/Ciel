@@ -17,13 +17,17 @@ class SessionLoop:
     def __init__(self, *, ambient, **_kwargs):
         self.ambient = ambient
         self.on_transcription = _kwargs["on_transcription"]
+        self.tts = _kwargs["tts"]
         self.microphone_muted = False
         self.is_running = True
         self.state = "listening_wake"
         self.mute_transitions = []
         self.start = MagicMock()
+        self.start_text_only = MagicMock()
         self.stop = MagicMock()
         self.submit_text = MagicMock(return_value=True)
+        self.submit_background = MagicMock(return_value=True)
+        self.background_ready = MagicMock(return_value=True)
         self.cancel_response = MagicMock()
         self.set_ambient = MagicMock(side_effect=self._set_ambient)
         self.set_microphone_mute = MagicMock(side_effect=self._set_mute)
@@ -156,10 +160,114 @@ def launch_session(tmp_path, monkeypatch):
         assert settings.memory.recall_enabled is True
         assert settings.memory.learning_mode == "automatic"
         return SimpleNamespace(
-            loop=loops[0], feedback=feedback, states=states, ui=ui,
+            loop=loops[0], feedback=feedback, states=states, ui=ui, settings=settings,
         )
 
     return launch
+
+
+@pytest.mark.parametrize("surface", ["terminal", "web"])
+def test_observation_controls_are_local_session_only(launch_session, monkeypatch, surface):
+    from ciel.providers.vision import VisionClient
+
+    monkeypatch.setattr(VisionClient, "_connection", lambda _self: ("synthetic", {}))
+    result = launch_session(surface, [
+        "/observe", "/observe on", "/observe pause", "/observe resume", "/observe off", "/exit",
+    ])
+    messages = result.feedback if surface == "terminal" else [
+        event["text"] for event in result.ui.snapshot()["activity"]
+    ]
+    assert any("Screen observation: off" in message for message in messages)
+    assert any("Screen observation: on" in message for message in messages)
+    assert any("Screen observation: paused" in message for message in messages)
+    result.loop.submit_text.assert_not_called()
+    result.loop.submit_background.assert_not_called()
+    assert "off" in result.ui.snapshot()["observation"]
+
+
+@pytest.mark.parametrize("controller_enabled", [True, False])
+def test_direct_voice_observation_control_bypasses_model(
+    launch_session, monkeypatch, controller_enabled,
+):
+    from ciel.providers.vision import VisionClient
+
+    monkeypatch.setattr(VisionClient, "_connection", lambda _self: ("synthetic", {}))
+
+    def spoken_controls(_submit, loop):
+        for text in ("hey ciel, start watching my screen", "hey ciel, stop watching my screen"):
+            assert loop.on_transcription(text, {
+                "wake_verified": True, "cancel_event": threading.Event(), "stt_confidence": 1.0,
+            }, None)
+
+    result = launch_session("web", ["/exit"], before_commands=spoken_controls,
+                            controller_enabled=controller_enabled)
+    store = MemoryStore(result.settings.memory.db_path)
+    try:
+        session = store.get_setting(f"active_desktop_conversation:{PERSONA_CONTEXT_VERSION}")
+        turns = store.get_recent_turns(session)
+        assert [turn.role for turn in turns] == ["user", "assistant"] * 2
+        assert "Screen observation: on" in turns[1].content
+        assert "Screen observation: off" in turns[3].content
+    finally:
+        store.close()
+
+
+def test_background_hint_archives_only_delivered_text(launch_session, monkeypatch):
+    from ciel.providers.vision import VisionClient, synthetic_test_image
+    from ciel.screen.capture import Capture, Cursor, HyprlandCaptureBackend, Monitor, ScreenImage
+    from ciel.screen.initiative import ScreenInitiative
+    from ciel.screen.observation import CodingAnalyzer, CodingObservation
+
+    now, coordinators = [0.0], []
+    original_init = ScreenInitiative.__init__
+
+    def create(self, **kwargs):
+        original_init(self, **kwargs)
+        self.clock = lambda: now[0]
+        coordinators.append(self)
+
+    monkeypatch.setattr(ScreenInitiative, "__init__", create)
+    monkeypatch.setattr(ScreenInitiative, "_run", lambda _self: None)
+    monkeypatch.setattr(VisionClient, "_connection", lambda _self: ("synthetic", {}))
+    image = synthetic_test_image().data
+    pixels = Capture("synthetic", 100.0, (Monitor("coding", 0, 0, 128, 64),),
+                     Cursor(0, 0, 100.0, True),
+                     (ScreenImage("coding", image, 128, 64),
+                      ScreenImage("desktop", image, 128, 64)))
+    monkeypatch.setattr(HyprlandCaptureBackend, "capture", lambda *_args, **_kwargs: pixels)
+    hint = "Try passing the name argument."
+    monkeypatch.setattr(CodingAnalyzer, "analyze", lambda *_args, **_kwargs: CodingObservation(
+        "coding", "Secret visible TypeError that must not enter the archive",
+        hint, "fake", "vision",
+    ))
+
+    def drive(submit, loop):
+        loop.tts.speak.return_value = False
+        loop.tts.clean_text_for_speech.side_effect = lambda text: text
+
+        def background(callback):
+            callback(threading.Event())
+            return True
+
+        loop.submit_background.side_effect = background
+        submit("/observe on")
+        for at in range(20, 141, 20):
+            now[0] = at
+            coordinators[0].tick()
+
+    result = launch_session("web", ["/exit"], before_commands=drive)
+    assert [(message["role"], message["text"]) for message in result.ui.snapshot()["messages"]] == [
+        ("assistant", hint),
+    ]
+    store = MemoryStore(result.settings.memory.db_path)
+    try:
+        session = store.get_setting(f"active_desktop_conversation:{PERSONA_CONTEXT_VERSION}")
+        turns = store.get_recent_turns(session)
+        assert [(turn.role, turn.content) for turn in turns] == [("assistant", hint)]
+        assert turns[0].provider == "fake"
+        assert turns[0].model == "vision"
+    finally:
+        store.close()
 
 
 @pytest.mark.parametrize("surface", ["terminal", "web"])
@@ -171,12 +279,12 @@ def test_session_controls_share_live_state_and_preserve_saved_data(launch_sessio
         "/help memory", "/quit",
     ]
     result = launch_session(surface, commands)
-    assert [state["muted"] for state in result.states[:6]] == [
-        False, True, True, True, False, False,
-    ]
-    assert result.loop.mute_transitions == [True, False]
-    assert result.states[7]["ambient"] is False
-    assert result.states[8]["ambient"] is False
+    assert [state["muted"] for state in result.states[:6]] == (
+        [False] * 6 if surface == 'web' else [False, True, True, True, False, False]
+    )
+    assert result.loop.mute_transitions == ([] if surface == 'web' else [True, False])
+    assert result.states[7]["ambient"] is (surface == 'web')
+    assert result.states[8]["ambient"] is (surface == 'web')
     assert result.states[10]["ambient"] is True
     assert result.states[12]["recall"] is False
     assert result.states[13]["recall"] is False
@@ -189,7 +297,8 @@ def test_session_controls_share_live_state_and_preserve_saved_data(launch_sessio
     assert result.ui.snapshot()["provider"] == ""
     result.loop.submit_text.assert_not_called()
     output = "\n".join(result.feedback).casefold()
-    assert "unavailable" not in output
+    if surface == 'terminal':
+        assert "unavailable" not in output
     assert "could not run" not in output
     assert "microphone" in output
     assert "paused" in output
@@ -200,8 +309,8 @@ def test_session_controls_share_live_state_and_preserve_saved_data(launch_sessio
 @pytest.mark.parametrize("surface", ["terminal", "web"])
 def test_memory_pause_persists_but_microphone_and_mode_reset(launch_session, surface):
     first = launch_session(surface, ["/mute on", "/mode wake", "/memory pause", "/exit"])
-    assert first.states[-1]["muted"] is True
-    assert first.states[-1]["ambient"] is False
+    assert first.states[-1]["muted"] is (surface == 'terminal')
+    assert first.states[-1]["ambient"] is (surface == 'web')
     assert first.states[-1]["recall"] is False
 
     second = launch_session(surface, ["/status", "/memory status", "/memory resume", "/exit"])
@@ -246,7 +355,7 @@ def test_invalid_local_controls_leave_session_state_unchanged(launch_session, su
 
 
 @pytest.mark.parametrize("controller_enabled", [False, True])
-@pytest.mark.parametrize("surface", ["terminal", "web"])
+@pytest.mark.parametrize("surface", ["terminal"])
 def test_concurrent_voice_and_slash_modes_keep_capture_and_status_consistent(
     launch_session, monkeypatch, controller_enabled, surface,
 ):
@@ -335,7 +444,7 @@ def test_concurrent_voice_and_slash_modes_keep_capture_and_status_consistent(
 
 
 @pytest.mark.parametrize("controller_enabled", [False, True])
-@pytest.mark.parametrize("surface", ["terminal", "web"])
+@pytest.mark.parametrize("surface", ["terminal"])
 def test_same_state_slash_mode_cancels_a_pending_voice_mode_change(
     launch_session, monkeypatch, controller_enabled, surface,
 ):
@@ -532,3 +641,296 @@ def test_memory_control_serializes_after_an_existing_voice_mutation(
         controller_enabled=controller_enabled,
     )
     assert result.states[0]["recall"] is (operation == "resume")
+
+
+@pytest.mark.parametrize('kind', ['text', 'voice'])
+def test_browser_reply_never_plays_through_pc_speaker(launch_session, kind):
+    from ciel.webapp.requests import WebRequest
+
+    def drive(_submit, loop):
+        loop.tts.speak.reset_mock()
+        event = threading.Event()
+        request = WebRequest('browser-request', 'phone', 'chat', 1, kind, 'What time is it?')
+        loop.on_transcription('What time is it?', {
+            'input_source': 'web_text' if kind == 'text' else 'web_voice',
+            'web_request': request, 'web_current': lambda: True,
+            'wake_verified': True, 'cancel_event': event,
+        }, None)
+        loop.tts.speak.assert_not_called()
+
+    result = launch_session('web', ['/exit'], before_commands=drive)
+    replies = [m['text'] for m in result.ui.snapshot()['messages'] if m['role'] == 'assistant']
+    assert len(replies) == 1 and replies[0].startswith("It's ")
+
+
+def test_web_starts_request_worker_without_opening_pc_microphone(launch_session):
+    result = launch_session('web', ['/exit'])
+    result.loop.start.assert_not_called()
+    result.loop.start_text_only.assert_called_once()
+    assert result.ui.snapshot()['pc_capture'] is False
+
+
+@pytest.fixture
+def interactive_terminal_displays(monkeypatch):
+    """Exercise the real interactive display while keeping keyboard IO simulated."""
+    import io
+    import sys
+
+    from ciel import terminal_output
+
+    class TTY(io.StringIO):
+        encoding = "utf-8"
+
+        def isatty(self):
+            return True
+
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    original = terminal_output.TerminalOutput
+    displays = []
+
+    def make_output(_stream, **kwargs):
+        display = original(TTY(), **kwargs)
+        displays.append(display)
+        return display
+
+    monkeypatch.setattr(terminal_output, "TerminalOutput", make_output)
+    return displays
+
+
+@pytest.mark.parametrize("source", ["keyboard", "speech"])
+@pytest.mark.parametrize("controller_enabled", [True, False])
+def test_terminal_speech_and_typing_share_written_reply_depth(
+    launch_session, interactive_terminal_displays, source, controller_enabled,
+):
+    from ciel import providers
+    from ciel.providers.base import LLMStreamChunk
+
+    displays, calls = interactive_terminal_displays, []
+    answer = "First explain the design. " * 55 + "\n\n```python\ndef example():\n    return 42\n```"
+    query = "Explain the design with an example."
+
+    def stream(messages, **kwargs):
+        calls.append((messages, kwargs))
+        yield LLMStreamChunk(answer, "fixture-model", "fixture", is_final=True)
+
+    def drive(_submit, loop):
+        providers.get_model_router().stream.side_effect = stream
+        if source == "keyboard":
+            displays[0].submit_input(query)
+        loop.tts.speak.return_value = True
+        loop.tts.clean_text_for_speech.side_effect = lambda text: text
+        info = {"wake_verified": True, "cancel_event": threading.Event()}
+        if source == "keyboard":
+            info["input_source"] = "keyboard"
+        loop.on_transcription(query, info, None)
+        audible = loop.tts.speak.call_args.args[0]
+        assert len(audible.split()) <= 80 and "```" not in audible
+
+    result = launch_session("terminal", ["/exit"], before_commands=drive,
+                            controller_enabled=controller_enabled)
+    assert len(calls) == 1
+    assert calls[0][1]["max_tokens"] == 4096
+    prompt = calls[0][0][0].content
+    assert "Generic short-reply or spoken-delivery preferences do not cap written answers" in prompt
+    assert ("transcribed from speech" in prompt) == (source == "speech")
+    assert displays[0]._transcript.count("❯ " + query) == 1
+    user_index = displays[0]._transcript.index("❯ " + query)
+    assert displays[0]._transcript[user_index + 1].startswith("CIEL: First explain the design.")
+    assert not any("fixture-model" in line for line in displays[0]._transcript)
+    assert "def example():" in displays[0]._transcript
+    store = MemoryStore(result.settings.memory.db_path)
+    try:
+        session = store.get_setting(f"active_desktop_conversation:{PERSONA_CONTEXT_VERSION}")
+        assert [turn.content for turn in store.get_recent_turns(session)] == [query, answer]
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("controller_enabled", [True, False])
+@pytest.mark.parametrize("outcome", ["unclear", "canceled"])
+def test_unaccepted_speech_does_not_become_a_normal_chat_message(
+    launch_session, interactive_terminal_displays, controller_enabled, outcome,
+):
+    from ciel import providers
+
+    query = "An uncertain transcription must not become an instruction."
+
+    def drive(_submit, loop):
+        canceled = threading.Event()
+        info = {"wake_verified": True, "cancel_event": canceled}
+        if outcome == "unclear":
+            info.update(stt_needs_repeat=True, stt_confidence=0.1)
+        else:
+            canceled.set()
+        loop.on_transcription(query, info, None)
+        providers.get_model_router().stream.assert_not_called()
+
+    result = launch_session("terminal", ["/exit"], before_commands=drive,
+                            controller_enabled=controller_enabled)
+    assert not any(query in line for line in interactive_terminal_displays[0]._transcript)
+    store = MemoryStore(result.settings.memory.db_path)
+    try:
+        session = store.get_setting(f"active_desktop_conversation:{PERSONA_CONTEXT_VERSION}")
+        assert not store.get_recent_turns(session)
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("kind", ["text", "voice"])
+@pytest.mark.parametrize("outcome", ["complete", "error", "cancel"])
+def test_browser_displays_answer_before_generation_finishes(
+    launch_session, monkeypatch, kind, outcome,
+):
+    """A slow answer tail must not hide already available browser text."""
+    from ciel.agent import AgentResult, MainAgent
+    from ciel.providers.base import LLMStreamChunk
+    from ciel.web import DesktopWebUI
+    from ciel.webapp.requests import WebRequest
+
+    visible = threading.Event()
+    canceled = threading.Event()
+    original_progress = DesktopWebUI.progress
+
+    def progress(self, text, **kwargs):
+        original_progress(self, text, **kwargs)
+        if text == "First sentence. ":
+            visible.set()
+
+    def stream(self, *_args, **_kwargs):
+        self.last_result = AgentResult(provider="fixture", model="fixture")
+        yield LLMStreamChunk("First sentence. ", "fixture", "fixture")
+        assert visible.wait(2), "Browser text waited for the rest of the answer"
+        if outcome == "error":
+            raise RuntimeError("Fixture connection failed after visible output")
+        if outcome == "cancel":
+            canceled.set()
+        yield LLMStreamChunk("Second sentence.", "fixture", "fixture", is_final=True)
+
+    def send(*_args, **_kwargs):
+        raise AssertionError("Browser answers must use the existing validated stream")
+
+    monkeypatch.setattr(DesktopWebUI, "progress", progress)
+    monkeypatch.setattr(MainAgent, "stream", stream)
+    monkeypatch.setattr(MainAgent, "send", send)
+
+    def drive(_submit, loop):
+        request = WebRequest("request", "phone", "chat", 1, kind, "Tell me a short story.")
+        loop.on_transcription(request.text, {
+            "input_source": "web_text" if kind == "text" else "web_voice",
+            "web_request": request, "web_current": lambda: True,
+            "wake_verified": True, "cancel_event": canceled,
+        }, None)
+
+    result = launch_session("web", ["/exit"], before_commands=drive)
+    replies = [m for m in result.ui.snapshot()["messages"] if m["role"] == "assistant"]
+    assert visible.is_set()
+    assert len(replies) == 1
+    expected = {
+        "complete": "First sentence. Second sentence.",
+        "error": "First sentence. \n\nMy connection cut out before I finished.",
+        "cancel": "First sentence. ",
+    }[outcome]
+    assert replies[0]["text"] == expected
+    assert not replies[0]["live"]
+    assert bool(replies[0].get("interrupted")) == (outcome == "cancel")
+    store = MemoryStore(result.settings.memory.db_path)
+    try:
+        session = store.get_setting(f"active_desktop_conversation:{PERSONA_CONTEXT_VERSION}")
+        turns = [turn for turn in store.get_recent_turns(session) if turn.role == "assistant"]
+        assert len(turns) == 1
+        expected_history = (
+            expected + "\n[Reply was interrupted.]" if outcome == "cancel" else expected
+        )
+        assert turns[0].content == expected_history
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("outcome", ["complete", "error", "cancel"])
+def test_browser_stream_never_exposes_split_secret(launch_session, monkeypatch, outcome):
+    """Intermediate snapshots and interrupted archives must omit withheld key prefixes."""
+    from ciel.agent import AgentResult, MainAgent
+    from ciel.logging import SecretMaskingFilter
+    from ciel.providers.base import LLMStreamChunk
+    from ciel.web import DesktopWebUI
+    from ciel.webapp.requests import WebRequest
+
+    secret = "fixture_" + "x" * 24 + "z"
+    monkeypatch.setattr(SecretMaskingFilter, "_configured_secrets", ())
+    SecretMaskingFilter.register_secrets(secret)
+    progressed, canceled = threading.Event(), threading.Event()
+    snapshots = []
+    original_progress = DesktopWebUI.progress
+
+    def progress(self, text, **kwargs):
+        original_progress(self, text, **kwargs)
+        snapshots.append([m["text"] for m in self.snapshot()["messages"]])
+        progressed.set()
+
+    def stream(self, *_args, **_kwargs):
+        self.last_result = AgentResult(provider="fixture", model="fixture")
+        yield LLMStreamChunk("Key: " + secret[:-1], "fixture", "fixture")
+        assert progressed.wait(2)
+        if outcome == "cancel":
+            canceled.set()
+            return
+        if outcome == "error":
+            raise RuntimeError("Fixture connection cut out")
+        yield LLMStreamChunk(secret[-1], "fixture", "fixture", is_final=True)
+
+    monkeypatch.setattr(DesktopWebUI, "progress", progress)
+    monkeypatch.setattr(MainAgent, "stream", stream)
+
+    def drive(_submit, loop):
+        request = WebRequest("request", "phone", "chat", 1, "text", "Tell me a short story.")
+        loop.on_transcription(request.text, {
+            "input_source": "web_text", "web_request": request, "web_current": lambda: True,
+            "wake_verified": True, "cancel_event": canceled,
+        }, None)
+
+    result = launch_session("web", ["/exit"], before_commands=drive)
+    assert progressed.is_set()
+    assert all(secret[:8] not in text for snapshot in snapshots for text in snapshot)
+    assert all(secret[:8] not in m["text"] for m in result.ui.snapshot()["messages"])
+    store = MemoryStore(result.settings.memory.db_path)
+    try:
+        session = store.get_setting(f"active_desktop_conversation:{PERSONA_CONTEXT_VERSION}")
+        if outcome != "complete":
+            assert all(secret[:8] not in turn.content for turn in store.get_recent_turns(session))
+    finally:
+        store.close()
+
+
+def test_browser_stream_flushes_benign_trailing_digits(launch_session, monkeypatch):
+    """A possible token prefix is only withheld until successful completion."""
+    from ciel.agent import AgentResult, MainAgent
+    from ciel.providers.base import LLMStreamChunk
+    from ciel.webapp.requests import WebRequest
+
+    def stream(self, *_args, **_kwargs):
+        self.last_result = AgentResult(provider="fixture", model="fixture")
+        yield LLMStreamChunk("The answer is 42", "fixture", "fixture", is_final=True)
+
+    monkeypatch.setattr(MainAgent, "stream", stream)
+
+    def drive(_submit, loop):
+        request = WebRequest("request", "phone", "chat", 1, "text", "Tell me a short story.")
+        loop.on_transcription(request.text, {
+            "input_source": "web_text", "web_request": request, "web_current": lambda: True,
+            "wake_verified": True, "cancel_event": threading.Event(),
+        }, None)
+
+    result = launch_session("web", ["/exit"], before_commands=drive)
+    replies = [m["text"] for m in result.ui.snapshot()["messages"] if m["role"] == "assistant"]
+    assert replies == ["The answer is 42"]
+
+
+def test_web_controls_do_not_enable_host_capture_modes(launch_session):
+    result = launch_session('web', ['/mode wake','/mode ambient','/mute on','/exit'])
+    result.loop.set_ambient.assert_not_called()
+    result.loop.set_microphone_mute.assert_not_called()
+    result.loop.start.assert_not_called()
+    result.loop.start_text_only.assert_called_once()

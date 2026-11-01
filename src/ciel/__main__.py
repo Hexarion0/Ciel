@@ -10,27 +10,32 @@ from ciel import __version__
 TOOLKIT_COMMANDS = {"status", "doctor", "devices", "config"}
 COMMANDS = [
     "run", "start", "listen", "web", "setup", "record-samples", "train-wake", "memory",
-    "status", "doctor", "devices", "config", "chat", "help",
+    "status", "doctor", "devices", "config", "chat", "pair", "help",
 ]
 
 
 def _build_parser() -> argparse.ArgumentParser:
     """Build launch help without importing audio or model dependencies."""
     parser = argparse.ArgumentParser(
-        description="CIEL Desktop AI Assistant",
+        prog="ciel",
+        usage="ciel [command] [options]",
+        description="CIEL · Your voice. Your companion.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "Quick commands:\n"
-            "  ciel start [dev]    Start voice conversation\n"
-            "  ciel web            Open the desktop web interface\n"
-            "  ciel setup          Configure voices, providers, and audio\n"
-            "  ciel status         Show the configured setup\n"
-            "  ciel doctor         Check local prerequisites and suggest fixes\n"
-            "  ciel devices        List microphones and speakers\n"
-            "  ciel config         Show effective settings with API keys hidden\n"
-            "  ciel memory --help  Inspect and manage saved memory\n"
-            "  ciel chat --help    Configure automatically started messaging\n"
-            "  ciel help COMMAND   Show help for a command"
+            "Conversation\n"
+            "  ciel start [dev]     Start voice conversation\n"
+            "  ciel web             Open browser chat\n"
+            "  ciel pair            Connect your phone\n"
+            "  ciel chat --help     Set up messaging\n\n"
+            "Your setup\n"
+            "  ciel setup           Choose voices, models, and audio\n"
+            "  ciel status          View the configured setup\n"
+            "  ciel memory --help   Manage saved memory\n\n"
+            "Checks and help\n"
+            "  ciel doctor          Check local prerequisites\n"
+            "  ciel devices         List microphones and speakers\n"
+            "  ciel config          Inspect settings with keys hidden\n"
+            "  ciel help COMMAND    Learn about a command"
         ),
     )
     parser.add_argument("--version", action="version", version=f"CIEL {__version__}")
@@ -39,6 +44,7 @@ def _build_parser() -> argparse.ArgumentParser:
         nargs="?",
         default="run",
         choices=COMMANDS,
+        metavar="command",
         help="Command to run",
     )
     parser.add_argument(
@@ -47,50 +53,57 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["dev"],
         help="Use verbose debug logging (for example: ciel start dev)",
     )
-    parser.add_argument(
+    conversation = parser.add_argument_group("Conversation options")
+    browser = parser.add_argument_group("Browser options")
+    training = parser.add_argument_group("Voice training")
+    conversation.add_argument(
         "--listen",
         action="store_true",
         help="Start the continuous wake-word listener loop with STT transcription",
     )
-    parser.add_argument(
+    conversation.add_argument(
         "--ambient",
         action=argparse.BooleanOptionalAction,
         default=None,
         help="Continuously transcribe speech and reply only when clearly addressed",
     )
-    parser.add_argument(
+    conversation.add_argument(
         "--show-transcripts",
         action=argparse.BooleanOptionalAction,
         default=None,
         help="Log raw STT candidates, including rejected ambient speech, for troubleshooting",
     )
-    parser.add_argument(
+    conversation.add_argument(
         "--show-ai-transcripts",
         action=argparse.BooleanOptionalAction,
         default=None,
         help="Reveal AI captions as the voice speaks",
     )
-    parser.add_argument(
+    conversation.add_argument(
         "--text-input",
         action=argparse.BooleanOptionalAction,
         default=None,
         help="Accept keyboard messages and /mute, /stop, /exit (default: on in a terminal)",
     )
-    parser.add_argument(
+    browser.add_argument(
         "--web-port", type=int, default=8765,
         help="PC-local web interface port (default: 8765)",
     )
-    parser.add_argument(
+    browser.add_argument('--web-host', default=None,
+                         help='Local Wi-Fi IP for phone access (requires HTTPS)')
+    browser.add_argument('--web-cert', help='Local HTTPS certificate trusted by your devices')
+    browser.add_argument('--web-key', help='Private key for the local HTTPS certificate')
+    browser.add_argument(
         "--open-browser", action=argparse.BooleanOptionalAction, default=True,
         help="Open the browser when starting 'ciel web'",
     )
-    parser.add_argument(
+    training.add_argument(
         "--count",
         type=int,
         default=8,
         help="Number of voice samples to record for training (default: 8)",
     )
-    parser.add_argument(
+    training.add_argument(
         "--phrase",
         type=str,
         default="Hey Ciel",
@@ -122,12 +135,16 @@ def main(argv: list[str] | None = None) -> int:
         from ciel.chat.cli import main as chat_main
 
         return chat_main(arguments[1:])
+    if arguments[:1] == ["pair"]:
+        from ciel.webapp.pair_cli import main as pair_main
+
+        return pair_main(arguments[1:])
     if arguments and arguments[0] in TOOLKIT_COMMANDS:
         from ciel.cli import main as toolkit_main
 
         return toolkit_main(arguments)
     args = parser.parse_args(arguments)
-    if args.command in TOOLKIT_COMMANDS | {"memory", "chat", "help"}:
+    if args.command in TOOLKIT_COMMANDS | {"memory", "chat", "pair", "help"}:
         parser.error(f"use 'ciel {args.command}' without launch options before the command")
     if not 1 <= args.web_port <= 65535:
         parser.error("--web-port must be between 1 and 65535")
@@ -194,24 +211,28 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     # Initialize and report audio backend status
-    audio_backend = get_audio_backend()
-    default_input = audio_backend.get_default_input_device()
-    default_output = audio_backend.get_default_output_device()
-    input_name = default_input.name if default_input else "None found"
-    output_name = default_output.name if default_output else "None found"
+    if args.command == 'web':
+        audio_backend = None
+        logger.info('Web mode uses browser microphones and speakers.')
+    else:
+        audio_backend = get_audio_backend()
+        default_input = audio_backend.get_default_input_device()
+        default_output = audio_backend.get_default_output_device()
+        input_name = default_input.name if default_input else "None found"
+        output_name = default_output.name if default_output else "None found"
 
-    logger.info(
-        "Audio Backend: Input='%s' | Output='%s' | Rate=%d Hz",
-        input_name,
-        output_name,
-        settings.audio.sample_rate,
-    )
-    logger.info(
-        "Wake Word: '%s' | STT Model: '%s' (Device: %s)",
-        settings.audio.wake_word,
-        settings.audio.stt_model,
-        settings.audio.stt_device,
-    )
+        logger.info(
+            "Audio Backend: Input='%s' | Output='%s' | Rate=%d Hz",
+            input_name,
+            output_name,
+            settings.audio.sample_rate,
+        )
+        logger.info(
+            "Wake Word: '%s' | STT Model: '%s' (Device: %s)",
+            settings.audio.wake_word,
+            settings.audio.stt_model,
+            settings.audio.stt_device,
+        )
 
     # Report provider configuration status safely (boolean status only, no keys printed)
     nim_status = "configured" if settings.providers.nim_api_key else "not set"

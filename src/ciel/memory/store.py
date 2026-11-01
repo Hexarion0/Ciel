@@ -799,6 +799,44 @@ class MemoryStore:
                     (name, encoded),
                 )
 
+    def desktop_selection(self) -> tuple[str | None, int]:
+        """Read the legacy ID and activation revision from one SQLite snapshot."""
+        from ciel.persona import PERSONA_CONTEXT_VERSION
+
+        key = f"active_desktop_conversation:{PERSONA_CONTEXT_VERSION}"
+        with self._lock:
+            rows = self._get_connection().execute(
+                "SELECT name,value_json FROM memory_settings WHERE name IN (?,?)",
+                (key, key + ':revision'),
+            ).fetchall()
+        values = {row[0]: json.loads(row[1]) for row in rows}
+        return values.get(key), int(values.get(key + ':revision', 0))
+
+    def select_desktop_session(self, session_id: str, expected_revision: int) -> int:
+        """Atomically publish a selection; each activation invalidates earlier work."""
+        from ciel.memory.bridge import _run_id
+        from ciel.persona import PERSONA_CONTEXT_VERSION
+
+        if _run_id(session_id) is None:
+            raise ValueError('Invalid desktop conversation.')
+        key = f"active_desktop_conversation:{PERSONA_CONTEXT_VERSION}"
+        with self._lock:
+            conn = self._get_connection()
+            with conn:
+                conn.execute('BEGIN IMMEDIATE')
+                row = conn.execute(
+                    'SELECT value_json FROM memory_settings WHERE name=?', (key + ':revision',),
+                ).fetchone()
+                revision = int(json.loads(row[0])) if row else 0
+                if type(expected_revision) is not int or expected_revision != revision:
+                    raise ValueError('The active conversation changed. Refresh and try again.')
+                conn.executemany(
+                    'INSERT INTO memory_settings(name,value_json) VALUES (?,?) '
+                    'ON CONFLICT(name) DO UPDATE SET value_json=excluded.value_json',
+                    [(key, json.dumps(session_id)), (key + ':revision', json.dumps(revision + 1))],
+                )
+        return revision + 1
+
     def compare_setting(self, name: str, expected: Any, value: Any) -> bool:
         """Replace a matching JSON snapshot; missing matches None and corrupt rows never match."""
         expected_json = json.dumps(expected, allow_nan=False, sort_keys=True)

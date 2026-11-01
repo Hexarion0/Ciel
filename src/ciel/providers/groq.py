@@ -50,6 +50,7 @@ class GroqProvider(LLMProvider):
             self.api_key = providers.groq_api_key.get_secret_value()
         else:
             self.api_key = None
+        self.default_model = providers.groq_model
         self.timeout = timeout
 
     def is_configured(self) -> bool:

@@ -165,6 +165,9 @@ class ModelRouter:
                 order = ("groq", "nim", "openrouter", "ollama")
             else:
                 order = ("nim", "openrouter", "groq", "ollama")
+            selected = get_settings().providers.primary_provider
+            if selected != 'auto':
+                order = (selected, *(name for name in order if name != selected))
             provider_name = next(
                 (name for name in order if getattr(self.manager, name).is_configured()),
                 order[0],

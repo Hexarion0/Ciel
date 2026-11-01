@@ -283,3 +283,6 @@ __marimo__/
 *~
 .DS_Store
 Thumbs.db
+
+# Local execution and review notes
+.superpowers/

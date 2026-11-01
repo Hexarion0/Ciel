@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 
 from ciel.providers.base import ChatMessage
 
@@ -25,7 +26,7 @@ _TASK_WORDS = set(
     "can could you me please anime manga novel light season episode part chapter volume "
     "continuation continue continues end ends release date price pricing version notes "
     "weather current latest official guide information meaning explain describe summarize "
-    "tell show help".split()
+    "tell show help like uh um".split()
 )
 _QUOTED = re.compile(r'''["“][^"”]*["”]|(?<!\w)['‘][^'’]*['’](?!\w)''')
 _NO_SEARCH = re.compile(
@@ -49,8 +50,8 @@ def _unquoted(text: str) -> str:
     return _QUOTED.sub(lambda match: " " * len(match[0]), text)
 
 
-def subject_correction(text: str, *, contextual: bool = False) -> str:
-    """Read a short explicit name correction, never infer one from a guessed spelling."""
+def subject_correction(text: str, *, contextual: bool = False, previous: str = "") -> str:
+    """Read an owner-provided spelling repair without inventing a replacement name."""
     if "\n" in text or "\r" in text:
         return ""
     text = text.strip()
@@ -64,6 +65,18 @@ def subject_correction(text: str, *, contextual: bool = False) -> str:
         if match is None and contextual:
             match = re.fullmatch(r"(?:no|just)[, ]+(.+?)[.!]?", text, re.I)
         name = match[1].strip() if match else ""
+        if not name and contextual and previous:
+            # A short spoken spelling repair need not contain "I meant". Compare
+            # only the owner's prior subject, never an assistant-suggested title.
+            candidate = text.rstrip(".!").strip()
+            start, end = _subject_span(previous)
+            original = previous[start:end]
+            if (min(len(candidate), len(original)) >= 4
+                    and candidate.casefold() != original.casefold()
+                    and abs(len(candidate) - len(original)) <= 2
+                    and SequenceMatcher(None, candidate.casefold(), original.casefold()).ratio()
+                    >= 0.8):
+                name = candidate
     return name if (1 <= len(name) <= 64 and len(name.split()) <= 6
                     and _NAME.fullmatch(name) and any(char.isalpha() for char in name)) else ""
 
@@ -95,12 +108,8 @@ def search_request_body(request: str) -> str:
     return re.sub(r"\s+(?:for me|please)[.!?]*$", "", body, flags=re.I).strip(" .!?")
 
 
-def replace_search_subject(request: str, subject: str) -> str:
-    """Replace the explicit subject without changing its surrounding requested outcome.
-
-    This is question projection only. The caller establishes whether a correction
-    actually belongs to an existing task and whether a lookup is authorized.
-    """
+def _subject_span(request: str, subject: str = "") -> tuple[int, int]:
+    """Locate the owner's subject, skipping request framing and spoken fillers."""
     match = _SEARCH.search(_unquoted(request))
     # Skip conversational framing by span, rather than treating names such as
     # "Ciel" or "Know" as generic subject words everywhere.
@@ -111,7 +120,7 @@ def replace_search_subject(request: str, subject: str) -> str:
     start = next((i for i, word in enumerate(words)
                   if word[0].casefold() not in _TASK_WORDS), None)
     if start is None:
-        return request[:offset] + subject + " " + body.strip()
+        return offset, offset
     end = start + 1
     while words[start][0][0].isupper() and end < len(words) and end - start < 6:
         word = words[end][0]
@@ -126,8 +135,15 @@ def replace_search_subject(request: str, subject: str) -> str:
                 and any(item[0].casefold() in _CAPABILITIES for item in words[end + 1:end + 4])):
             break
         end += 1
-    return (request[:offset] + body[:words[start].start()] + subject
-            + body[words[end - 1].end():])
+    return offset + words[start].start(), offset + words[end - 1].end()
+
+
+def replace_search_subject(request: str, subject: str) -> str:
+    """Replace a user subject while preserving its requested outcome and framing."""
+    start, end = _subject_span(request, subject)
+    if start == end:
+        return request[:start] + subject + " " + request[end:].strip()
+    return request[:start] + subject + request[end:]
 
 
 def corrected_search(text: str, messages: list[ChatMessage]) -> SearchCorrection | None:

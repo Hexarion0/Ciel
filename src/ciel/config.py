@@ -144,6 +144,10 @@ class InternetConfig(BaseModel):
 class ProviderConfig(BaseModel):
     """AI Provider API keys and endpoints."""
 
+    primary_provider: Literal["auto", "nim", "groq", "openrouter", "ollama"] = "auto"
+    groq_model: str = "llama-3.1-8b-instant"
+    openrouter_model: str = "openrouter/free"
+    ollama_model: str = "llama3.2"
     nim_api_key: SecretStr | None = Field(
         default=None,
         description="NVIDIA NIM API key",
@@ -206,7 +210,9 @@ class AudioConfig(BaseModel):
     barge_in_mode: Literal["speech", "wake"] = Field(default="speech")
     barge_in_speech_seconds: float = Field(default=0.24, ge=0.16, le=1.0)
     ambient_followup_seconds: float = Field(default=300.0, ge=2, le=600)
-    ambient_followup_policy: Literal["conversation", "strict"] = Field(default="conversation")
+    ambient_followup_policy: Literal["conversation", "strict", "always"] = Field(
+        default="conversation",
+    )
     wake_models: list[str] = Field(
         default_factory=list,
         description="openWakeWord model names/paths (empty = Whisper-only keyword spotter)",
@@ -325,6 +331,17 @@ class Settings(BaseSettings):
         description="Optional UTF-8 personality preferences file; empty disables it",
     )
 
+    # Hosted web access; an exact private IP requires a local HTTPS certificate.
+    web_host: str = '127.0.0.1'
+    web_insecure_lan: bool = False
+    web_cert: str = ''
+    web_key: str = ''
+
+    primary_provider: Literal["auto", "nim", "groq", "openrouter", "ollama"] = "auto"
+    groq_model: str = "llama-3.1-8b-instant"
+    openrouter_model: str = "openrouter/free"
+    ollama_model: str = "llama3.2"
+
     # Provider settings
     nim_api_key: SecretStr | None = Field(default=None)
     nim_model: str = Field(default=DEFAULT_NIM_MODEL)
@@ -404,7 +421,9 @@ class Settings(BaseSettings):
     barge_in_mode: Literal["speech", "wake"] = Field(default="speech")
     barge_in_speech_seconds: float = Field(default=0.24, ge=0.16, le=1.0)
     ambient_followup_seconds: float = Field(default=300.0, ge=2, le=600)
-    ambient_followup_policy: Literal["conversation", "strict"] = Field(default="conversation")
+    ambient_followup_policy: Literal["conversation", "strict", "always"] = Field(
+        default="conversation",
+    )
     stt_model: str = Field(default="small.en")
     stt_device: str = Field(default="cuda")
     stt_compute_type: str = Field(default="int8_float16")
@@ -551,6 +570,8 @@ class Settings(BaseSettings):
     def providers(self) -> ProviderConfig:
         """Structured provider configuration."""
         return ProviderConfig(
+            primary_provider=self.primary_provider, groq_model=self.groq_model,
+            openrouter_model=self.openrouter_model, ollama_model=self.ollama_model,
             nim_api_key=self.nim_api_key,
             nim_model=self.nim_model,
             nim_complex_model=self.nim_complex_model,

@@ -124,6 +124,7 @@ class ChatSession:
         )
         self.router = router if router is not None else get_model_router()
         self._base_session_id = session_id
+        self._activation_revision = self.store.desktop_selection()[1]
         session_id = current_conversation_id(settings, session_id, store=self.store)
         self.conversation = ConversationManager(
             store=self.store, session_id=session_id,
@@ -150,8 +151,10 @@ class ChatSession:
     def _refresh_conversation(self) -> None:
         """Move a persistent paired chat to the current launch without deleting archives."""
         session_id = current_conversation_id(self.settings, self._base_session_id, store=self.store)
-        if session_id == self.conversation.session_id:
+        revision = self.store.desktop_selection()[1]
+        if session_id == self.conversation.session_id and revision == self._activation_revision:
             return
+        self._activation_revision = revision
         self.memory.cancel_proposal()
         self.screen.close()
         self.context.tools.close()

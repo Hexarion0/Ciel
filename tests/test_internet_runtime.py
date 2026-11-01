@@ -318,26 +318,37 @@ def test_web_sources_are_visible_during_playback_and_survive_interruption(
     tts = MagicMock()
     tts.clean_text_for_speech.side_effect = TextToSpeech.clean_text_for_speech
 
-    def speak(text, **controls):
-        controls["on_start"]()
-        assert ui.snapshot()["messages"][-1]["sources"] == [source.to_dict()]
-        controls["on_progress"](text[:10], False, False)
-        canceled.set()
-        controls["on_progress"](text[:10], True, True)
-        return False
+    from ciel.webapp.requests import WebRequest
 
-    tts.speak.side_effect = speak
+    inspected = Event()
+
+    def synthesize(text, **controls):
+        assert ui.snapshot()["messages"][-1]["sources"] == [source.to_dict()]
+        canceled.set()
+        inspected.set()
+        return
+        yield
+
+    tts.synthesize_stream.side_effect = synthesize
+    ui.channels.configure(None, tts)
     _, _, _, store, turns = run_callbacks(
         tmp_path, monkeypatch,
-        [("Ciel, today's news?", {"cancel_event": canceled})],
+        [("Ciel, today's news?", {
+            "input_source":"web_text", "cancel_event":canceled,
+            "web_request":WebRequest('request','pc','chat',1,'text',"Ciel, today's news?"),
+            "web_current":lambda: True,
+        })],
         router=router, tts=tts, streaming=streaming,
         cli_args=("web", "--no-open-browser"),
     )
     try:
+        assert inspected.wait(1)
         shown = ui.snapshot()["messages"][-1]
-        assert shown["interrupted"] and shown["sources"] == [source.to_dict()]
+        assert shown["sources"] == [source.to_dict()]
         assert turns[-1].sources == [source.to_dict()]
-        assert shown["text"] == reply[:10]
+        assert shown["text"].startswith(reply)
+        assert shown["text"] == turns[-1].content
+        tts.speak.assert_not_called()
     finally:
         store.close()
 

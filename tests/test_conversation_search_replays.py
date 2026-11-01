@@ -340,12 +340,31 @@ def test_bounded_search_replay_finishes_with_evidence_instead_of_tool_limit(
     fact = "CedarDB supports Linux desktop systems."
     queries = (["CedarDB Linux", "CedarDB Linux"] if pattern == "repeated_query" else
                ["CedarDB platform guide", "CedarDB installation guide", "CedarDB Linux"])
+    report = _report(fact)
+    if pattern == "last_round_new_lead":
+        parsed = json.loads(report.content)
+        parsed["claims"][0]["source"] = 3
+        report.content = json.dumps(parsed)
     router = _router([*(_tool_call("web_search", query=query) for query in queries),
-                      _report(fact)])
+                      report])
     session = ChatSession(_settings(tmp_path), channel="telegram", session_id="replay-owner",
                           router=router)
     source = _source(fact)
     session.internet.lookup = Mock(return_value=InternetResult(attempted=True, sources=[source]))
+    if pattern == "last_round_new_lead":
+        # Each lead must actually add evidence. Repeated identical results now
+        # trigger synthesis instead of spending another lookup on the same page.
+        session.internet.lookup.side_effect = [
+            InternetResult(attempted=True, sources=[InternetSource(
+                "CedarDB platform guide", "https://example.org/platforms",
+                content="CedarDB has a desktop platform guide.",
+            )]),
+            InternetResult(attempted=True, sources=[InternetSource(
+                "CedarDB installation guide", "https://example.org/install",
+                content="CedarDB installation instructions cover desktop deployment.",
+            )]),
+            InternetResult(attempted=True, sources=[source]),
+        ]
     try:
         answer = session.reply("Search whether CedarDB supports Linux desktop systems.")
         assert fact in answer and "tool limit" not in answer

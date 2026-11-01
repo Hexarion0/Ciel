@@ -38,6 +38,7 @@ class EvaluationCase:
     forbidden_goal: tuple[str, ...]
     fact: str
     required_answer: tuple[str, ...]
+    forbidden_answer: tuple[str, ...] = ()
 
 
 CASES = (
@@ -115,6 +116,35 @@ CASES = (
         "CedarDB supports Linux desktop systems. "
         "The reference guide does not document video calling support.",
         ("Linux", "video"),
+    ),
+    EvaluationCase(
+        "bare_spoken_name_repair_preserves_mod_context",
+        (("user", "Hey Ciel, do you know about like Tenzura mod in Minecraft?"),
+         ("assistant", "I'm not familiar with that mod. Can you tell me more?")),
+        "Tensura.", ("Tensura", "Minecraft", "mod"), ("Tenzura",),
+        "Tensura is a Minecraft mod inspired by That Time I Got Reincarnated as a Slime.",
+        ("Tensura",),
+    ),
+    EvaluationCase(
+        "gameplay_explanation_advances_beyond_definition",
+        (("user", "Do you know the Ambercraft Minecraft mod?"),
+         ("assistant", "Ambercraft is a Minecraft mod with races and skills.")),
+        "I'm currently playing the mod. Research it so I can understand how to play.",
+        ("Ambercraft", "Minecraft", "play"), (),
+        "Ambercraft is a Minecraft mod with races and skills. "
+        "Open the quest journal to see the first progression tasks. "
+        "Complete training tasks to earn points for unlocking skills.",
+        ("quest journal", "training", "skills"),
+        ("Ambercraft is a Minecraft mod with races and skills",),
+    ),
+    EvaluationCase(
+        "phonetic_title_retry_uses_synopsis",
+        (("user", "What is Osinoko anime about?"),
+         ("assistant", "I couldn't find usable evidence for that title.")),
+        "Can you try again?", ("Osinoko", "anime"), (),
+        "Oshi no Ko follows a doctor reborn as the child of an idol. "
+        "The story explores the entertainment industry.",
+        ("Oshi no Ko", "idol"),
     ),
 )
 
@@ -254,6 +284,8 @@ def evaluate(case: EvaluationCase, router: Any, *, deadline: float, maximum: int
                                               for term in case.forbidden_goal),
                 "useful_supported_answer": all(term.casefold() in answer.casefold()
                                                for term in case.required_answer),
+                "no_repeated_background": not any(term.casefold() in answer.casefold()
+                                                  for term in case.forbidden_answer),
                 "cited_fixture": bool(sources) and all(
                     source["url"] == "https://example.org/synthetic/reference"
                     for source in sources

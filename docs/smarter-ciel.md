@@ -3,11 +3,13 @@
 Design agreed through the interview on **2026-10-25**. This document describes
 proposed work; it is not a release announcement.
 
-Implementation update, **2026-10-28**: the default native path now has shared task
+Implementation update, **2026-10-30**: the default native path now has shared task
 continuity, supported search overviews/partial answers, and a normal 30-second
 research budget. See the [conversation/search evaluation](conversation-search-evaluation.md)
-for current evidence and limits. The optional observation and initiative work below
-remains proposed.
+for current evidence and limits. Session-only optional observation and repeated-error
+coding hints are now implemented; see [controls and acceptance limits](screen-initiative.md).
+Anime comments and verified Zen playback-pause detection remain proposed. Sustained
+desktop, microphone, and image-quality acceptance remain open.
 
 ## Desired experience
 

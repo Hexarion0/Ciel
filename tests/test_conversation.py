@@ -63,3 +63,13 @@ def test_custom_wake_phrase_is_removed():
 
     assert strip_wake_phrase("Hey Jarvis. Open the browser.", "hey jarvis") == "Open the browser."
     assert strip_wake_phrase("So computer, open the browser.", "so computer") == "open the browser."
+
+
+@pytest.mark.parametrize('text', [
+    'Ciel is the name of the assistant.', 'Well, Ciel said hello.',
+    'Ciel has a new interface.',
+])
+def test_assistant_name_as_sentence_subject_is_not_stripped_as_a_wake_phrase(text):
+    from ciel.conversation import strip_wake_phrase
+
+    assert strip_wake_phrase(text) == text

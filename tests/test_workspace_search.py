@@ -34,11 +34,14 @@ class FileWorkspace:
         self.metadata = {}
         self.get = Mock(return_value={"text": "exact source excerpt"})
 
-    def documents(self):
-        paths = [self.root / "MEMORY.md", self.root / "USER.md"]
-        paths += sorted((self.root / "memory").rglob("*.md"))
+    def documents(self, *, paths=None):
+        if paths is None:
+            selected = [self.root / "MEMORY.md", self.root / "USER.md"]
+            selected += sorted((self.root / "memory").rglob("*.md"))
+        else:
+            selected = [self.root / path for path in paths]
         result = []
-        for path in paths:
+        for path in selected:
             if path.is_file():
                 text = path.read_text(encoding="utf-8")
                 relative = path.relative_to(self.root).as_posix()

@@ -858,6 +858,16 @@ def _relevant(query: str, source: InternetSource) -> bool:
     identifiers = {term for term in expected if re.fullmatch(r"(?:[a-z]{2,}\d+|[a-z]\d{2,})", term)}
     if not identifiers <= actual:
         return False
+    # Transcripts can join a multiword title into one phonetic token. Compare
+    # adjacent title/path words as retrieval candidates; the independent answer
+    # check still decides whether this is the user's intended work.
+    compounds = set()
+    for label in (source.title[:240], unquote(parsed.path)[:500]):
+        words = re.findall(r"[^\W_]+", label.casefold())[:64]
+        for size in range(2, 5):
+            compounds.update("".join(words[index:index + size])
+                             for index in range(len(words) - size + 1))
+    name_candidates = actual | compounds
     matches = {
         term for term in expected if term in actual or (
             len(term) >= 5 and any(
@@ -865,7 +875,7 @@ def _relevant(query: str, source: InternetSource) -> bool:
                 and re.findall(r"\d+", term) == re.findall(r"\d+", candidate)
                 and SequenceMatcher(None, term.replace("-", ""), candidate.replace("-", ""))
                 .ratio() >= 0.86
-                for candidate in actual
+                for candidate in name_candidates
             )
         )
     }

@@ -320,15 +320,18 @@ class MemoryWorkspace:
                 )
         return paths
 
-    def documents(self) -> list[MemoryDocument]:
-        """Discover current Markdown; reuse bounded text/hash caches after fresh stat checks."""
+    def documents(self, *, paths: tuple[str, ...] | None = None) -> list[MemoryDocument]:
+        """Read fresh Markdown, optionally restricted to exact paths without archive traversal."""
         with self.locked():
             state = self._registry()
-            paths = self._document_paths()
-            live = set(paths)
-            for path in set(self._document_cache) - live:
+            selected = self._document_paths() if paths is None else [
+                path for path in dict.fromkeys(paths) if self._path(path).exists()
+            ]
+            live = set(selected)
+            checked = set(self._document_cache) if paths is None else set(paths)
+            for path in checked - live:
                 self._discard_document(path)
-            return [self._document(path, state) for path in paths]
+            return [self._document(path, state) for path in selected]
 
     def provenance(self, path: str) -> dict[str, Any]:
         """Read application-owned source classification without interpreting note prose."""

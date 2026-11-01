@@ -50,6 +50,7 @@ class OpenRouterProvider(LLMProvider):
             self.api_key = providers.openrouter_api_key.get_secret_value()
         else:
             self.api_key = None
+        self.default_model = providers.openrouter_model
         self.timeout = timeout
 
     def is_configured(self) -> bool:

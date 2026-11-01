@@ -250,8 +250,9 @@ class WorkspaceMemorySearch:
     def _metadata(conn: sqlite3.Connection) -> dict[str, str]:
         return dict(conn.execute("SELECT key,value FROM workspace_search_meta"))
 
-    def _documents(self) -> dict[str, object]:
-        documents = self.workspace.documents()
+    def _documents(self, paths: tuple[str, ...] | None = None) -> dict[str, object]:
+        documents = (self.workspace.documents() if paths is None else
+                     self.workspace.documents(paths=paths))
         if len(documents) > self.max_documents:
             raise ValueError("Memory workspace exceeds the configured document limit")
         result = {}
@@ -330,29 +331,44 @@ class WorkspaceMemorySearch:
     def sync(
         self, force: bool = False, *, _embed: bool = True,
         _current: Callable[[], bool] | None = None,
+        _paths: tuple[str, ...] | None = None,
     ) -> WorkspaceIndexReport:
         """Publish fresh text atomically, then infer without holding the search lock.
 
         Explicit synchronization may wait for its configured embedding adapter.
         Concurrent searches reconcile text independently and never queue behind it.
         """
+        if _paths == ():
+            return self._last_report
         with self._lock:
-            documents = self._documents()
-            self._live = documents
+            documents = self._documents(_paths)
+            if _paths is None:
+                self._live = documents
+            else:
+                self._live = {path: doc for path, doc in self._live.items() if path not in _paths}
+                self._live.update(documents)
             conn = self._connect()
             try:
                 metadata = self._metadata(conn)
+                condition = ("" if _paths is None else
+                             f" WHERE path IN ({','.join('?' for _ in _paths)})")
+                arguments = () if _paths is None else _paths
                 previous = {
                     row["path"]: row for row in conn.execute(
-                        "SELECT * FROM workspace_search_documents",
+                        "SELECT * FROM workspace_search_documents" + condition, arguments,
                     )
                 }
+                other_documents = conn.execute(
+                    "SELECT count(*) FROM workspace_search_documents",
+                ).fetchone()[0] - len(previous)
+                if other_documents + len(documents) > self.max_documents:
+                    raise ValueError("Memory workspace exceeds the configured document limit")
                 rebuild = force or metadata.get("version") != _SCHEMA_VERSION or (
                     metadata.get("chunking") != f"{self.chunk_tokens}:{self.chunk_overlap}"
                 )
-                changed = {
+                source_changed = {
                     path for path, doc in documents.items()
-                    if rebuild or path not in previous or any((
+                    if path not in previous or any((
                         previous[path]["digest"] != doc.digest,
                         previous[path]["modified_ns"] != doc.modified_ns,
                         previous[path]["origin"] != doc.origin,
@@ -360,6 +376,7 @@ class WorkspaceMemorySearch:
                         previous[path]["session_id"] != doc.session_id,
                     ))
                 }
+                changed = set(documents) if rebuild else source_changed
                 removed = set(previous) - set(documents)
                 chunks = []
                 for path in sorted(changed):
@@ -373,11 +390,18 @@ class WorkspaceMemorySearch:
                             text, content_hash, _normalized(path), _normalized(Path(path).name),
                             _normalized(Path(path).stem),
                         ))
-                unchanged_chunks = [tuple(row) for row in conn.execute(
-                    "SELECT * FROM workspace_search_chunks ORDER BY path,start_line,id",
-                ) if row["path"] not in changed | removed]
+                previous_chunks = conn.execute(
+                    "SELECT * FROM workspace_search_chunks" + condition +
+                    " ORDER BY path,start_line,id", arguments,
+                ).fetchall()
+                unchanged_chunks = [tuple(row) for row in previous_chunks
+                                    if row["path"] not in changed | removed]
                 all_chunks = unchanged_chunks + chunks
-                if len(all_chunks) > self.max_chunks:
+                other_chunks = conn.execute(
+                    "SELECT count(*) FROM workspace_search_chunks",
+                ).fetchone()[0] - len(previous_chunks)
+                total_chunks = other_chunks + len(all_chunks)
+                if total_chunks > self.max_chunks:
                     raise ValueError("Memory workspace exceeds the configured chunk limit")
                 with conn:
                     conn.execute("BEGIN IMMEDIATE")
@@ -404,20 +428,28 @@ class WorkspaceMemorySearch:
                     dimensions = metadata.get("dimensions", "0") if (
                         metadata.get("identity") == self._identity
                     ) else "0"
+                    updates = [("identity", self._identity), ("dimensions", dimensions)]
+                    # A partial rebuild cannot certify unchanged, unselected chunks.
+                    # Leave their old format marker for the next full synchronization.
+                    if _paths is None or not other_documents:
+                        updates.extend([
+                            ("version", _SCHEMA_VERSION),
+                            ("chunking", f"{self.chunk_tokens}:{self.chunk_overlap}"),
+                        ])
                     conn.executemany(
                         "INSERT OR REPLACE INTO workspace_search_meta VALUES (?,?)",
-                        [("version", _SCHEMA_VERSION), ("identity", self._identity),
-                         ("dimensions", dimensions),
-                         ("chunking", f"{self.chunk_tokens}:{self.chunk_overlap}")],
+                        updates,
                     )
-                if changed or removed or rebuild:
+                if source_changed or removed or (rebuild and (
+                    _paths is None or set(map(tuple, previous_chunks)) != set(all_chunks)
+                )):
                     self._generation += 1
                     self._semantic_cache.clear()
                 generation = self._generation
                 if not self._embedding_retry_at:
                     self._error = None
                 self._last_report = WorkspaceIndexReport(
-                    len(changed), len(documents) - len(changed), len(removed), len(all_chunks),
+                    len(changed), len(documents) - len(changed), len(removed), total_chunks,
                     error=self._error,
                 )
                 report = self._last_report
@@ -445,7 +477,7 @@ class WorkspaceMemorySearch:
                         _current is not None and not _current()
                     ):
                         return report
-                    live = self._documents()
+                    live = self._documents(_paths)
                     if set(live) != set(documents) or any(
                         (live[path].digest, live[path].origin, live[path].local_only)
                         != (doc.digest, doc.origin, doc.local_only)
@@ -455,7 +487,7 @@ class WorkspaceMemorySearch:
                     deadline = time.monotonic() + self.sql_timeout
                     conn.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
                     with conn:
-                        if force and not error:
+                        if force and not error and _paths is None:
                             conn.execute(
                                 "DELETE FROM workspace_search_embeddings WHERE identity=?",
                                 (self._identity,),
@@ -631,7 +663,7 @@ class WorkspaceMemorySearch:
 
             def infer() -> None:
                 try:
-                    self.sync()
+                    self.sync(_paths=allowed_paths)
                     if not self._embedding_lock.acquire(False):
                         return
                     try:
@@ -721,15 +753,17 @@ class WorkspaceMemorySearch:
             return []
         if len(set(_WORD.findall(_normalized(query)))) > 128:
             raise ValueError("Memory search query has too many terms")
-        self.sync(_embed=False)
+        if allowed_paths == () or allowed_origins == ():
+            return []
+        self.sync(_embed=False, _paths=allowed_paths)
         semantic = self._bounded_semantic(query, local_only, allowed_paths, allowed_origins)
         with self._lock:
             conn = self._connect()
             try:
-                self._live = self._documents()
+                live = self._documents(allowed_paths)
                 rows = [row for row in self._rows(conn, local_only, allowed_paths, allowed_origins)
                         if self._permitted(
-                            row, self._live, local_only, allowed_paths, allowed_origins,
+                            row, live, local_only, allowed_paths, allowed_origins,
                         )]
                 by_id = {row["id"]: row for row in rows}
                 lexical = self._lexical(conn, query, set(by_id))
@@ -759,7 +793,7 @@ class WorkspaceMemorySearch:
                     key=lambda item: (-item[0], -item[1], item[2]["path"], item[2]["start_line"]),
                 )
                 # Never let content withdrawn during inference consume a result slot.
-                live = self._documents()
+                live = self._documents(allowed_paths)
                 ranked = [item for item in ranked if self._permitted(
                     item[2], live, local_only, allowed_paths, allowed_origins,
                 )][:self.candidate_limit * 2]

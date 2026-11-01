@@ -37,6 +37,7 @@ class OllamaProvider(LLMProvider):
     def __init__(self, host: str | None = None, timeout: float = 60.0) -> None:
         settings = get_settings()
         self.host = (host or settings.providers.ollama_host).rstrip("/")
+        self.default_model = getattr(settings.providers, 'ollama_model', type(self).default_model)
         self.timeout = timeout
 
     def is_configured(self) -> bool:

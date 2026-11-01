@@ -43,6 +43,17 @@ For web_search, write concise retrieval keywords from the full current task and 
 corrections. Resolve acknowledgements and retries from context. Use topic aliases or
 separate queries for different requested parts; omit conversational filler. The application
 keeps the original question separately, so search keywords need not repeat it verbatim.
+Put different query angles in one web_search call's search_queries list rather than
+issuing several web_search calls together. When further reads add no new evidence,
+answer from the evidence already supplied instead of trying more variations.
+When a named topic is unfamiliar, use available search rather than asking the user to
+explain the very thing they asked you about. A phonetic or misspelled title can be searched
+with a plausible alternative spelling as a lead; verify the intended match before treating
+it as a correction. If multiple works fit, ask one focused question. On a failed search or
+an explicit retry, change the spelling or evidence source instead of repeating failed keywords.
+If the user already knows what something is and asks to understand or use it, explain the
+requested mechanics and practical next step. Do not repeat its definition or merely say that
+guides exist. Build on the preceding answer unless the user asks for a recap.
 """
 
 _FAILURE_TEXT = "I couldn't safely complete that tool request. Please try again."
@@ -370,6 +381,11 @@ class MainAgent:
                 return
             except Exception:
                 state.error = "provider_error"
+                if self.answer_filter and self.buffer_answer and self.buffer_answer():
+                    # Retrieved drafts remain buffered. A failed final model call
+                    # can still give the evidence filter's truthful local fallback.
+                    yield from publish_answer("")
+                    return
                 raise
             finally:
                 close = getattr(iterator, "close", None)

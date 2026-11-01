@@ -314,3 +314,15 @@ def test_private_provider_failure_never_reaches_cloud(purpose):
     manager.ollama.stream.assert_called_once()
     for name in ("nim", "groq", "openrouter"):
         getattr(manager, name).stream.assert_not_called()
+
+
+def test_browser_selected_provider_overrides_auto_order_but_not_private_routing(
+    mock_manager, monkeypatch,
+):
+    from ciel.config import Settings
+
+    settings = Settings(_env_file=None, primary_provider='groq')
+    monkeypatch.setattr('ciel.providers.router.get_settings', lambda: settings)
+    router = ModelRouter(manager=mock_manager)
+    assert router.route('Hello').provider_name == 'groq'
+    assert router.route('Hello', local_only=True).provider_name == 'ollama'

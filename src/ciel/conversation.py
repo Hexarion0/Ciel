@@ -42,6 +42,10 @@ def is_farewell(text: str) -> bool:
 
 def strip_wake_phrase(text: str, wake_phrase: str = "hey ciel") -> str:
     """Remove leading wake phrases and their punctuation without changing the query."""
+    candidate = _ADDRESS_FILLERS.sub('', text.strip(), count=1)
+    if (re.search(r'\b' + _CIEL_NAMES + r'\b', wake_phrase, re.I)
+            and re.match(r'^' + _CIEL_NAMES + r'\s+(?:is|was|has|said|told)\b', candidate, re.I)):
+        return text.strip()
     configured = r"[\s,]+".join(re.escape(word) for word in wake_phrase.split())
     variants = [configured] if configured else []
     if re.search(r"\b" + _CIEL_NAMES + r"\b", wake_phrase, re.IGNORECASE):

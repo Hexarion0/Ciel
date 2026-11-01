@@ -472,8 +472,12 @@ def resolve_web_goal(
     if inherited:
         from ciel.task_context import resolve_task_context
 
-        if resolve_task_context(text, messages).kind == "acceptance":
-            current = []  # The acknowledgement selects the task; it is not question data.
+        if resolve_task_context(text, messages).kind in {
+            "retry", "continue", "correction", "detail", "followup", "acceptance",
+        }:
+            # The shared task projection already contains the latest amendment;
+            # acknowledgements select that task without becoming question data.
+            current = []
     parts: list[str] = []
     for value in [*inherited, *current]:
         value = _scope_text(value)
@@ -1022,7 +1026,7 @@ class AIController:
                                                    for quote, claim, source in translations
                                                    if source in indices
                                                })
-                if verified != web_answer_fallback(lookup):
+                if verified != web_answer_fallback(answer_lookup):
                     if omitted and "couldn't verify the remaining details" not in verified:
                         verified += " I couldn't verify the remaining details."
                     best = ControllerReply(verified, response.provider, response.model,

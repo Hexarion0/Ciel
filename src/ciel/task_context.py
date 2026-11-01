@@ -295,7 +295,7 @@ def _next_task(
     followup = _reading_followup(clean, previous, assistant)
     if followup:
         return replace(previous, request=followup, kind="followup")
-    subject = subject_correction(clean, contextual=True)
+    subject = subject_correction(clean, contextual=True, previous=previous.request)
     if subject and previous.task_type == "screen":
         return replace(previous, request=_merge_detail(previous.request, clean), kind="detail")
     if (subject and _terms(subject) and not _DETAIL.match(subject)

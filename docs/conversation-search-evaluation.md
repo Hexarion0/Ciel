@@ -1,5 +1,55 @@
 # Conversation and search evaluation
 
+## Spoken corrections, useful explanations, and search recovery — 2026-10-30
+
+The supplied Minecraft-mod conversation exposed task projection losing the original
+scope after a bare spoken name correction. Spoken fillers such as "like" could also
+be replaced instead of the name. Close owner-provided spelling repairs now preserve
+the existing subject and task; unrelated short turns do not become corrections.
+Follow-up projections include the latest request once instead of duplicating it.
+
+General empty claims reports can use one model-proposed new search lead, including
+when the first lookup returned no sources. This retains the same research deadline,
+scope checks, cancellation, source attribution, and independent relevance check.
+Adjacent words in source titles and URL paths can establish a close spelling lead
+for a joined phonetic title, without overriding explicit episode/season constraints.
+The application does not keep a list of special anime-title substitutions.
+
+An unchanged second lookup requests final synthesis instead of more query variations.
+Explanation follow-ups omit exact sentences from the preceding assistant answer;
+requested recaps and interrupted continuations remain available. Earlier assistant
+text is used only to avoid repeated delivery, never as proof of a fact. Rejected
+extra claims in native replies no longer automatically add the generic "remaining details" suffix.
+Explicitly requested missing details and additional lookup failures remain disclosed.
+Empty searches distinguish no usable sources from found-but-unverified pages.
+Provider failure after retrieval uses the local evidence fallback rather than
+discarding the lookup for the generic failed-request message.
+
+Regression cases are in `tests/test_conversation_search_quality.py`. The hosted
+synthetic evaluation now covers a bare spoken name correction, a gameplay follow-up
+that must advance beyond the definition, and a phonetic-title retry. The stricter
+gameplay replay rejected an earlier response that repeated the definition despite
+providing useful steps; the final replay retained only the supported practical steps.
+It completed in 12.211 seconds with two fixture lookups, versus seven lookups in
+the initial sample. These are small synthetic measurements, not latency guarantees.
+
+Separate real public retrieval returned an Oshi no Ko synopsis source for the
+"Osinoko" query in 5.957 seconds and beginner Tensura wiki material in 3.834 seconds.
+These checks measure retrieval, not a complete spoken conversation or microphone
+accuracy. A separate full text-path replay used temporary empty memory, synthetic
+dialogue shaped like the report, the configured model, and real public search.
+The gameplay follow-up returned progression/skill guidance in 13.058 seconds;
+the phonetic-title retry returned attributed synopsis findings in 26.202 seconds.
+Those two samples do not establish sustained accuracy, voice delivery, or consistently
+short research latency. Diagnostics remain local under ignored
+`data/diagnostics/conversation-quality/`. No speech-recognition, voice, or provider
+selection settings were changed.
+
+Validation: **4,442 passed, 5 hardware tests deselected** in 105.55 seconds; Ruff
+and diff whitespace checks passed. The focused regression file contains 22 cases.
+The final suite used local socket access for the desktop/web fixtures; the
+restricted run blocked those fixtures before application behavior was exercised.
+
 ## Pre-push review (2026-10-30)
 
 Review added regressions for four edge cases and corrected them before publication:
