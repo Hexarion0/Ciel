@@ -160,8 +160,14 @@ def resolve_request(query: str, *, active: bool = False) -> ScreenRequest | None
 
 def screen_scope(conversation: Any) -> tuple[tuple[str, int], ...]:
     """Identify paired archives and persisted reset generations across processes."""
-    return tuple((identity, conversation.store.get_session_generation(identity))
-                 for identity in conversation.context_session_ids())
+    scope = tuple((identity, conversation.store.get_session_generation(identity))
+                  for identity in conversation.context_session_ids())
+    selection = getattr(conversation.store, 'desktop_selection', None)
+    if callable(selection) and any(s.startswith('desktop_session:') for s, _ in scope):
+        revision = selection()[1]
+        if type(revision) is int and revision > 0:
+            scope += (('desktop_activation', revision),)
+    return scope
 
 
 def _png(image: Image.Image) -> bytes:
@@ -438,7 +444,11 @@ class ScreenService:
         """Check expiry/reset from transport threads without resolving new owner context."""
         try:
             return bool(self._cache and all(
-                generation == self.conversation.store.get_session_generation(identity)
+                generation == (
+                    self.conversation.store.desktop_selection()[1]
+                    if identity == 'desktop_activation'
+                    else self.conversation.store.get_session_generation(identity)
+                )
                 for identity, generation in self._epochs
             ) and self._cache.contains(result.capture_id))
         except (OSError, ScreenCacheError):

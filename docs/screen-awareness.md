@@ -203,5 +203,7 @@ checks captured no pixels. Actual
 all-monitor image quality, pointer targeting, and live paired Telegram handoff
 remain acceptance work.
 
-Incoming Telegram image uploads, documents, continuous observation, and clicking
-or typing remain separate roadmap work. See the [roadmap](roadmap.md).
+Incoming Telegram image uploads, documents, and clicking or typing remain separate
+roadmap work. Optional periodic desktop observation and coding hints are documented
+separately in [screen initiative](screen-initiative.md); ordinary screen requests
+retain the behavior described here. See the [roadmap](roadmap.md).
