@@ -291,6 +291,7 @@ def run_callbacks(
                     kwargs["on_transcript_observed"](observed_text, observed_info)
 
         loop.start = start
+        loop.start_text_only = start
         return loop
 
     def interrupt(_seconds):

@@ -71,8 +71,11 @@ def desktop(tmp_path, monkeypatch):
     )
 
 
-def _assert_cleanup(desktop):
-    desktop.backend.start_stream.assert_called_once()
+def _assert_cleanup(desktop, *, web_only=False):
+    if web_only:
+        desktop.backend.start_stream.assert_not_called()
+    else:
+        desktop.backend.start_stream.assert_called_once()
     desktop.tts.close.assert_called_once()
     assert len(desktop.loops) == 1
     assert not desktop.loops[0].is_running
@@ -154,12 +157,12 @@ def test_web_chat_works_without_microphone_or_terminal_input(desktop, monkeypatc
     assert __main__.main(["web", "--no-text-input", "--no-open-browser"]) == 0
 
     assert [entry["text"] for entry in ui.snapshot()["messages"]] == [QUESTION, ANSWER]
-    assert ui.snapshot()["muted"]
+    assert ui.snapshot()["pc_capture"] is False
     assert [item[0] for item in desktop.transcripts] == [QUESTION]
     assert desktop.transcripts[0][1]["input_source"] == "keyboard"
     terminal_start.assert_not_called()
     ui.close.assert_called_once()
-    _assert_cleanup(desktop)
+    _assert_cleanup(desktop, web_only=True)
 
 
 @pytest.mark.parametrize("arguments", [[], ["--no-text-input"]])

@@ -36,6 +36,11 @@ wake = ["openwakeword>=0.4.0"]
 pocket-tts = ["pocket-tts==3.3.0"]
 pocket-int8 = ["pocket-tts[quantize]==3.3.0"]
 benchmark = ["psutil>=5.9,<8"]
+speech-benchmark = [
+    "moonshine-voice==0.1.5",
+    "psutil>=5.9,<8",
+    "scipy>=1.10,<2",
+]
 voice-bank = [
     "pocket-tts==3.3.0",
     "psutil>=5.9,<8",

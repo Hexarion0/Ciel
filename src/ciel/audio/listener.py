@@ -85,6 +85,7 @@ class WakeListenerLoop:
         self._interrupt_speech_samples = 0
         self._speech_streak = 0
         self._response_cancel: threading.Event | None = None
+        self._background_cancel: threading.Event | None = None
         self._state = ListenerState.IDLE
         self._last_wake_info: dict[str, Any] = {}
         self._lock = threading.Lock()
@@ -207,6 +208,10 @@ class WakeListenerLoop:
             return self._microphone_muted
         self._microphone_muted = muted
         self._microphone_epoch += 1
+        if muted and self._response_cancel is self._background_cancel:
+            if self._background_cancel is not None:
+                self._background_cancel.set()
+                self._stop_output()
         while True:
             try:
                 self._frame_queue.get_nowait()
@@ -244,6 +249,55 @@ class WakeListenerLoop:
             info = {"input_source": "keyboard", "typed_text": text,
                     "cancel_event": self._response_cancel}
             self._offer(self._processing_queue, (
+                np.empty(0, dtype=np.float32), info, self._recording_generation,
+            ))
+            self._set_state(ListenerState.PROCESSING)
+            return True
+
+    def submit_request(self, request, audio: np.ndarray | None = None, *,
+                       current=lambda: True) -> bool:
+        """Serialize authenticated browser inputs without treating voice as keyboard text."""
+        if not current():
+            return False
+        with self._lock:
+            if not self._running:
+                return False
+            self._cancel_response_locked()
+            self._response_cancel = threading.Event()
+            info = {'input_source': 'web_text' if request.input_kind == 'text' else 'web_voice',
+                    'typed_text': request.text if request.input_kind == 'text' else '',
+                    'web_request': request, 'web_current': current, 'wake_verified': True,
+                    'cancel_event': self._response_cancel}
+            self._offer(self._processing_queue, (
+                audio if audio is not None else np.empty(0, dtype=np.float32),
+                info, self._recording_generation,
+            ))
+            self._set_state(ListenerState.PROCESSING)
+            return True
+
+    def _background_ready_locked(self) -> bool:
+        """Background output never replaces an owner request or muted voice session."""
+        return bool(
+            self._running and (self._text_only or not self._microphone_muted)
+            and self._state == self._standby_state() and self._processing_queue.empty()
+        )
+
+    def background_ready(self) -> bool:
+        """Expose an atomic idle check without granting permission to capture."""
+        with self._lock:
+            return self._background_ready_locked()
+
+    def submit_background(self, callback: Callable[[threading.Event], None]) -> bool:
+        """Offer one idle suggestion to the output worker without fabricating user input."""
+        with self._lock:
+            if not self._background_ready_locked():
+                return False
+            self._recording_generation += 1
+            self._response_cancel = threading.Event()
+            info = {"input_source": "initiative", "background_callback": callback,
+                    "cancel_event": self._response_cancel}
+            self._background_cancel = self._response_cancel
+            self._processing_queue.put_nowait((
                 np.empty(0, dtype=np.float32), info, self._recording_generation,
             ))
             self._set_state(ListenerState.PROCESSING)
@@ -500,15 +554,29 @@ class WakeListenerLoop:
                 mark("processing_dequeued")
                 if not self._running:
                     continue
+                if info.get("input_source") == "initiative":
+                    event = info["cancel_event"]
+                    if (generation == self._recording_generation and not event.is_set()
+                            and (self._text_only or not self._microphone_muted)):
+                        info["background_callback"](event)
+                    with self._lock:
+                        if self._background_cancel is event:
+                            self._background_cancel = None
+                        if self._running and generation == self._recording_generation:
+                            self._set_state(self._standby_state())
+                    continue
                 if generation != self._recording_generation:
                     logger.info("Decoding superseded speech for temporary conversation context.")
-                typed = info.get("input_source") == "keyboard"
+                browser = info.get('input_source') in {'web_text', 'web_voice'}
+                typed = info.get("input_source") in {"keyboard", "web_text"}
+                if browser and not info['web_current']():
+                    continue
                 voice_epoch = info.get("microphone_epoch", self._microphone_epoch)
                 if typed and (
                     generation != self._recording_generation or info["cancel_event"].is_set()
                 ):
                     continue
-                if not typed and (
+                if not typed and not browser and (
                     self._microphone_muted
                     or voice_epoch != self._microphone_epoch
                 ):
@@ -551,7 +619,7 @@ class WakeListenerLoop:
                 if info.get("wake_prefix_trimmed") and not info.get("stt_needs_repeat"):
                     greeting = info.get("wake_phrase", "hey ciel")
                     text = f"{greeting}, {text}" if text else greeting
-                if not self._running or (not typed and (
+                if not self._running or (not typed and not browser and (
                     self._microphone_muted
                     or voice_epoch != self._microphone_epoch
                 )):
@@ -559,7 +627,8 @@ class WakeListenerLoop:
                         self._discard_voice_request(generation)
                     continue
                 with self._lock:
-                    if not typed and self.ambient and generation == self._recording_generation:
+                    if (not typed and not browser and self.ambient
+                            and generation == self._recording_generation):
                         poll = getattr(self.detector, "poll", None)
                         trigger = poll() if callable(poll) else None
                         if trigger:
@@ -568,9 +637,11 @@ class WakeListenerLoop:
                         # Discard late results from this recording before playback;
                         # its own greeting must not become a fresh barge-in trigger.
                         self.detector.reset(set_cooldown=False)
+                if browser and not info["web_current"]():
+                    continue
                 superseded = generation != self._recording_generation
                 info["superseded"] = superseded
-                if self.on_transcript_observed and not typed:
+                if self.on_transcript_observed and not typed and not browser:
                     self.on_transcript_observed(text, info)
                 if superseded:
                     logger.info("Speech resumed during STT; suppressed the old reply.")
@@ -585,7 +656,7 @@ class WakeListenerLoop:
                     if not self._running or generation != self._recording_generation:
                         continue
                     if (
-                        keep_listening and not self.ambient and not typed
+                        keep_listening and not self.ambient and not typed and not browser
                         and not self._microphone_muted
                     ):
                         self._start_recording()

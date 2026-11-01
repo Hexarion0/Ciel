@@ -32,10 +32,10 @@ class AmbientConversation:
 
     def __init__(
         self, wake_phrase: str = "hey ciel", followup_seconds: float = 20,
-        followup_policy: Literal["conversation", "strict"] = "conversation",
+        followup_policy: Literal["conversation", "strict", "always"] = "conversation",
     ) -> None:
-        if followup_policy not in {"conversation", "strict"}:
-            raise ValueError("Follow-up policy must be conversation or strict")
+        if followup_policy not in {"conversation", "strict", "always"}:
+            raise ValueError("Follow-up policy must be conversation, strict, or always")
         self.wake_phrase = wake_phrase
         self.followup_seconds = followup_seconds
         self.followup_policy = followup_policy
@@ -130,6 +130,9 @@ class AmbientConversation:
             return SpeechDecision(True, explicit=True, reason="verified_wake")
         if self.is_explicit(text):
             return SpeechDecision(True, explicit=True, reason="direct_address")
+        if self.followup_policy == 'always' and text.strip():
+            # This is a reply preference, not proof of speaker identity or authority.
+            return SpeechDecision(True, reason='always_reply')
         clock_question = interpret_clock_address(
             text,
             self.wake_phrase,

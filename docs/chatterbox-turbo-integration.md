@@ -78,6 +78,14 @@ and latched to the local Piper CIEL voice; Amy is tried if that fallback model i
 The existing Piper backend remains selectable with `TTS_ENGINE=piper` and its selected
 voice remains `TTS_VOICE`.
 
+Reference conditioning uses inference mode to avoid retaining training activations.
+After both references are prepared, the fixed-voice worker releases its reference-only
+voice encoder, speech tokenizer and speaker encoder, retaining their conditioning.
+The worker returns unused GPU cache and free CPU heap pages after startup and once
+after 30 seconds idle, while keeping the voice model loaded. See the
+[memory optimization measurements and limits](voice-memory.md). Restart CIEL to
+load an updated worker; full application memory savings need a fresh device sample.
+
 The voice manifest is [voice_profiles/ciel/voice.json](../voice_profiles/ciel/voice.json).
 It names the exact reference WAV/transcript and records the pinned model revision
 `749d1c1a46eb10492095d68fbcf55691ccf137cd`. Model files, audio, generated samples, and
