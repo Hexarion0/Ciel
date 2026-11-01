@@ -80,6 +80,22 @@ restarts that window. Ciel keeps only hashes of device tokens, in the owner-only
 only) revokes every paired phone at once. The PC-local page stays available at
 `http://127.0.0.1:8765`.
 
+### Phone layout: voice and chat modes
+
+On narrow screens (up to 759 px) Ciel uses a phone layout. A status pill under the title
+always says what Ciel is doing: **Listening**, **Hearing you**, **Thinking** (with a seconds
+counter, and a "taking longer than usual" hint after 20 seconds), **Speaking**, **Mic
+paused**, **Not paired**, or **Offline**.
+
+- **Voice mode** (the default) puts the orb in the middle. Tap the orb or the large mic
+  button to pause or resume listening. Your last sentence and Ciel's reply appear below,
+  and the bottom bar has **Type instead**, the mic, and **Stop**.
+- **Chat mode** is a messaging layout with image, mic, and send buttons in the composer;
+  a **Stop** button floats above it while Ciel is thinking or speaking.
+
+Switch modes with the chat/voice button in the header. Each phone remembers its choice.
+The header also has sound on/off and Settings. The desktop layout is unchanged.
+
 ### Install Ciel on the phone's home screen
 
 Once the phone opens the HTTPS address without a certificate warning and is paired,

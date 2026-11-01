@@ -4,6 +4,8 @@ from pathlib import Path
 
 _ASSETS = {
     "/assets/chat.css": ("chat.css", "text/css; charset=utf-8"),
+    "/assets/mobile.css": ("mobile.css", "text/css; charset=utf-8"),
+    "/assets/mobile.js": ("mobile.js", "text/javascript; charset=utf-8"),
     "/assets/settings.js": ("settings.js", "text/javascript; charset=utf-8"),
     "/assets/chat.js": ("chat.js", "text/javascript; charset=utf-8"),
     "/assets/orb.js": ("orb.js", "text/javascript; charset=utf-8"),

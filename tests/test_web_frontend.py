@@ -15,7 +15,7 @@ import pytest
         "chat_render.cjs",
         "pcm_resample.cjs",
         "web_attachments.cjs", "browser_audio.cjs", "web_settings.cjs", "continuous_audio.cjs",
-        "service_worker.cjs",
+        "service_worker.cjs", "mobile_ui.cjs",
     ],
 )
 def test_web_frontend_regressions(script):

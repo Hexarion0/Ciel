@@ -58,8 +58,15 @@ let drawerOpen = false;
 function syncDrawer() {
   const mobile = typeof matchMedia === 'function' && matchMedia('(max-width: 759px)').matches;
   const presence = element('presence');
-  if (mobile && presence.parentElement !== element('topbar')) element('topbar').append(presence);
-  else if (!mobile && presence.parentElement === element('topbar')) element('sidebar').insertBefore(presence, element('connect-phone'));
+  const slot = mobile ? (mobileUI ? mobileUI.orbSlot() : element('topbar')) : element('sidebar');
+  let moved = false;
+  if (mobile && presence.parentElement !== slot) { slot.append(presence); moved = true; }
+  else if (!mobile && presence.parentElement && presence.parentElement !== slot) {
+    element('sidebar').insertBefore(presence, element('connect-phone')); moved = true;
+  }
+  // The orb sizes its canvas on resize; a new slot (sidebar, header, voice stage) changes its size.
+  if (moved && typeof window !== 'undefined' && window.dispatchEvent && typeof Event === 'function')
+    window.dispatchEvent(new Event('resize'));
   element('sidebar').inert = mobile && !drawerOpen;
 }
 function setDrawer(open) {
@@ -168,11 +175,15 @@ async function poll() {
         runtime.liveMessages=[];runtime.cursor=null;activeSelection=null;browsingHandle=null;
         clearNode(element('messages')); messageNodes.clear(); clearNode(element('conversation-list'));
       }
-      throw Error();
+      throw Object.assign(Error(), {unpaired: response.status === 401});
     }
     if (!runtime.ended) render(snapshot);
-  } catch {
-    if (!runtime.ended) { disconnect(); feedback('Cannot reach Ciel. Check that ciel web is running.', true); }
+  } catch (error) {
+    if (!runtime.ended) {
+      disconnect();
+      // An unpaired device is refused on purpose; the pairing form already explains it.
+      feedback(error.unpaired ? '' : 'Cannot reach Ciel. Check that ciel web is running.', !error.unpaired);
+    }
   } finally { runtime.polling = false; }
 }
 async function submit(value) {
@@ -320,6 +331,7 @@ for (const button of document.querySelectorAll('[data-prompt]')) button.addEvent
 const browserAudio = new BrowserAudio();
 const attachments = new AttachmentComposer();
 const cielSettings = new CielSettings();
+const mobileUI = typeof MobileUI === 'function' ? new MobileUI() : null;
 element('attach').addEventListener('click', () => element('image-input').click());
 element('image-input').addEventListener('change', async event => { await attachments.add(event.target.files); event.target.value=''; });
 element('input').addEventListener('paste', event => {
@@ -379,6 +391,7 @@ if (document.addEventListener) document.addEventListener('keydown', event => {
 });
 if (typeof matchMedia === 'function') matchMedia('(max-width:759px)').addEventListener('change',syncDrawer);
 syncDrawer();
+if (mobileUI) mobileUI.bind();
 // Installable app with an offline screen; browsers only allow this over HTTPS or on the PC.
 if (typeof navigator !== 'undefined' && navigator.serviceWorker && globalThis.isSecureContext)
   navigator.serviceWorker.register('/sw.js').catch(() => {});

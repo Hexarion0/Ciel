@@ -2,17 +2,19 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <meta name="theme-color" content="#1C1B20">
 <title>Ciel — your space to think</title>
 <link rel="manifest" href="/assets/manifest.webmanifest">
 <link rel="icon" href="/assets/icon-192.png" type="image/png">
 <link rel="stylesheet" href="/assets/chat.css">
+<link rel="stylesheet" href="/assets/mobile.css">
 <script src="/assets/orb.js" defer></script>
 <script src="/assets/render.js" defer></script>
 <script src="/assets/audio.js" defer></script>
 <script src="/assets/attachments.js" defer></script>
 <script src="/assets/settings.js" defer></script>
+<script src="/assets/mobile.js" defer></script>
 <script src="/assets/chat.js" defer></script>
 </head>
 <body>
@@ -37,8 +39,8 @@
   </aside>
   <main class="workspace">
     <header class="topbar" id="topbar">
-      <div class="chat-heading"><button id="history-toggle" class="mobile-only icon-button" type="button" aria-label="Open conversations" aria-expanded="false" aria-controls="sidebar">☰</button><div><h1 id="chat-title">A little space to think</h1><p id="chat-subtitle">Just you and Ciel.</p></div></div>
-      <button id="settings-open" class="text-button" type="button" aria-label="Open Ciel settings">Settings</button><div class="session-meta"><span id="owner-label"></span><span id="connection" role="status">Connecting</span></div>
+      <div class="chat-heading"><button id="history-toggle" class="mobile-only icon-button" type="button" aria-label="Open conversations" aria-expanded="false" aria-controls="sidebar">☰</button><div id="header-orb" class="header-orb"></div><div><h1 id="chat-title">A little space to think</h1><p id="chat-subtitle">Just you and Ciel.</p><p id="m-status" class="m-status" data-status="connecting" role="status"><span class="m-dot" aria-hidden="true"></span><span id="m-status-label">Connecting</span><span id="m-status-time" aria-hidden="true"></span></p></div></div><div class="m-actions"><button id="m-sound" class="m-icon-button" type="button" aria-label="Mute sound" aria-pressed="false" hidden><svg class="ic when-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9.2 9.2 0 0 1 0 13"/></svg><svg class="ic when-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M22 9l-6 6M16 9l6 6"/></svg></button><button id="m-mode" class="m-icon-button" type="button" aria-label="Chat mode" aria-pressed="false"><svg class="ic when-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-12.2 7.5L3 21l1.9-5.4A8.5 8.5 0 1 1 21 11.5z"/></svg><svg class="ic when-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4M8 6.5v11M12 3.5v17M16 7.5v9M20 10v4"/></svg></button></div>
+      <button id="settings-open" class="text-button" type="button" aria-label="Open Ciel settings"><svg class="ic m-gear" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg><span class="settings-text">Settings</span></button><div class="session-meta"><span id="owner-label"></span><span id="connection" role="status">Connecting</span></div>
     </header>
     <form id="pairing" class="pairing" hidden><h2>Bring Ciel a little closer.</h2><p>Enter the pairing code shown on your PC.</p><label for="pair-code">Pairing code</label><input id="pair-code" inputmode="numeric" autocomplete="one-time-code" maxlength="8" required><button type="submit">Connect this device</button><p>Keep both devices on the same local Wi-Fi.</p></form>
     <div id="archive-banner" class="archive-banner" hidden><span>You're reading an earlier conversation.</span><button id="continue-chat" type="button">Continue this chat</button><button id="return-active" type="button">Back to current chat</button></div>
@@ -48,16 +50,26 @@
       <div id="messages" class="messages" aria-label="Messages" aria-live="off" tabindex="0"></div>
       <button id="new-messages" class="new-messages" type="button" hidden>New messages ↓</button>
     </section>
+    <section id="voice-stage" class="voice-stage" aria-label="Voice conversation" data-status="connecting">
+      <div id="voice-orb" class="voice-orb"></div>
+      <p class="voice-status"><span id="voice-status">Connecting</span><span id="voice-time" class="voice-time" aria-hidden="true"></span></p>
+      <p id="voice-detail" class="voice-detail"></p>
+      <div class="voice-transcript"><p id="voice-heard" class="voice-heard"></p><p id="voice-reply" class="voice-reply"></p></div>
+    </section>
     <div class="dock">
       <p id="notice" class="feedback" role="status"></p>
       <div id="attachments" class="attachments" hidden></div>
+      <button id="m-chat-stop" class="m-chat-stop" type="button" hidden><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5" class="filled"/></svg>Stop</button>
       <form class="composer" id="composer">
+        <button id="m-attach" class="m-icon-button m-attach" type="button" aria-label="Attach images"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.6"/><path d="m21 15-5-5L5 21"/></svg></button>
         <label for="input" class="sr-only" id="input-label">Your message</label>
         <textarea id="input" rows="1" maxlength="4000" placeholder="Message Ciel…" aria-describedby="input-help"></textarea>
+        <button id="m-chat-mic" class="m-icon-button m-chat-mic" type="button" aria-label="Microphone" aria-pressed="false"><svg class="ic when-off" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4M8 22h8"/><path d="M3 3l18 18"/></svg><svg class="ic when-on" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4M8 22h8"/></svg></button>
         <button class="send" id="send" type="submit" aria-label="Send message" disabled>↑</button>
       </form>
       <div class="toolbar"><div class="controls"><button id="attach" type="button" aria-label="Attach images">＋ Image</button><input id="image-input" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden><button id="record" type="button" aria-pressed="false" hidden>Enable microphone</button><button id="mute" type="button" aria-pressed="false" disabled><span class="mic-symbol" aria-hidden="true">♩</span><span id="mute-label">Mute mic</span></button><button id="stop" type="button" disabled><span aria-hidden="true">□</span> Stop reply</button></div><div class="secondary-controls"><button id="sound" type="button" aria-pressed="false" hidden>Sound on</button><button id="help" type="button" disabled>Help</button><button id="exit" type="button" disabled>Exit</button></div></div>
 <div class="playback-controls"><button id="enable-sound" type="button" hidden>Enable sound</button><button id="read-full" type="button" hidden>Read full answer</button></div>
+      <div id="voice-controls" class="voice-controls"><button id="m-to-chat" class="m-round" type="button" aria-label="Type instead"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2.5"/><path d="M6 9.5h.01M10 9.5h.01M14 9.5h.01M18 9.5h.01M6 13h.01M18 13h.01M8 15.5h8"/></svg></button><button id="m-mic" class="m-round m-mic" type="button" aria-label="Microphone" aria-pressed="false"><svg class="ic when-off" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4M8 22h8"/><path d="M3 3l18 18"/></svg><svg class="ic when-on" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4M8 22h8"/></svg></button><button id="m-stop" class="m-round" type="button" aria-label="Stop reply" disabled><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5" class="filled"/></svg></button></div>
       <p id="input-help" class="keyboard-hint">Enter to send. Shift + Enter for a new line.</p>
     </div>
   </main>

@@ -2,6 +2,11 @@
 
 ## Unreleased — 0.3.6 development
 
+- Add a phone layout with switchable voice and chat modes: a large orb with big mic and
+  stop controls, or a messaging layout with an icon composer. A status pill always shows
+  listening, thinking (with elapsed seconds), speaking, paused, unpaired, or offline.
+  Pairing no longer reports "Cannot reach Ciel". Desktop is unchanged.
+
 - Make the browser app installable on Android with a manifest, orb app icon, and a
   service worker that shows an offline screen when the PC is unreachable but caches
   nothing. Keep paired phones connected across restarts until 30 idle days, storing

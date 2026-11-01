@@ -1,0 +1,105 @@
+/* Phone layout for screens up to 759px: voice and chat modes with an always-visible status.
+   Phone-only elements are hidden by default, and every phone rule requires .mobile-ui, which
+   mobile.js sets once it is running. Desktop, and a phone without the script, keep the
+   original layout. */
+.m-status,.m-actions,.voice-stage,.voice-controls,.m-chat-stop,.m-attach,.m-chat-mic,
+.header-orb,.m-gear{display:none}
+
+@media (max-width:759px) {
+  /* Platform baseline: no tap flash, no font inflation, no page bounce, instant taps. */
+  .mobile-ui{-webkit-tap-highlight-color:transparent;-webkit-text-size-adjust:100%;overscroll-behavior:none}
+  .mobile-ui body{overscroll-behavior:none}
+  .mobile-ui button{touch-action:manipulation;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+  .mobile-ui .ic{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;display:block}
+  .mobile-ui .ic .filled{fill:currentColor;stroke:none}
+  .mobile-ui .when-on{display:none}
+  .mobile-ui [aria-pressed=true]>.when-on{display:block}
+  .mobile-ui [aria-pressed=true]>.when-off{display:none}
+
+  /* Status colors shared by the header pill and the voice screen. */
+  .mobile-ui [data-status]{--status:var(--muted)}
+  .mobile-ui [data-status=listening]{--status:#67e8f9}
+  .mobile-ui [data-status=hearing]{--status:#a5f3fc}
+  .mobile-ui [data-status=thinking],.mobile-ui [data-status=starting]{--status:#b49afb}
+  .mobile-ui [data-status=speaking]{--status:#f2a7c9}
+  .mobile-ui [data-status=offline],.mobile-ui [data-status=blocked]{--status:#e0b07f}
+  .mobile-ui [data-status=pairing],.mobile-ui [data-status=browsing]{--status:var(--accent)}
+
+  /* Header: menu, orb (chat mode), title and status, then sound, mode, and settings. */
+  .mobile-ui .topbar{min-height:0;gap:2px;padding:calc(env(safe-area-inset-top,0px) + 6px) 4px 6px;border-bottom:1px solid var(--line)}
+  .mobile-ui .chat-heading{gap:4px}
+  .mobile-ui .topbar h1{font-size:15px}
+  .mobile-ui .chat-heading h1{max-width:none}
+  .mobile-ui #chat-subtitle,.mobile-ui .session-meta,.mobile-ui .presence-copy{display:none}
+  .mobile-ui .presence{position:static;width:auto;height:auto;padding:0;z-index:auto}
+  .mobile-ui .header-orb{flex:none;display:grid;place-items:center}
+  .mobile-ui .header-orb .orb{width:36px;height:36px}
+  .mobile-ui .mode-voice .header-orb{display:none}
+  .mobile-ui .m-status{display:flex;align-items:center;gap:6px;margin:3px 0 0;font-size:12.5px;line-height:1.2;color:var(--status);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .mobile-ui #m-status-time{margin-left:-2px;font-variant-numeric:tabular-nums}
+  .mobile-ui .m-dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--status);box-shadow:0 0 8px var(--status)}
+  .mobile-ui .m-status[data-status=thinking] .m-dot,.mobile-ui .m-status[data-status=hearing] .m-dot,.mobile-ui .m-status[data-status=starting] .m-dot,.mobile-ui .m-status[data-status=connecting] .m-dot{animation:m-pulse 1.1s ease-in-out infinite}
+  .mobile-ui .m-actions{display:flex;align-items:center;flex:none}
+  .mobile-ui .m-icon-button,.mobile-ui .topbar #settings-open{width:44px;height:44px;min-height:44px;padding:0;display:grid;place-items:center;border-radius:14px;color:var(--muted);flex:none;transition:transform .12s ease-out,background .12s}
+  .mobile-ui .settings-text{display:none}
+  .mobile-ui .m-gear{display:block}
+
+  /* Press feedback on touch (hover is mouse-only). */
+  .mobile-ui .m-icon-button:active:not(:disabled),.mobile-ui .m-round:active:not(:disabled),.mobile-ui .topbar #settings-open:active,
+  .mobile-ui .m-chat-stop:active,.mobile-ui .send:active:not(:disabled){transform:scale(.93);background:var(--raised)}
+
+  /* Voice mode: big orb, clear status, the latest exchange, and three large controls. */
+  .mobile-ui .mode-voice .voice-stage{display:flex}
+  .mobile-ui .mode-voice .conversation,.mobile-ui .mode-voice .composer,.mobile-ui .mode-voice .attachments,.mobile-ui .mode-voice .m-chat-stop{display:none}
+  .mobile-ui .mode-voice .workspace:has(#voice-stage[data-status=browsing]) .conversation{display:flex}
+  .mobile-ui .mode-voice .workspace:has(#voice-stage[data-status=browsing]) .voice-stage{display:none}
+  .mobile-ui .voice-stage{flex:1;min-height:0;flex-direction:column;align-items:center;text-align:center;padding:4dvh 24px 0}
+  .mobile-ui .voice-orb .orb{width:min(60vw,32dvh,280px);height:min(60vw,32dvh,280px);transition:transform .14s ease-out}
+  .mobile-ui .voice-orb .orb:active:not(:disabled){transform:scale(.97)}
+  .mobile-ui .voice-status{font-family:Georgia,"Times New Roman",serif;font-size:30px;line-height:1.2;letter-spacing:-.5px;margin:2.5dvh 0 6px;color:var(--status)}
+  .mobile-ui .voice-time{margin-left:10px;font:15px/1 system-ui,sans-serif;letter-spacing:0;font-variant-numeric:tabular-nums;color:var(--muted);vertical-align:middle}
+  .mobile-ui .voice-detail{font-size:14px;line-height:1.5;color:var(--muted);margin:0;min-height:1.5em;max-width:300px}
+  .mobile-ui .voice-transcript{margin-top:auto;width:100%;max-height:36dvh;overflow-y:auto;overscroll-behavior:contain;padding:18px 2px 10px;-webkit-mask-image:linear-gradient(transparent,#000 18px);mask-image:linear-gradient(transparent,#000 18px);text-align:left}
+  .mobile-ui .voice-heard{font-size:14px;line-height:1.5;color:var(--muted);margin:0 0 10px;font-style:italic}
+  .mobile-ui .voice-reply{font-size:17px;line-height:1.55;margin:0;white-space:pre-wrap;overflow-wrap:anywhere;-webkit-user-select:text;user-select:text}
+  .mobile-ui .voice-heard:empty,.mobile-ui .voice-reply:empty{display:none}
+  .mobile-ui .mode-voice .voice-controls{display:flex}
+  .mobile-ui .voice-controls{justify-content:space-evenly;align-items:center;padding:8px 0 6px}
+  .mobile-ui .m-round{width:60px;height:60px;border-radius:50%;display:grid;place-items:center;background:var(--surface);border:1px solid #ffffff14;color:var(--text);transition:transform .12s ease-out,background .12s}
+  .mobile-ui .m-round .ic{width:24px;height:24px}
+  .mobile-ui .m-round:disabled{opacity:.3}
+  .mobile-ui .m-mic{width:84px;height:84px;background:var(--surface);border-color:#ffffff24}
+  .mobile-ui .m-mic .ic{width:32px;height:32px}
+  .mobile-ui .m-mic[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:var(--base);box-shadow:0 0 0 6px #b8a0d91f,0 0 28px #b8a0d955}
+  .mobile-ui .m-mic[aria-pressed=true]:active:not(:disabled){background:#cab7e2}
+  .mobile-ui #m-stop:not(:disabled){color:#f2a7c9;border-color:#f2a7c955}
+  .mobile-ui .mode-voice .feedback{text-align:center}
+
+  /* Chat mode: messaging layout, icon composer, floating stop while Ciel works. */
+  .mobile-ui .messages{padding:14px 14px 8px}
+  .mobile-ui .message{margin-bottom:16px;max-width:none}
+  .mobile-ui .message.user{margin-left:auto;width:fit-content;max-width:85%;padding:10px 15px;background:#b8a0d926;border-radius:20px 20px 6px 20px}
+  .mobile-ui .message.user .message-author{display:none}
+  .mobile-ui .message.assistant{max-width:94%}
+  .mobile-ui .message-author{margin-bottom:4px}
+  .mobile-ui .message-content{font-size:16px;line-height:1.55}
+  .mobile-ui .welcome{padding:24px 22px}
+  .mobile-ui .welcome h2{font-size:28px}
+  .mobile-ui .dock{padding:0 10px max(10px,env(safe-area-inset-bottom,0px))}
+  .mobile-ui .toolbar,.mobile-ui .keyboard-hint{display:none}
+  .mobile-ui .composer{align-items:flex-end;gap:0;padding:3px;border-radius:26px}
+  .mobile-ui .composer textarea{padding:10px 6px;min-height:44px}
+  .mobile-ui .m-attach,.mobile-ui .m-chat-mic{display:grid;width:44px;height:44px;border-radius:50%}
+  .mobile-ui .m-chat-mic[aria-pressed=true]{color:#67e8f9}
+  .mobile-ui .send{width:44px;height:44px;border-radius:50%;font-size:22px;transition:transform .12s ease-out}
+  .mobile-ui .m-chat-stop{display:flex;align-items:center;gap:6px;margin:0 auto 8px;min-height:40px;padding:6px 16px;border-radius:999px;background:var(--raised);border:1px solid #f2a7c955;color:#f2a7c9;font-size:14px;transition:transform .12s ease-out}
+  .mobile-ui .m-chat-stop[hidden]{display:none}
+  .mobile-ui .m-chat-stop .ic{width:16px;height:16px}
+
+  /* Drawer and settings respect the notch and the home indicator. */
+  .mobile-ui .sidebar{width:min(84vw,320px);padding-top:calc(env(safe-area-inset-top,0px) + 20px);padding-bottom:max(16px,env(safe-area-inset-bottom,0px))}
+  .mobile-ui .settings-heading{padding-top:calc(env(safe-area-inset-top,0px) + 18px)}
+}
+
+@keyframes m-pulse{50%{opacity:.35;transform:scale(.8)}}
+@media (prefers-reduced-motion:reduce){.m-dot{animation:none!important}}

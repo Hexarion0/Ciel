@@ -17,13 +17,16 @@ class Element {
     this.clientHeight = 400;
     this.classes = new Set();
     this.classList = {
-      toggle: (name, on) => on ? this.classes.add(name) : this.classes.delete(name)
+      toggle: (name, on) => on ? this.classes.add(name) : this.classes.delete(name),
+      contains: name => this.classes.has(name),
+      add: name => this.classes.add(name)
     };
   }
   append(...nodes) { for (const n of nodes) { n.parent = this; this.children.push(n); } }
   get parentElement() { return this.parent; }
   get firstElementChild() { return this.children[0]; }
   setAttribute(key, value) { this.attributes[key] = value; }
+  getAttribute(key) { return key in this.attributes ? this.attributes[key] : null; }
   addEventListener(name, callback) { this.listeners[name] = callback; }
   remove() { if (this.parent) this.parent.children.splice(this.parent.children.indexOf(this), 1); }
   getContext() { return null; }
@@ -78,6 +81,7 @@ function expireDeadline() {
 const context = {
   document: {
     body: new Element(),
+    documentElement: new Element(),
     getElementById: id => {
       assert(elements.has(id), 'missing DOM id ' + id);
       return elements.get(id);
@@ -111,7 +115,7 @@ const context = {
   }
 };
 vm.createContext(context);
-vm.runInContext(['orb.js', 'render.js', 'audio.js', 'attachments.js', 'settings.js', 'chat.js'].map(name => fs.readFileSync('src/ciel/web_assets/' + name, 'utf8')).join('\n'), context);
+vm.runInContext(['orb.js', 'render.js', 'audio.js', 'attachments.js', 'settings.js', 'mobile.js', 'chat.js'].map(name => fs.readFileSync('src/ciel/web_assets/' + name, 'utf8')).join('\n'), context);
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
 (async () => {
@@ -236,7 +240,12 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
   context.matchMedia=()=>({matches:true});
   vm.runInContext('setDrawer(false)',context);
   assert.equal(elements.get('sidebar').inert,true,'Closed mobile history is not keyboard focusable');
-  assert.equal(elements.get('presence').parentElement,elements.get('topbar'),'Phone orb stays outside the inert drawer');
+  assert.equal(elements.get('presence').parentElement,elements.get('voice-orb'),'Phone orb stays outside the inert drawer, center stage in voice mode');
+  vm.runInContext('mobileUI.setMode("chat")',context);
+  assert.equal(elements.get('presence').parentElement,elements.get('header-orb'),'Chat mode moves the orb into the header');
+  assert.equal(elements.get('m-mode').attributes['aria-pressed'],'true','Chat mode shows as on');
+  vm.runInContext('mobileUI.setMode("voice")',context);
+  assert.equal(elements.get('presence').parentElement,elements.get('voice-orb'));
   vm.runInContext('setDrawer(true)',context);
   assert.equal(elements.get('sidebar').inert,false);
   delete context.matchMedia;

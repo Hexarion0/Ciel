@@ -39,6 +39,27 @@ def test_service_worker_is_served_from_the_root_scope():
     assert b"addEventListener('fetch'" in body
 
 
+def test_phone_layout_files_are_packaged_and_linked():
+    from importlib.resources import files
+
+    from ciel.webapp.http import load_web_asset
+
+    page = files("ciel").joinpath("web_assets/index.html").read_text()
+    css, css_type = load_web_asset("/assets/mobile.css")
+    _js, js_type = load_web_asset("/assets/mobile.js")
+
+    assert css_type.startswith("text/css") and js_type.startswith("text/javascript")
+    assert '<link rel="stylesheet" href="/assets/mobile.css">' in page
+    assert '<script src="/assets/mobile.js" defer></script>' in page
+    assert page.index("/assets/mobile.js") < page.index("/assets/chat.js")
+    assert "viewport-fit=cover" in page
+    # Phone styles never leak into the desktop layout.
+    assert ".mobile-ui" in css.decode()  # phone rules apply only once mobile.js runs
+    for id_ in ["m-status", "voice-stage", "voice-controls", "m-mic", "m-stop", "m-mode",
+                "m-chat-mic", "m-chat-stop", "m-attach", "m-sound"]:
+        assert f'id="{id_}"' in page, id_
+
+
 def test_index_links_the_manifest_and_icon():
     from importlib.resources import files
 
