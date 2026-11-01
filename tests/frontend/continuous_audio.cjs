@@ -26,6 +26,8 @@ const samples=(level,count=320)=>new Float32Array(count).map((_,i)=>level*Math.s
   const vad=vm.runInContext('new SpeechSegmenter()',context);
   const feed=(frames,level)=>{const results=[];for(let i=0;i<frames;i++){const r=vad.push(samples(level));if(r)results.push(r);}return results};
   assert.equal(feed(200,.001).length,0,'Room noise must never upload by itself');
+  assert.equal(feed(250,.02).length,0,'A steady quiet hum (fan, TV across the room) never uploads');
+  feed(4,.05);assert.equal(feed(60,0).length,0,'An 80 ms murmur or rustle is not a turn');
   feed(3,.1);assert.equal(feed(60,0).length,0,'A short click must not become a turn');
   feed(25,.08);assert.equal(feed(25,0).length,0,'A natural short pause stays inside the utterance');
   feed(20,.08);const clips=feed(50,0);

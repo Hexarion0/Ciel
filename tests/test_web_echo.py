@@ -149,3 +149,15 @@ def test_voice_after_playback_finished_is_accepted():
 
     assert status == 200 and body == {"accepted": True}
     submit.assert_called_once()
+
+
+def test_state_lists_recently_finished_browser_requests():
+    from ciel.web import DesktopWebUI
+
+    ui = DesktopWebUI("owner", "hey ciel")
+    for index in range(40):
+        ui.request_done(WebRequest(f"r{index}", "phone", "chat", 1, "voice", ""))
+
+    finished = ui.snapshot()["finished"]
+
+    assert finished[-1] == "r39" and "r0" not in finished and len(finished) <= 32

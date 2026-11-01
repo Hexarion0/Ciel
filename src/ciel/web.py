@@ -45,6 +45,7 @@ class DesktopWebUI:
         self._muted = False
         self._state = "listening_wake"
         self._speaking = False
+        self._finished: list[str] = []
         self._provider = ""
         self._observation_status: Callable[[], str] = lambda: "Screen observation: off."
         self._server: ThreadingHTTPServer | None = None
@@ -187,6 +188,12 @@ class DesktopWebUI:
         speech = getattr(self.channels, "speech", None)
         return bool(speech and speech.audible())
 
+    def request_done(self, request: Any) -> None:
+        """Remember recently handled browser requests so their pages stop waiting."""
+        with self._lock:
+            self._finished.append(str(getattr(request, "request_id", "")))
+            self._finished = self._finished[-32:]
+
     def snapshot(self, *, after: int | None = None) -> dict[str, Any]:
         with self._lock:
             reset = after is None or after < self._reset_cursor or after > self._cursor
@@ -199,6 +206,7 @@ class DesktopWebUI:
                     "state": "speaking" if self._speaking or self._browser_audible()
                     else self._state,
                     "provider": self._provider,
+                    "finished": list(self._finished),
                     "observation": self._observation_status(),
                     "messages": [
                         {**message, **({"sources": normalize_sources(message["sources"])}

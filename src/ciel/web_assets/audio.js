@@ -7,7 +7,8 @@ class SpeechSegmenter {
   reset() { this.lead=[];this.leadSamples=0;this.run=0;this.active=false;this.chunks=[];this.samples=0;this.voiced=0;this.quiet=0; }
   push(input) {
     let energy=0;for(const sample of input) energy+=sample*sample;
-    const rms=Math.sqrt(energy/Math.max(1,input.length)), voice=rms>Math.max(.01,this.noise*3.5);
+    // Ignore quiet background (fans, TV, rustling): a clear voice is louder than the room.
+    const rms=Math.sqrt(energy/Math.max(1,input.length)), voice=rms>Math.max(.015,this.noise*4);
     if(!this.active) {
       if(!voice) this.noise=.99*this.noise+.01*Math.min(rms,.015);
       this.lead.push(input);this.leadSamples+=input.length;
@@ -17,7 +18,7 @@ class SpeechSegmenter {
         else {this.lead[0]=first.slice(excess);this.leadSamples-=excess;}
       }
       this.run=voice?this.run+input.length:0;
-      if(this.run>=960) {
+      if(this.run>=1280) {
         this.active=true;this.chunks=this.lead;this.samples=this.leadSamples;
         this.voiced=this.run;this.lead=[];this.leadSamples=0;
       }
@@ -27,7 +28,7 @@ class SpeechSegmenter {
     this.chunks.push(chunk);this.samples+=chunk.length;
     if(voice) {this.voiced+=chunk.length;this.quiet=0;} else this.quiet+=chunk.length;
     if(this.quiet<14400 && this.samples<960000) return null;
-    const result=this.voiced>=2240?{chunks:this.chunks,samples:this.samples}:null;
+    const result=this.voiced>=3200?{chunks:this.chunks,samples:this.samples}:null;
     this.reset();return result;
   }
 }
@@ -153,7 +154,8 @@ class BrowserAudio {
   async sendVoice(recording, utterance) {
     if(this.recording!==recording || this.captureBlocked()) return;
     this.sending=true;
-    const waiting={since:Date.now(),baseline:runtime.liveMessages?.at(-1)?.id || 0,activity:runtime.activityTime || 0,busy:false};
+    const requestId=crypto.randomUUID().replaceAll('-','');
+    const waiting={since:Date.now(),baseline:runtime.liveMessages?.at(-1)?.id || 0,activity:runtime.activityTime || 0,busy:false,request:requestId};
     this.waiting=waiting;this.showMicStatus();
     const buffer = new ArrayBuffer(44+utterance.samples*2), view = new DataView(buffer);
     const word = (offset,value)=>{ for(let i=0;i<value.length;i++) view.setUint8(offset+i,value.charCodeAt(i)); };
@@ -165,7 +167,7 @@ class BrowserAudio {
     for(const chunk of utterance.chunks) for(const value of chunk) { view.setInt16(offset,Math.round(Math.max(-1,Math.min(1,value))*32767),true); offset+=2; }
     try {
       const {response,data}=await requestJSON('/api/voice',{method:'POST',headers:this.headers({
-        'Content-Type':'audio/wav','X-Request-ID':crypto.randomUUID().replaceAll('-',''),
+        'Content-Type':'audio/wav','X-Request-ID':requestId,
         'X-Revision':String(recording.selection.revision),'X-Conversation':recording.selection.handle
       }),body:buffer});
       // The server drops clips that began while Ciel was speaking: that was its own voice.
@@ -182,8 +184,10 @@ class BrowserAudio {
       const busy=['processing','speaking'].includes(snapshot.state);
       if(busy) this.waiting.busy=true;
       const answered=(snapshot.messages || []).some(message=>message.id>this.waiting.baseline && message.role==='assistant' && !message.live);
+      // The server lists handled requests, so a clip with no words cannot leave Thinking stuck.
+      const handled=(snapshot.finished || []).includes(this.waiting.request);
       const activity=(snapshot.activity || []).at(-1);
-      if(!busy && (this.waiting.busy || answered || activity?.time>this.waiting.activity || Date.now()-this.waiting.since>90000)) {this.waiting=null;this.pauseUntil=Date.now()+600;}
+      if(!busy && (this.waiting.busy || answered || handled || activity?.time>this.waiting.activity || Date.now()-this.waiting.since>90000)) {this.waiting=null;this.pauseUntil=Date.now()+600;}
     }
     this.maybeStart();this.showMicStatus();
   }

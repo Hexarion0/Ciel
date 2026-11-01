@@ -134,3 +134,26 @@ def test_revoked_browser_input_is_discarded_before_transcription(listener):
     valid[0] = False
     run_worker_until_queue_drained(listener)
     listener.on_transcription.assert_not_called()
+
+
+def test_browser_requests_report_when_handled_even_without_a_reply():
+    """A noise clip with no words still ends the browser's Thinking state."""
+    from ciel.webapp.requests import WebRequest
+
+    finished = []
+    loop = WakeListenerLoop(MagicMock(), detector=MagicMock(), recorder=VoiceRecorder(),
+                            stt=MagicMock(), tts=MagicMock(), on_transcription=MagicMock(),
+                            on_request_done=finished.append)
+    loop._running = True
+    loop._state = ListenerState.LISTENING_WAKE
+    skipped = WebRequest('skipped', 'phone', 'chat', 1, 'text', 'Hello')
+    assert loop.submit_request(skipped, current=lambda: False) is False
+    request = WebRequest('noise', 'phone', 'chat', 1, 'text', 'Hello')
+    valid = [True]
+    assert loop.submit_request(request, current=lambda: valid[0])
+    valid[0] = False  # dropped before transcription, like an empty clip
+    run_worker_until_queue_drained(loop)
+    while not loop._notifications.empty():  # delivered by the notifier thread in the app
+        callback, args = loop._notifications.get_nowait()
+        callback(*args)
+    assert finished == [request]

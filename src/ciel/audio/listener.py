@@ -48,6 +48,7 @@ class WakeListenerLoop:
         on_transcription: Callable[[str, dict[str, Any], np.ndarray], bool | None] | None = None,
         on_barge_in: Callable[[], None] | None = None,
         on_state_change: Callable[[ListenerState], None] | None = None,
+        on_request_done: Callable[[Any], None] | None = None,
         sample_rate: int = 16000,
         device: int | str | None = None,
         barge_in: bool = True,
@@ -69,6 +70,8 @@ class WakeListenerLoop:
         self.on_wake, self.on_utterance = on_wake, on_utterance
         self.on_transcription, self.on_barge_in = on_transcription, on_barge_in
         self.on_state_change = on_state_change
+        # Browsers stop showing Thinking once their request is handled, even without a reply.
+        self.on_request_done = on_request_done
         self.sample_rate, self.device = sample_rate, device
         self.barge_in, self.barge_in_threshold_rms = barge_in, barge_in_threshold_rms
         self.stt_beam_size = stt_beam_size
@@ -675,6 +678,8 @@ class WakeListenerLoop:
                     trace.mark("turn_finished")
                     trace.log()
                 active_trace.reset(trace_token)
+                if info.get("web_request") is not None:
+                    self._notify(self.on_request_done, info["web_request"])
                 self._processing_queue.task_done()
 
     def start_text_only(self) -> None:

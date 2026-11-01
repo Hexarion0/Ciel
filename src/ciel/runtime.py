@@ -2271,6 +2271,7 @@ def run_desktop(
         on_barge_in=on_barge_in,
         on_interruption=on_interruption,
         on_state_change=web_ui.set_state if web_ui is not None else None,
+        on_request_done=web_ui.request_done if web_ui is not None else None,
         recorder=VoiceRecorder(
             sample_rate=settings.audio.sample_rate,
             silence_duration_seconds=settings.audio.utterance_silence_seconds,
