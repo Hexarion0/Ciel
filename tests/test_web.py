@@ -95,6 +95,44 @@ def test_http_rejects_requests_from_other_websites(web_server, headers):
     submit.assert_not_called()
 
 
+LAUNCH = {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate",
+          "Sec-Fetch-Dest": "document"}
+
+
+def test_installed_app_launch_from_home_screen_opens_the_page(web_server):
+    """Android may label a home-screen launch as cross-site; the public shell still opens."""
+    _ui, _submit, client = web_server
+
+    response = client.get("/", headers=LAUNCH)
+
+    assert response.status_code == 200
+    assert "Message Ciel" in response.text
+
+
+@pytest.mark.parametrize("path", ["/api/state", "/api/session", "/api/conversations", "/sw.js"])
+def test_cross_site_navigation_still_cannot_reach_anything_but_the_page(web_server, path):
+    _ui, _submit, client = web_server
+
+    assert client.get(path, headers=LAUNCH).status_code == 403
+
+
+def test_cross_site_page_request_must_be_a_top_level_navigation(web_server):
+    _ui, _submit, client = web_server
+
+    embedded = {**LAUNCH, "Sec-Fetch-Dest": "iframe"}
+    fetched = {**LAUNCH, "Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty"}
+    assert client.get("/", headers=embedded).status_code == 403
+    assert client.get("/", headers=fetched).status_code == 403
+
+
+def test_rejection_names_the_failed_check(web_server):
+    _ui, _submit, client = web_server
+
+    response = client.get("/api/state", headers={"Sec-Fetch-Site": "cross-site"})
+
+    assert "another site" in response.json()["error"]
+
+
 @pytest.mark.parametrize("data", [{}, [], {"text": ""}, {"text": 5}, {"text": "x" * 4001}])
 def test_http_rejects_invalid_messages(web_server, data):
     _ui, submit, client = web_server

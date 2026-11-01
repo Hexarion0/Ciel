@@ -246,13 +246,26 @@ class DesktopWebUI:
                 request_host = self.headers.get("Host", "")
                 origin = self.headers.get("Origin")
                 request_scheme = 'https' if isinstance(self.connection, ssl.SSLSocket) else 'http'
-                if (
-                    request_host not in allowed
-                    or origin is not None and origin != f"{request_scheme}://{request_host}"
-                    or request_scheme == 'https' and self.command == 'POST' and origin is None
-                    or self.headers.get("Sec-Fetch-Site") == "cross-site"
-                ):
-                    self._json(403, {"error": "This interface accepts PC-local requests only."})
+                # Android can label a home-screen app launch as cross-site. Opening the public
+                # page is harmless; every API request it then makes is same-origin.
+                app_launch = (
+                    self.command == 'GET' and urlsplit(self.path).path == '/'
+                    and self.headers.get("Sec-Fetch-Mode") == "navigate"
+                    and self.headers.get("Sec-Fetch-Dest") == "document"
+                )
+                if request_host not in allowed:
+                    reason = "unknown address"
+                elif origin is not None and origin != f"{request_scheme}://{request_host}":
+                    reason = "another site's origin"
+                elif request_scheme == 'https' and self.command == 'POST' and origin is None:
+                    reason = "missing origin"
+                elif self.headers.get("Sec-Fetch-Site") == "cross-site" and not app_launch:
+                    reason = "request from another site"
+                else:
+                    reason = ""
+                if reason:
+                    self._json(403, {"error": "This interface accepts PC-local requests only "
+                                              f"({reason})."})
                     return False
                 if self.server.tls_context is not None and request_scheme != 'https':
                     if self.command in {'GET', 'HEAD'}:
