@@ -15,6 +15,16 @@ def isolate_background_tool_language(monkeypatch, request):
 
 
 @pytest.fixture(autouse=True)
+def isolate_background_titles(monkeypatch, request):
+    """Background conversation titling would add model calls to exact router assertions."""
+    if (request.node.get_closest_marker("integration") is not None
+            or request.module.__name__.endswith("test_conversation_titles")):
+        return
+    monkeypatch.setattr("ciel.memory.titles.ConversationTitler.after_reply",
+                        lambda *args, **kwargs: None)
+
+
+@pytest.fixture(autouse=True)
 def isolate_screen_runtime(monkeypatch, request, tmp_path_factory):
     """Unit resets/startup must never touch real screenshots or user-service configuration."""
     if request.node.get_closest_marker("integration") is not None:

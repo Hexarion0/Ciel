@@ -56,6 +56,7 @@ def test_unmatched_memory_tool_uses_recalled_context(
         assert "The application stores history" in prompt
         assert {tool["function"]["name"] for tool in call.kwargs["tools"]} <= {
             "memory_search", "memory_get", "web_search", "read_page", "check_screen",
+            "conversation_list", "conversation_read", "set_conversation_title",
         }
         assert store.count_memories() == 1
         assert [message.content for message in call.args[0] if message.role == "user"][-1] == query

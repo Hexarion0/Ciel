@@ -201,3 +201,15 @@ def test_commands_endpoint_requires_a_paired_device():
                               client_address=("192.168.1.20", 1), _json=MagicMock())
 
     assert not ui.channels.authorize(handler)
+
+
+def test_help_panel_uses_the_terminal_groups_and_details():
+    from ciel.terminal import COMMAND_GROUPS, command_catalog
+
+    catalog = command_catalog()
+
+    assert [group["title"] for group in catalog["groups"]] == [title for title, _ in COMMAND_GROUPS]
+    first = catalog["groups"][0]["commands"][1]
+    assert first == {"label": "/mute [on|off]", "name": "/mute",
+                     "description": "Toggle or set microphone mute"}
+    assert catalog["details"]["/mute"].startswith("/mute [on|off] — ")

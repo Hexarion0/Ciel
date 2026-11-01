@@ -188,6 +188,26 @@ class DesktopWebUI:
         speech = getattr(self.channels, "speech", None)
         return bool(speech and speech.audible())
 
+    def _active_title(self) -> str:
+        """Ciel's chosen title for the current conversation, or an empty string."""
+        if not (self.selection and self.catalog):
+            return ""
+        try:
+            handle = self.selection.current().handle
+        except (ValueError, AttributeError):
+            return ""
+        now = time.monotonic()
+        cached_handle, cached_at, title = getattr(self, "_title_cache", ("", 0.0, ""))
+        # Snapshots poll often and titles change rarely; a switched chat reads at once.
+        if cached_handle == handle and now - cached_at < 2.0:
+            return title
+        try:
+            title = self.catalog.title(handle) or ""
+        except ValueError:
+            title = ""
+        self._title_cache = (handle, now, title)
+        return title
+
     def request_done(self, request: Any) -> None:
         """Remember recently handled browser requests so their pages stop waiting."""
         with self._lock:
@@ -207,6 +227,7 @@ class DesktopWebUI:
                     else self._state,
                     "provider": self._provider,
                     "finished": list(self._finished),
+                    "title": self._active_title(),
                     "observation": self._observation_status(),
                     "messages": [
                         {**message, **({"sources": normalize_sources(message["sources"])}
@@ -361,6 +382,22 @@ class DesktopWebUI:
                         self._json(200, asdict(active))
                     except (ValueError, TypeError, AttributeError):
                         self._json(409, {'error': 'The active chat changed. Refresh and retry.'})
+                    return
+                if self.path == '/api/conversations/hide' and ui.catalog:
+                    # Removes it from the list only; history and memory stay for Ciel.
+                    try:
+                        length = int(self.headers.get('Content-Length', '0'))
+                        if not 0 < length <= 1024:
+                            raise ValueError()
+                        if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
+                            raise ValueError()
+                        handle = json.loads(self.rfile.read(length)).get('handle')
+                        if not isinstance(handle, str) or len(handle) > 64:
+                            raise ValueError()
+                        ui.catalog.hide(handle)
+                        self._json(200, {'hidden': True})
+                    except (ValueError, TypeError, AttributeError):
+                        self._json(404, {'error': 'This conversation is no longer available.'})
                     return
                 if self.path != "/api/message":
                     self._json(404, {"error": "Not found."})

@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import re
 import secrets
 from collections.abc import Callable
 from typing import Any
 
 from ciel.conversation import strip_internal_reply_notes
 from ciel.logging import SecretMaskingFilter
-from ciel.memory.archive_scope import admitted_archive_sessions
+from ciel.memory.conversation_index import ConversationIndex, conversation_groups
 from ciel.memory.models import normalize_sources
 from ciel.memory.store import MemoryStore
 
@@ -23,46 +22,32 @@ class ConversationCatalog:
         self.store = store
         self.scope = scope
         self._key = secrets.token_bytes(32)
+        self.index = ConversationIndex(store)
 
     def handle(self, session_id: str) -> str:
         """Produce a non-reversible handle, valid only after admission."""
         return hmac.new(self._key, session_id.encode(), hashlib.sha256).hexdigest()[:32]
 
     def _groups(self) -> dict[str, tuple[str, ...]]:
-        scope = self.scope()
-        sessions = {*scope, *admitted_archive_sessions(self.store, scope, include_private=True)}
-        # Archive IDs must have a valid launch suffix. Legacy exact prefixes are admitted.
-        sessions = {
-            s
-            for s in sessions
-            if s in scope
-            or ":run:" not in s
-            or re.fullmatch(r"[a-f0-9]{32}", s.partition(":run:")[2])
-        }
-        groups = {s: (s,) for s in sessions}
-        # Merge only projections explicitly recorded by the shared memory context.
-        with self.store._lock:
-            rows = (
-                self.store._get_connection()
-                .execute(
-                    "SELECT summary_session_id,member_session_id FROM memory_session_members",
-                )
-                .fetchall()
-            )
-        projections: dict[str, set[str]] = {}
-        for row in rows:
-            projections.setdefault(row[0], set()).add(row[1])
-        for members in projections.values():
-            if len(members) < 2 or not members <= sessions:
-                continue
-            desktops = [s for s in members if s.startswith("desktop_session:")]
-            if len(desktops) != 1:
-                continue
-            desktop = desktops[0]
-            for member in members:
-                groups.pop(member, None)
-            groups[desktop] = tuple(sorted(members))
-        return groups
+        return conversation_groups(self.store, self.scope(), include_private=True)
+
+    def _identity(self, handle: str) -> str:
+        for identity in self._groups():
+            if hmac.compare_digest(self.handle(identity), handle):
+                return identity
+        raise ValueError("This conversation is no longer available.")
+
+    def hide(self, handle: str) -> None:
+        """Remove from the sidebar only; the history and saved memory stay, and Ciel can
+        still look it up."""
+        self.index.set_hidden(self._identity(handle), True)
+
+    def title(self, handle: str) -> str | None:
+        """Ciel's chosen title for a conversation, if it has picked one."""
+        try:
+            return self.index.title(self._identity(handle))
+        except ValueError:
+            return None
 
     def resolve(self, handle: str) -> tuple[str, ...]:
         """Reject unknown or newly revoked handles without exposing session names."""
@@ -85,8 +70,10 @@ class ConversationCatalog:
         """List bounded summaries, newest first, with deterministic user-authored titles."""
         self._bounds(before, limit, 50)
         scope = self.scope()
-        entries = []
+        entries, hidden = [], self.index.hidden()
         for identity, members in self._groups().items():
+            if identity in hidden:
+                continue
             marks = ",".join("?" for _ in members)
             with self.store._lock:
                 conn = self.store._get_connection()
@@ -101,11 +88,11 @@ class ConversationCatalog:
                 ).fetchone()
             if last is None or before is not None and last >= before:
                 continue
-            title = " ".join(first[0].split())[:80] if first else "Conversation"
+            title = self.index.display_title(identity, first[0] if first else None)
             entries.append(
                 {
                     "handle": self.handle(identity),
-                    "title": SecretMaskingFilter._redact(title),
+                    "title": title,
                     "cursor": last,
                 }
             )

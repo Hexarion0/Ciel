@@ -56,7 +56,8 @@ def call(name, **arguments):
 
 def test_main_catalogue_has_only_admitted_reads(make_tools):
     tools = make_tools()
-    assert names(tools) == {"memory_search", "memory_get", "web_search", "read_page"}
+    assert names(tools) == {"memory_search", "memory_get", "web_search", "read_page",
+                            "conversation_list", "conversation_read", "set_conversation_title"}
     assert not names(tools) & {"save_memory", "shell", "desktop", "execute"}
 
 

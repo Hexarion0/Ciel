@@ -65,6 +65,7 @@ class ConversationManager:
         self._cached_summary: str | None = None
         self._summary_thread: threading.Thread | None = None
         self._summary_retry: tuple[_SummaryRetryKey, float] | None = None
+        self._titler: Any = None
         memory_settings = memory_config or settings.memory
         self.lifecycle = MemoryLifecycle(
             self.store, context_resolver=self._context,
@@ -81,8 +82,39 @@ class ConversationManager:
         )
 
     def start_memory_lifecycle(self, router_or_provider: Any = None) -> bool:
-        """Start scheduled background reflection using the application's priority router."""
+        """Start scheduled background reflection using the application's priority router.
+
+        The same router lets Ciel name this conversation and rename it as it goes.
+        """
+        if router_or_provider is not None and callable(getattr(router_or_provider, "send", None)):
+            from ciel.memory.conversation_index import ConversationIndex
+            from ciel.memory.titles import ConversationTitler
+
+            self._titler = ConversationTitler(router_or_provider, ConversationIndex(self.store))
         return self.lifecycle.start(router_or_provider)
+
+    def _title_after_reply(self) -> None:
+        """Let Ciel choose or revise this conversation's title in the background."""
+        titler = self._titler
+        if titler is None:
+            return
+        try:
+            if getattr(self, "_title_group", None) is None:
+                from ciel.memory.conversation_index import conversation_groups
+
+                # Merged launches share one title; the grouping rarely changes, so keep it.
+                scope = tuple(self.context_session_ids())
+                groups = conversation_groups(self.store, scope, include_private=True)
+                self._title_group = titler.index.group_of(groups, self.session_id)
+            identity, members = self._title_group
+
+            def load() -> tuple[list[tuple[str, str]], bool]:
+                turns = [(turn.role, turn.content) for turn in self.get_recent_turns(limit=24)]
+                return turns, self.local_only_context()
+
+            titler.after_reply(identity, user_turns=titler.index.user_turns(members), load=load)
+        except Exception as err:  # noqa: BLE001 - titles never affect the conversation
+            logger.debug("Conversation title check skipped (%s)", type(err).__name__)
 
     def flush_memory(self) -> int:
         """Write new useful owner notes silently, without advancing the summary cursor."""
@@ -236,6 +268,8 @@ class ConversationManager:
             self.session_id,
             len(content),
         )
+        if role == "assistant":
+            self._title_after_reply()
         return turn_id
 
     def latest_web_evidence(self) -> dict[str, Any]:

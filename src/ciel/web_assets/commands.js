@@ -101,3 +101,59 @@ class CommandPicker {
     if (active && active.scrollIntoView) active.scrollIntoView({block: 'nearest'});
   }
 }
+
+/** The /help panel: the terminal's command groups as a polished, tappable reference. */
+class HelpPanel {
+  constructor(panel, picker) { this.panel = panel; this.picker = picker; this.opened = false; this.returnFocus = null; }
+  /** Open for `/help` or `/help COMMAND`; returns false when the command list is unavailable. */
+  open(argument = '') {
+    const catalog = this.picker && this.picker.catalog;
+    if (!catalog || !Array.isArray(catalog.groups)) return false;
+    const body = element('help-body'); clearNode(body);
+    const wanted = '/' + String(argument).trim().replace(/^\//, '').split(/\s+/)[0].toLowerCase();
+    const detail = wanted.length > 1 && catalog.details ? catalog.details[wanted] : '';
+    if (detail) {
+      const card = document.createElement('div'); card.className = 'help-detail';
+      const [usage, ...rest] = detail.split(' — ');
+      const name = document.createElement('code'); name.textContent = usage;
+      const text = document.createElement('p'); text.textContent = rest.join(' — ') || detail;
+      card.append(name, text); body.append(card);
+    } else if (wanted.length > 1) {
+      const missing = document.createElement('p'); missing.className = 'help-missing';
+      missing.textContent = 'No command named ' + wanted + '. Here is everything Ciel understands.';
+      body.append(missing);
+    }
+    for (const group of catalog.groups) {
+      const section = document.createElement('section'); section.className = 'help-group';
+      const heading = document.createElement('h3'); heading.textContent = group.title;
+      section.append(heading);
+      for (const command of group.commands) {
+        const row = document.createElement('button'); row.type = 'button'; row.className = 'help-command';
+        if (command.name === wanted) row.classList.add('help-current');
+        const label = document.createElement('code'); label.textContent = command.label;
+        const description = document.createElement('span'); description.textContent = command.description;
+        row.append(label, description);
+        row.addEventListener('click', () => this.use(command));
+        section.append(row);
+      }
+      body.append(section);
+    }
+    this.returnFocus = document.activeElement || null;
+    this.opened = true; this.panel.hidden = false;
+    element('help-close').focus();
+    return true;
+  }
+  /** Put the chosen command in the composer, ready to send or complete. */
+  use(command) {
+    const spaced = this.picker.catalog.spaced.includes(command.name);
+    const input = element('input');
+    input.value = command.name + (spaced ? ' ' : '');
+    this.close(); input.focus();
+    if (typeof Event === 'function' && input.dispatchEvent) input.dispatchEvent(new Event('input'));
+  }
+  close() {
+    if (!this.opened) return;
+    this.opened = false; this.panel.hidden = true;
+    if (this.returnFocus && this.returnFocus.focus) this.returnFocus.focus();
+  }
+}

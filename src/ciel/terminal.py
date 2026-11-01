@@ -58,6 +58,12 @@ def command_catalog() -> dict:
                      for name, description in _COMMAND_CHOICES],
         "arguments": {command: list(values) for command, values in _COMMAND_ARGUMENTS.items()},
         "spaced": sorted({*_COMMAND_ARGUMENTS, *_PROVIDER_COMMANDS}),
+        # The web help panel shows the same groups and detailed help as the terminal.
+        "groups": [{"title": title, "commands": [
+            {"label": label, "name": label.split()[0], "description": description}
+            for label, description in rows
+        ]} for title, rows in COMMAND_GROUPS],
+        "details": dict(_COMMAND_HELP),
     }
 
 

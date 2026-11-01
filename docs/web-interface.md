@@ -80,6 +80,21 @@ restarts that window. Ciel keeps only hashes of device tokens, in the owner-only
 only) revokes every paired phone at once. The PC-local page stays available at
 `http://127.0.0.1:8765`.
 
+### Conversation titles and removing chats
+
+Ciel names each conversation itself after the first exchange and reconsiders the title
+every few messages as the topic moves; ask it to rename the chat and it will. The title
+appears in the header and the sidebar. Private conversations are titled by the local model.
+
+Select **×** beside a conversation in the sidebar to remove it from the list. This only
+hides it: the conversation history and anything Ciel saved to memory stay in the database,
+and Ciel can still find and read it when you ask about it. Ciel can list your past
+conversations and read any of them, including hidden ones, within the same privacy rules
+as memory search (private chats are only read by private, local requests).
+
+`/help` opens a commands panel with the terminal's groups; `/help mute` shows that
+command's details first. Tap any command to place it in the message box.
+
 ### Live captions and / commands
 
 When Ciel speaks a reply on this device, its text appears word by word in time with the

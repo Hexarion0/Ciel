@@ -181,7 +181,10 @@ function render(snapshot) {
   }
   browserAudio.syncState(snapshot);
   if (typeof matchMedia === 'function' && matchMedia('(max-width:759px)').matches) text(element('chat-subtitle'), element('core-state').textContent);
-  if (!browsingHandle) renderTimeline(snapshot.messages);
+  if (!browsingHandle) {
+    renderTimeline(snapshot.messages);
+    text(element('chat-title'), snapshot.title || 'A little space to think');  // Ciel names chats
+  }
   watchCaptions();
   if (commandPicker && !commandPicker.catalog) commandPicker.load();
   const latest = snapshot.messages.at(-1);
@@ -230,6 +233,9 @@ async function submit(value) {
   const message = value.trim() || (attachments.admittedIds().length ? 'What can you tell me about this image?' : '');
   if (!message || !runtime.online || runtime.pending || runtime.ended || (browsingHandle && (!message.startsWith('/') || /^\/(?:fast|strong|deep)(?:\s|$)/i.test(message)))) return false;
   const command = message.startsWith('/') && !/^\/(?:fast|strong|deep)(?:\s|$)/i.test(message);
+  // /help opens the command panel right here instead of a one-line server reply.
+  const help = /^\/help(?:\s+(.*))?$/i.exec(message);
+  if (help && helpPanel && helpPanel.open(help[1] || '')) return true;
   attachments.checkExpiry();
   if (!command && (attachments.busy || attachments.items.some(item => !item.handle))) { feedback('Finish uploading or remove the failed image before sending.', true); return false; }
   if (!command) browserAudio.enable();
@@ -306,15 +312,34 @@ async function loadConversations(append = false) {
     const nav = element('conversation-list');
     if (!append) clearNode(nav);
     for (const item of data.conversations) {
+      const row = document.createElement('div'); row.className = 'conversation-row';
       const button = document.createElement('button'); button.type = 'button';
       button.textContent = item.title; button.title = item.title;
       button.setAttribute('aria-current', String(item.handle === (browsingHandle || activeSelection?.handle)));
       button.addEventListener('click', () => browseConversation(item.handle, item.title));
-      nav.append(button);
+      const remove = document.createElement('button'); remove.type = 'button';
+      remove.className = 'conversation-remove'; remove.textContent = '×';
+      remove.setAttribute('aria-label', 'Remove ' + item.title + ' from the list');
+      remove.addEventListener('click', () => hideConversation(item.handle, item.title));
+      row.append(button, remove); nav.append(row);
     }
     catalogCursor = data.next_before; element('history-more').hidden = !catalogCursor;
   } catch { /* Status polling supplies the connection warning. */ }
   finally { catalogBusy = false; }
+}
+/** Remove a conversation from the list; Ciel keeps its history and can still look it up. */
+async function hideConversation(handle, title) {
+  if (!window.confirm('Remove “' + title + '” from your list? Ciel keeps it and can still look it up.')) return;
+  try {
+    const {response, data} = await requestJSON('/api/conversations/hide', {
+      method: 'POST', headers: browserAudio.headers({'Content-Type': 'application/json'}),
+      body: JSON.stringify({handle})
+    });
+    if (!response.ok) throw Error(data.error || 'Could not remove this conversation.');
+    if (browsingHandle === handle) element('return-active').click();
+    await loadConversations();
+    feedback('Removed from your list. Ciel can still look it up.');
+  } catch (error) { feedback(error.message, true); }
 }
 async function browseConversation(handle, title) {
   const epoch = ++viewEpoch;
@@ -380,6 +405,9 @@ const mobileUI = typeof MobileUI === 'function' ? new MobileUI() : null;
 const liveCaptions = typeof LiveCaptions === 'function' ? new LiveCaptions() : null;
 const commandPicker = typeof CommandPicker === 'function'
   ? new CommandPicker(element('input'), element('command-menu')) : null;
+const helpPanel = typeof HelpPanel === 'function' && commandPicker
+  ? new HelpPanel(element('help-panel'), commandPicker) : null;
+element('help-close').addEventListener('click', () => { if (helpPanel) helpPanel.close(); });
 element('attach').addEventListener('click', () => element('image-input').click());
 element('image-input').addEventListener('change', async event => { await attachments.add(event.target.files); event.target.value=''; });
 element('input').addEventListener('paste', event => {
@@ -419,6 +447,15 @@ element('pairing').addEventListener('submit', async event => {
   } catch(error) { feedback(error.message,true); }
 });
 if (document.addEventListener) document.addEventListener('keydown', event => {
+  if (helpPanel && helpPanel.opened) {
+    if (event.key === 'Escape') { event.preventDefault(); helpPanel.close(); }
+    if (event.key === 'Tab') {  // keep focus inside the commands dialog
+      const nodes = Array.from(element('help-panel').querySelectorAll('button')).filter(node => !node.hidden && node.getClientRects().length);
+      if (nodes.length && event.shiftKey && document.activeElement === nodes[0]) { event.preventDefault(); nodes.at(-1).focus(); }
+      else if (nodes.length && !event.shiftKey && document.activeElement === nodes.at(-1)) { event.preventDefault(); nodes[0].focus(); }
+    }
+    return;
+  }
   if (cielSettings.opened) {
     if(event.key==='Escape') {event.preventDefault();cielSettings.close();}
     if(event.key==='Tab') {

@@ -2,6 +2,11 @@
 
 ## Unreleased — 0.3.6 development
 
+- Let Ciel name and rename conversations (background titling on the economical or local
+  route, plus a rename tool), list and read past conversations with owner-scoped tools,
+  and remove conversations from the web sidebar without deleting history or memory.
+  `/help` in the web app opens a grouped, tappable commands panel.
+
 - Load speech recognition and the Pocket or Chatterbox Turbo voice before `ciel web`
   opens the web app, so the first browser request never waits on a cold model.
 
