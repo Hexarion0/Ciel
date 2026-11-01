@@ -58,6 +58,7 @@ class CielSettings {
     const local=browserAudio.device==='pc';
     element('network-enable').hidden=!local || Boolean(data.insecure_lan);
     element('network-code').hidden=!local || Boolean(data.insecure_lan);
+    element('network-disconnect').hidden=!local || Boolean(data.insecure_lan);
     element('network-trust-instructions').hidden=Boolean(data.insecure_lan);
     element('network-setup').hidden=!data.setup_url;
     if(data.setup_url) {element('network-setup').href=data.setup_url;element('network-setup').textContent='On your phone, open '+data.setup_url;}
@@ -81,6 +82,11 @@ class CielSettings {
     const {response,data}=await requestJSON('/api/pair-code',{method:'POST',headers:browserAudio.headers({'Content-Type':'application/json'}),body:'{}'});
     text(element('network-pair-code'),response.ok?'Pairing code: '+data.code+' · valid for 5 minutes':data.error || 'Open this section on your PC to make a pairing code.');
   }
+  async disconnectPhones() {
+    if(!window.confirm('Disconnect all paired phones? Each will need a new pairing code.')) return;
+    const {response,data}=await requestJSON('/api/revoke',{method:'POST',headers:browserAudio.headers({'Content-Type':'application/json'}),body:JSON.stringify({all:true})});
+    text(element('network-pair-code'),!response.ok?(data.error || 'Phones could not be disconnected. Try again.'):data.devices?'Disconnected '+data.devices+(data.devices===1?' phone.':' phones.'):'No phones were paired.');
+  }
   async memories() {
     const {response,data}=await requestJSON('/api/memory');
     const list=element('saved-memory');clearNode(list);
@@ -99,7 +105,7 @@ class CielSettings {
     if(!list.children.length) list.textContent='No saved facts yet.';
   }
   async restart() {
-    if(!window.confirm('Restart Ciel? Phone devices will need a new pairing code.')) return;
+    if(!window.confirm('Restart Ciel? Paired phones reconnect automatically.')) return;
     const {response}=await requestJSON('/api/server/restart',{method:'POST',headers:browserAudio.headers({'Content-Type':'application/json'}),body:JSON.stringify({confirmed:true})});
     if(response.ok) text(element('settings-notice'),'Restarting Ciel. Keep this page open.');
   }

@@ -11,7 +11,12 @@ from http.cookies import SimpleCookie
 from urllib.parse import parse_qs, urlsplit
 
 from ciel.webapp.audio import decode_voice_wav
-from ciel.webapp.auth import DeviceAuth, DeviceSession
+from ciel.webapp.auth import (
+    BROWSER_SESSION_LIFETIME,
+    PAIRED_DEVICE_LIFETIME,
+    DeviceAuth,
+    DeviceSession,
+)
 from ciel.webapp.images import normalize_upload
 from ciel.webapp.media import MediaStore
 from ciel.webapp.requests import WebRequest
@@ -31,6 +36,25 @@ class WebChannels:
         self.local = DeviceSession("pc", self.owner_key, float("inf"))
         self._upload_lock = threading.RLock()
         self._attachments: dict[tuple[str, str, int], list[str]] = {}
+        self._cookie_renewed: dict[str, float] = {}
+
+    def _cookie_renewal_due(self, device_id: str, path: str) -> bool:
+        """Renew on each app launch, and about daily while an open app keeps polling."""
+        if path not in {"/api/session", "/api/state"}:
+            return False
+        now = self.auth.clock()
+        with self._upload_lock:
+            last = self._cookie_renewed.get(device_id)
+            if path == "/api/state" and last is not None and now - last < 24 * 3600:
+                return False
+            self._cookie_renewed[device_id] = now
+            return True
+
+    @staticmethod
+    def paired_cookie(token: str) -> str:
+        """Paired phones use HTTPS only; the cookie lasts as long as the idle window."""
+        return (f"ciel_device={token}; Path=/; Secure; HttpOnly; SameSite=Strict; "
+                f"Max-Age={PAIRED_DEVICE_LIFETIME}")
 
     def configure(self, submit, tts) -> None:
         """Connect existing listener and TTS after the desktop runtime starts."""
@@ -60,9 +84,14 @@ class WebChannels:
             handler.device, handler.device_token = device, device.token
             handler.response_headers = {
                 "Set-Cookie": f"ciel_device={device.token}; Path=/; HttpOnly; "
-                "SameSite=Strict; Max-Age=43200"
+                f"SameSite=Strict; Max-Age={BROWSER_SESSION_LIFETIME}"
             }
-        public = path in {"/", "/api/session", "/api/pair"} or path.startswith("/assets/")
+        elif (handler.device is not None and handler.device.paired
+              and self._cookie_renewal_due(handler.device.device_id, path)):
+            # Keep the browser cookie in step with the sliding server-side idle window.
+            handler.response_headers = {"Set-Cookie": self.paired_cookie(token)}
+        public = (path in {"/", "/sw.js", "/api/session", "/api/pair"}
+                  or path.startswith("/assets/"))
         if handler.device is None and not public:
             handler._json(401, {"error": "Pair this device with the code on your PC."})
             return False
@@ -229,14 +258,18 @@ class WebChannels:
                 if not isinstance(code, str) or len(code) > 16:
                     raise ValueError("Invalid pairing code.")
                 device = self.auth.pair(code, source=handler.client_address[0])
-                handler.response_headers = {
-                    "Set-Cookie": "ciel_device="
-                    + device.token
-                    + "; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=43200"
-                }
+                handler.response_headers = {"Set-Cookie": self.paired_cookie(device.token)}
                 handler._json(200, {"paired": True, "csrf": device.csrf})
             elif path == "/api/revoke":
                 data = self.json(handler, 1024)
+                if data.get("all") is True:
+                    if handler.device.device_id != "pc":
+                        raise ValueError("Only the PC can disconnect all phones.")
+                    removed = self.auth.revoke_all()
+                    for identity in removed:
+                        self.media.invalidate(device_id=identity)
+                    handler._json(200, {"revoked": True, "devices": len(removed)})
+                    return True
                 # A phone may disconnect itself. Only the local PC may revoke another device.
                 identity = data.get("device_id", handler.device.device_id)
                 if handler.device.device_id != "pc" and identity != handler.device.device_id:

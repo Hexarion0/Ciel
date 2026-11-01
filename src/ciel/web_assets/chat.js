@@ -332,6 +332,7 @@ element('settings-close').addEventListener('click', () => cielSettings.close());
 element('settings-form').addEventListener('submit', event => { event.preventDefault(); cielSettings.save(); });
 element('network-enable').addEventListener('click', () => cielSettings.enableNetwork());
 element('network-code').addEventListener('click', () => cielSettings.pairCode().catch(() => text(element('network-pair-code'),'Could not create a code. Try again.')));
+element('network-disconnect').addEventListener('click', () => cielSettings.disconnectPhones().catch(() => text(element('network-pair-code'),'Phones could not be disconnected. Try again.')));
 element('memory-refresh').addEventListener('click', () => cielSettings.memories().catch(() => text(element('saved-memory'),'Could not load saved memory.')));
 element('server-restart').addEventListener('click', () => cielSettings.restart().catch(() => text(element('settings-notice'),'Server restart could not be requested.')));
 if (document.addEventListener) document.addEventListener('visibilitychange', () => {
@@ -378,5 +379,8 @@ if (document.addEventListener) document.addEventListener('keydown', event => {
 });
 if (typeof matchMedia === 'function') matchMedia('(max-width:759px)').addEventListener('change',syncDrawer);
 syncDrawer();
+// Installable app with an offline screen; browsers only allow this over HTTPS or on the PC.
+if (typeof navigator !== 'undefined' && navigator.serviceWorker && globalThis.isSecureContext)
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
 poll(); browserAudio.initialize();
 setInterval(poll, 350); setInterval(() => attachments.checkExpiry(),1000); setInterval(() => browserAudio.poll(), 500);

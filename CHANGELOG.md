@@ -2,6 +2,11 @@
 
 ## Unreleased — 0.3.6 development
 
+- Make the browser app installable on Android with a manifest, orb app icon, and a
+  service worker that shows an offline screen when the PC is unreachable but caches
+  nothing. Keep paired phones connected across restarts until 30 idle days, storing
+  only token hashes in an owner-only file, and add **Disconnect all phones** to Settings.
+
 - Replace per-turn browser recording with continuous listening, automatic speech
   boundaries, persistent microphone pause, and suppression during reply playback.
   Keep capture open between turns, resume after reconnecting, and keep Stop reply

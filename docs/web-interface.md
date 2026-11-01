@@ -74,8 +74,21 @@ vary; see [Android's certificate instructions](https://support.google.com/pixelp
 Then open the HTTPS app address (normally `https://192.168.1.100:8765`). On the PC,
 choose **Create pairing code** and enter the code on the phone. Codes expire after five
 minutes and work once; attempts are rate limited. Do not bypass certificate warnings.
-Device sessions last twelve hours or until Ciel restarts. A restart requires pairing
-phone devices again. The PC-local page stays available at `http://127.0.0.1:8765`.
+Paired phones stay connected through restarts until 30 days pass without use; each use
+restarts that window. Ciel keeps only hashes of device tokens, in the owner-only file
+`data/web/paired-devices.json`. **Disconnect all phones** in the same Settings panel (PC
+only) revokes every paired phone at once. The PC-local page stays available at
+`http://127.0.0.1:8765`.
+
+### Install Ciel on the phone's home screen
+
+Once the phone opens the HTTPS address without a certificate warning and is paired,
+open Chrome's menu and choose **Install app** (or **Add to Home screen**). Ciel then opens
+full-screen from its own icon, without the browser bar. If the PC is off or unreachable,
+the app shows a short "Ciel's PC isn't reachable" screen with **Try again** instead of a
+browser error. The service worker stores nothing: no chats, settings, or API responses
+are cached on the phone. Installation needs the trusted HTTPS connection, so it is not
+available in the plain-HTTP home-network mode.
 Accidental HTTP visits to the HTTPS port redirect to the secure app before any private
 API or device session is accessed. Plain HTTP submissions on that port are rejected.
 Ordinary TLS disconnects and untrusted-certificate handshakes do not print tracebacks.

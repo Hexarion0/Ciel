@@ -11,6 +11,12 @@ _ASSETS = {
     "/assets/audio.js": ("audio.js", "text/javascript; charset=utf-8"),
     "/assets/attachments.js": ("attachments.js", "text/javascript; charset=utf-8"),
     "/assets/pcm-worklet.js": ("pcm-worklet.js", "text/javascript; charset=utf-8"),
+    "/assets/manifest.webmanifest": ("manifest.webmanifest",
+                                     "application/manifest+json; charset=utf-8"),
+    "/assets/icon-192.png": ("icon-192.png", "image/png"),
+    "/assets/icon-512.png": ("icon-512.png", "image/png"),
+    # A service worker controls only its own path and below, so it must live at the root.
+    "/sw.js": ("sw.js", "text/javascript; charset=utf-8"),
 }
 
 

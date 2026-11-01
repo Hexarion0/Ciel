@@ -2599,6 +2599,8 @@ def run_desktop(
                 recall=lambda: memory_service.recall_enabled,
             )
             web_ui.insecure_lan = settings.web_insecure_lan
+            # Paired phones stay connected across restarts (token digests only, owner-only file).
+            web_ui.channels.auth.attach_store(resolve_asset_path('data/web/paired-devices.json'))
             connection = LocalConnection(settings, web_ui, resolve_asset_path('data/web/tls'),
                                          Path.cwd() / '.env', args.web_port)
             web_ui.admin = WebAdministration(
