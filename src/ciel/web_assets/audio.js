@@ -1,4 +1,6 @@
 'use strict';
+// Live captions live in captions.js; pages and tests without it simply skip them.
+const captionsOrNull = () => (typeof liveCaptions !== 'undefined' ? liveCaptions : null);
 // Sample-count timing stays stable across microphone block sizes and hardware rates.
 class SpeechSegmenter {
   constructor() { this.noise=.002; this.reset(); }
@@ -202,6 +204,7 @@ class BrowserAudio {
     text(element('state-hint'),browsingHandle?'Continue this chat or return to the current chat to speak.':on?'Speak naturally. Ciel sends when you pause; the mic pauses during replies.':'Enable the microphone once for continuous listening. You can also type.');
   }
   stop({microphone=true}={}) {
+    captionsOrNull()?.finishAll();
     this.generation++;if(microphone) this.stopCapture();
     if(this.recording) this.recording.vad.reset();
     this.waiting=null;this.pauseUntil=Date.now()+600;
@@ -219,7 +222,7 @@ class BrowserAudio {
     await new Promise(resolve=>{
       const source=this.context.createBufferSource(); this.source=source;
       source.buffer=audio; source.connect(this.context.destination); source.onended=resolve;
-      source.start();if(onStart) onStart();
+      source.start();if(onStart) onStart(audio.duration);
       orb.update('speaking',false); text(element('core-state'),'Speaking on this device.');
     });
     this.source=null;this.pauseUntil=Date.now()+600;return true;
@@ -231,14 +234,15 @@ class BrowserAudio {
     try {
       const {response,data}=await requestJSON('/api/playback');
       if (!response.ok) return;
+      captionsOrNull()?.listed(data.jobs || []);
       if (this.resync) {
-        for (const job of data.jobs || []) this.seen.add(job.id);
+        for (const job of data.jobs || []) {this.seen.add(job.id);captionsOrNull()?.finish(job.message);}
         this.resync=false; return;
       }
       for(const job of data.jobs || []) {
         if (this.seen.has(job.id)) continue;
         this.seen.add(job.id);
-        if (job.error) { feedback(job.error,true); continue; }
+        if (job.error) { feedback(job.error,true); captionsOrNull()?.finish(job.message); continue; }
         if (job.excerpt) {
           element('read-full').hidden=false;
           element('read-full').onclick=async()=>{
@@ -246,7 +250,9 @@ class BrowserAudio {
             await requestJSON('/api/replay',{method:'POST',headers:this.headers({'Content-Type':'application/json'}),body:JSON.stringify({job:job.id})});
           };
         }
-        if (this.muted) continue;
+        if (this.muted) {captionsOrNull()?.finish(job.message);continue;}
+        captionsOrNull()?.begin(job.message, job.caption);
+        if (typeof watchCaptions === 'function') watchCaptions();
         this.playbackActive=true;
         if(this.recording) this.recording.vad.reset();
         const generation=this.generation;
@@ -265,9 +271,10 @@ class BrowserAudio {
             if(generation!==this.generation || this.muted) return null;
             if(reply.status===204) {await new Promise(resolve=>setTimeout(resolve,150));continue;}
             if(!reply.ok) return null;
+            const from=Number(reply.headers?.get?.('X-Caption-From')), to=Number(reply.headers?.get?.('X-Caption-To'));
             const decoded=this.ready && this.context?.state==='running'
               ? await this.context.decodeAudioData(chunk) : null;
-            return generation===this.generation && !this.muted?{chunk,decoded}:null;
+            return generation===this.generation && !this.muted?{chunk,decoded,from,to}:null;
           }
           return null;
         };
@@ -280,13 +287,16 @@ class BrowserAudio {
             if(error) throw error;
             if(!value || generation!==this.generation) break;
             const played=await this.playChunk(value.chunk,{
-              decoded:value.decoded,onStart:()=>{next=prefetch();}
+              decoded:value.decoded,onStart:duration=>{
+                next=prefetch();captionsOrNull()?.segment(job.message,value.from,value.to,duration);
+              }
             });
             if(!played) {this.seen.delete(job.id);break;}
             if(!next) break;
           }
         } finally {
           if(next && this.playbackAbort) this.playbackAbort.abort();
+          captionsOrNull()?.finish(job.message);
         }
       }
     } catch { /* Leave transcript available when playback loses its connection. */ }

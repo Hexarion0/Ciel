@@ -1239,14 +1239,18 @@ def run_desktop(
                 return False
             browser_request = wake_info.get('web_request')
             if web_mode and web_ui is not None:
-                if not displayed:
-                    web_ui.text_reply(reply)
+                voiced = (browser_request is not None and settings.audio.tts_enabled
+                          and tts.enabled)
+                # A voiced reply is captioned live on the requesting browser as it speaks.
+                message_id = (web_ui.text_reply(reply, spoken=voiced and not displayed)
+                              if not displayed else None)
                 if on_start is not None:
                     on_start()
-                if browser_request is not None and settings.audio.tts_enabled and tts.enabled:
+                if voiced:
                     try:
                         web_ui.channels.speech.speak(
                             reply, browser_request, cancel_event=cancel_event, current=current,
+                            message_id=message_id,
                         )
                     except ValueError:
                         web_ui.feedback('Audio is unavailable. Your answer is below.', error=True)

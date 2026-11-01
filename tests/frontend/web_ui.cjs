@@ -115,7 +115,7 @@ const context = {
   }
 };
 vm.createContext(context);
-vm.runInContext(['orb.js', 'render.js', 'audio.js', 'attachments.js', 'settings.js', 'mobile.js', 'chat.js'].map(name => fs.readFileSync('src/ciel/web_assets/' + name, 'utf8')).join('\n'), context);
+vm.runInContext(['orb.js', 'render.js', 'audio.js', 'attachments.js', 'settings.js', 'mobile.js', 'captions.js', 'commands.js', 'chat.js'].map(name => fs.readFileSync('src/ciel/web_assets/' + name, 'utf8')).join('\n'), context);
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
 (async () => {

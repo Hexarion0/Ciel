@@ -223,6 +223,12 @@ class WebChannels:
                     self.revision(),
                     client,
                 )
+                if data:
+                    # Which caption characters this chunk speaks, for live captions.
+                    handler.response_headers = {
+                        "X-Caption-From": str(getattr(data, "caption_from", 0)),
+                        "X-Caption-To": str(getattr(data, "caption_to", 0)),
+                    }
                 handler._send(200 if data else 204, data or b"", "audio/wav")
             except EOFError as error:
                 handler._json(410, {"error": str(error)})

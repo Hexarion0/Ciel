@@ -51,6 +51,16 @@ _COMMAND_ARGUMENTS = {
 }
 
 
+def command_catalog() -> dict:
+    """Describe the slash-command picker so the web app completes exactly like the terminal."""
+    return {
+        "commands": [{"name": name, "description": description}
+                     for name, description in _COMMAND_CHOICES],
+        "arguments": {command: list(values) for command, values in _COMMAND_ARGUMENTS.items()},
+        "spaced": sorted({*_COMMAND_ARGUMENTS, *_PROVIDER_COMMANDS}),
+    }
+
+
 def command_suggestions(draft: str) -> list[tuple[str, str]]:
     """Complete only a leading slash command or its supported local arguments."""
     if not draft.startswith("/"):

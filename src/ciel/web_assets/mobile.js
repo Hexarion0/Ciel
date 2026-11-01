@@ -105,8 +105,11 @@ class MobileUI {
     const last = role => [...messages].reverse().find(message => message.role === role);
     const heard = last('user'), reply = last('assistant');
     const fresh = reply && (!heard || reply.id > heard.id);
+    // While this phone speaks the reply, show it as a live caption in step with the voice.
+    const live = fresh && typeof liveCaptions !== 'undefined' && liveCaptions ? liveCaptions.text(reply) : null;
     text(element('voice-heard'), heard ? '“' + heard.text + '”' : '');
-    text(element('voice-reply'), fresh ? reply.text : '');
+    text(element('voice-reply'), fresh ? (live === null ? reply.text : live) : '');
+    element('voice-reply').classList.toggle('captioning', live !== null);
   }
   syncButtons(busy) {
     const audio = browserAudio, mute = element('mute');

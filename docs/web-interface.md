@@ -80,6 +80,18 @@ restarts that window. Ciel keeps only hashes of device tokens, in the owner-only
 only) revokes every paired phone at once. The PC-local page stays available at
 `http://127.0.0.1:8765`.
 
+### Live captions and / commands
+
+When Ciel speaks a reply on this device, its text appears word by word in time with the
+voice, in the chat and in voice mode, like the terminal's captions. When playback ends,
+or you stop it or turn sound off, the full formatted answer is shown. Devices that are not
+playing the reply see the full text straight away.
+
+Type `/` in the message box for the same command picker as the terminal: ↑/↓ choose,
+**Tab** completes (adding a space for commands with options such as `/mute on|off`),
+**Enter** completes a partial command or sends a complete one, and **Esc** closes the list.
+On a phone, tap a command to complete it.
+
 ### Phone layout: voice and chat modes
 
 On narrow screens (up to 759 px) Ciel uses a phone layout. A status pill under the title

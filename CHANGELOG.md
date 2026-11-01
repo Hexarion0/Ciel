@@ -2,6 +2,10 @@
 
 ## Unreleased — 0.3.6 development
 
+- Caption spoken web replies live: the playing device reveals each reply in step with
+  its voice using per-chunk caption ranges, then shows the full answer. Add the
+  terminal's `/` command picker to the web composer, served from the same command list.
+
 - Add a phone layout with switchable voice and chat modes: a large orb with big mic and
   stop controls, or a messaging layout with an icon composer. A status pill always shows
   listening, thinking (with elapsed seconds), speaking, paused, unpaired, or offline.

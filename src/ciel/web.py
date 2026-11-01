@@ -138,10 +138,11 @@ class DesktopWebUI:
             self._sentence_base = ""
             self._speaking = False
 
-    def text_reply(self, text: str) -> None:
+    def text_reply(self, text: str, *, spoken: bool = False) -> int:
+        """Publish a finished reply; ``spoken`` tells the requesting browser to caption it."""
         with self._lock:
             self.finish_reply()
-            self._message("assistant", text)
+            return self._message("assistant", text, **({"spoken": True} if spoken else {}))["id"]
 
     def set_reply_sources(
         self, sources: list[dict[str, str]], *, user_message_id: int | None = None,
@@ -314,6 +315,10 @@ class DesktopWebUI:
                     return
                 if self.path == "/":
                     self._send(200, document, "text/html; charset=utf-8")
+                elif parsed.path == "/api/commands":
+                    from ciel.terminal import command_catalog
+
+                    self._json(200, command_catalog())
                 elif parsed.path == "/api/state":
                     try:
                         after = parse_qs(parsed.query).get('after', [None])[0]

@@ -22,6 +22,45 @@ function syncControls() {
 }
 const messageNodes = new Map();
 function hideSpeech() {} // Stopping playback leaves the transcript available.
+/** Show a live caption while this device speaks the reply; otherwise the full message. */
+function renderCaption(body, message) {
+  // Replies already present at the first render are history; only later ones are captioned.
+  if (liveCaptions) liveCaptions.observe(message, {audible: browserAudio.available && !browserAudio.muted,
+    fresh: runtime.initialized});
+  const caption = liveCaptions ? liveCaptions.text(message) : null;
+  body.classList.toggle('captioning', caption !== null);
+  if (caption === null) {
+    const changed = body.dataset.content !== message.text;
+    body.dataset.caption = '';
+    renderMessageContent(body, message.text);
+    return changed;
+  }
+  if (body.dataset.caption === caption && body.dataset.content === '') return false;
+  clearNode(body); body.textContent = caption;
+  body.dataset.caption = caption; body.dataset.content = '';
+  return true;
+}
+let captionTimer = null;
+/** Repaint only captioned replies while any reply is being spoken. */
+function paintCaptions() {
+  if (!liveCaptions) return;
+  if (!browsingHandle) {
+    const feed = element('messages');
+    let following = null, changed = false;
+    for (const message of runtime.liveMessages) {
+      const row = messageNodes.get(message.id), item = liveCaptions.items.get(message.id);
+      if (!row || !item || (item.phase === 'done' && !row.body.classList.contains('captioning'))) continue;
+      if (following === null) following = feed.scrollHeight - feed.clientHeight - feed.scrollTop < 80;
+      changed = renderCaption(row.body, message) || changed;
+    }
+    if (changed && following) feed.scrollTop = feed.scrollHeight;
+  }
+  if (mobileUI) mobileUI.syncTranscript();
+  if (!liveCaptions.active() && captionTimer !== null) { clearInterval(captionTimer); captionTimer = null; }
+}
+function watchCaptions() {
+  if (liveCaptions && liveCaptions.active() && captionTimer === null) captionTimer = setInterval(paintCaptions, 80);
+}
 function renderTimeline(messages, {followLatest = true} = {}) {
   const feed = element('messages');
   const following = feed.scrollHeight - feed.clientHeight - feed.scrollTop < 80;
@@ -45,8 +84,7 @@ function renderTimeline(messages, {followLatest = true} = {}) {
     }
     row.root.className = 'message ' + message.role;
     text(row.author, message.role === 'user' ? 'You' : 'Ciel');
-    if (row.body.dataset.content !== message.text) changed = true;
-    renderMessageContent(row.body, message.text);
+    if (renderCaption(row.body, message)) changed = true;
     renderMessageSources(row.sources, message.sources);
     text(row.note, message.interrupted ? 'Reply stopped' : message.live ? 'Speaking…' : '');
   }
@@ -144,6 +182,8 @@ function render(snapshot) {
   browserAudio.syncState(snapshot);
   if (typeof matchMedia === 'function' && matchMedia('(max-width:759px)').matches) text(element('chat-subtitle'), element('core-state').textContent);
   if (!browsingHandle) renderTimeline(snapshot.messages);
+  watchCaptions();
+  if (commandPicker && !commandPicker.catalog) commandPicker.load();
   const latest = snapshot.messages.at(-1);
   if (runtime.initialized && latest?.role === 'assistant' && !latest.live && runtime.announced !== latest.id) {
     text(element('reply-announcement'), 'Ciel: ' + latest.text); runtime.announced = latest.id;
@@ -226,7 +266,8 @@ element('new-messages').addEventListener('click', () => {
 element('history-toggle').addEventListener('click', () => setDrawer(true));
 element('history-close').addEventListener('click', () => setDrawer(false));
 element('drawer-shade').addEventListener('click', () => setDrawer(false));
-element('input').addEventListener('keydown', event => { if (event.key === 'Escape') setDrawer(false); });
+// Escape closes the history drawer, unless it is closing the command list first.
+element('input').addEventListener('keydown', event => { if (event.key === 'Escape' && element('command-menu').hidden) setDrawer(false); });
 element('composer').addEventListener('submit', async event => {
   event.preventDefault();
   const input = element('input'), draft = input.value;
@@ -238,8 +279,12 @@ element('composer').addEventListener('submit', async event => {
 element('input').addEventListener('input', () => {
   const input = element('input'); input.style.height = 'auto';
   input.style.height = Math.min(input.scrollHeight, 100) + 'px';
+  if (commandPicker) commandPicker.render();
 });
+element('input').addEventListener('focus', () => { if (commandPicker) commandPicker.setOpen(true); });
+element('input').addEventListener('blur', () => { if (commandPicker) commandPicker.setOpen(false); });
 element('input').addEventListener('keydown', event => {
+  if (commandPicker && commandPicker.key(event)) return;
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
     event.preventDefault(); element('composer').requestSubmit();
   }
@@ -332,6 +377,9 @@ const browserAudio = new BrowserAudio();
 const attachments = new AttachmentComposer();
 const cielSettings = new CielSettings();
 const mobileUI = typeof MobileUI === 'function' ? new MobileUI() : null;
+const liveCaptions = typeof LiveCaptions === 'function' ? new LiveCaptions() : null;
+const commandPicker = typeof CommandPicker === 'function'
+  ? new CommandPicker(element('input'), element('command-menu')) : null;
 element('attach').addEventListener('click', () => element('image-input').click());
 element('image-input').addEventListener('change', async event => { await attachments.add(event.target.files); event.target.value=''; });
 element('input').addEventListener('paste', event => {
@@ -392,6 +440,7 @@ if (document.addEventListener) document.addEventListener('keydown', event => {
 if (typeof matchMedia === 'function') matchMedia('(max-width:759px)').addEventListener('change',syncDrawer);
 syncDrawer();
 if (mobileUI) mobileUI.bind();
+if (commandPicker && typeof document !== 'undefined' && document.activeElement === element('input')) commandPicker.setOpen(true);
 // Installable app with an offline screen; browsers only allow this over HTTPS or on the PC.
 if (typeof navigator !== 'undefined' && navigator.serviceWorker && globalThis.isSecureContext)
   navigator.serviceWorker.register('/sw.js').catch(() => {});
