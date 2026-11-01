@@ -4,7 +4,8 @@
 
 - Let Ciel name and rename conversations (background titling on the economical or local
   route, plus a rename tool), list and read past conversations with owner-scoped tools,
-  and remove conversations from the web sidebar without deleting history or memory.
+  and remove conversations from the web sidebar without deleting history or memory;
+  **Show hidden chats** lists removed ones with **Restore**.
   `/help` in the web app opens a grouped, tappable commands panel.
 
 - Load speech recognition and the Pocket or Chatterbox Turbo voice before `ciel web`

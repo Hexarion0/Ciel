@@ -42,6 +42,10 @@ class ConversationCatalog:
         still look it up."""
         self.index.set_hidden(self._identity(handle), True)
 
+    def unhide(self, handle: str) -> None:
+        """Put a hidden conversation back in the sidebar list."""
+        self.index.set_hidden(self._identity(handle), False)
+
     def title(self, handle: str) -> str | None:
         """Ciel's chosen title for a conversation, if it has picked one."""
         try:
@@ -66,13 +70,17 @@ class ConversationCatalog:
         ):
             raise ValueError("Invalid history page.")
 
-    def list(self, before: int | None = None, limit: int = 30) -> dict[str, Any]:
-        """List bounded summaries, newest first, with deterministic user-authored titles."""
+    def list(
+        self, before: int | None = None, limit: int = 30, *, hidden: bool = False,
+    ) -> dict[str, Any]:
+        """List bounded summaries, newest first; ``hidden`` lists only removed chats."""
         self._bounds(before, limit, 50)
         scope = self.scope()
-        entries, hidden = [], self.index.hidden()
-        for identity, members in self._groups().items():
-            if identity in hidden:
+        entries, removed = [], self.index.hidden()
+        groups = self._groups()
+        hidden_count = len(removed & set(groups))
+        for identity, members in groups.items():
+            if (identity in removed) != hidden:
                 continue
             marks = ",".join("?" for _ in members)
             with self.store._lock:
@@ -102,6 +110,7 @@ class ConversationCatalog:
         return {
             "conversations": entries[:limit],
             "next_before": entries[limit - 1]["cursor"] if len(entries) > limit else None,
+            "hidden_count": hidden_count,
         }
 
     def read(self, handle: str, before: int | None = None, limit: int = 50) -> dict[str, Any]:

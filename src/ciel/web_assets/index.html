@@ -25,9 +25,10 @@
   <aside class="sidebar" id="sidebar" aria-label="Conversations">
     <div class="sidebar-heading"><a href="/" class="brand">ciel<span class="brand-dot">.</span></a><button id="history-close" class="mobile-only icon-button" type="button" aria-label="Close conversations">×</button></div>
     <button id="new-chat" class="new-chat" type="button"><span aria-hidden="true">＋</span> New conversation</button>
-    <div class="history-heading">Your conversations</div>
+    <div class="history-heading" id="history-heading">Your conversations</div>
     <nav id="conversation-list" class="conversation-list" aria-label="Conversation history"><p class="history-empty">Your chats will settle in here.</p></nav>
     <button id="history-more" class="text-button" hidden type="button">Earlier conversations</button>
+    <button id="history-hidden" class="text-button" hidden type="button">Show hidden chats</button>
     <div class="presence" id="presence">
       <button class="orb" id="core" type="button" aria-label="Mute microphone" aria-pressed="false" aria-describedby="state-hint" disabled>
         <canvas id="orb-canvas" width="240" height="240" aria-hidden="true"></canvas>

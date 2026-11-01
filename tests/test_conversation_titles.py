@@ -284,3 +284,37 @@ def test_header_title_follows_a_conversation_switch_immediately(store):
     assert ui.snapshot()["title"] == "Coast weekend"
     active[0] = "s2"
     assert ui.snapshot()["title"] == "Bike chain fix"
+
+
+def test_hidden_chats_can_be_listed_and_restored(store):
+    import httpx
+
+    from ciel.web import DesktopWebUI
+    from ciel.webapp.conversations import ConversationCatalog
+
+    chat(store, "s1", ("Coast trip", "Sure."))
+    chat(store, "s2", ("Bike repair", "Chain."))
+    catalog = ConversationCatalog(store, lambda: ("s1", "s2"))
+    bike = next(item["handle"] for item in catalog.list()["conversations"]
+                if item["title"] == "Bike repair")
+    assert catalog.list()["hidden_count"] == 0
+    catalog.hide(bike)
+
+    assert catalog.list()["hidden_count"] == 1
+    assert [item["title"] for item in catalog.list(hidden=True)["conversations"]] == [
+        "Bike repair"]
+    ui = DesktopWebUI("owner", "hey ciel")
+    ui.configure_history(catalog, None)
+    url = ui.start(MagicMock(return_value=True), port=0)
+    try:
+        with httpx.Client(base_url=url, trust_env=False, timeout=2) as client:
+            hidden = client.get("/api/conversations?hidden=1").json()["conversations"]
+            assert [item["title"] for item in hidden] == ["Bike repair"]
+            assert client.post("/api/conversations/unhide",
+                               json={"handle": hidden[0]["handle"]}).json() == {"hidden": False}
+            restored = client.get("/api/conversations").json()
+    finally:
+        ui.close()
+    assert sorted(item["title"] for item in restored["conversations"]) == [
+        "Bike repair", "Coast trip"]
+    assert restored["hidden_count"] == 0

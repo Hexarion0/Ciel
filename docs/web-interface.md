@@ -88,7 +88,8 @@ appears in the header and the sidebar. Private conversations are titled by the l
 
 Select **×** beside a conversation in the sidebar to remove it from the list. This only
 hides it: the conversation history and anything Ciel saved to memory stay in the database,
-and Ciel can still find and read it when you ask about it. Ciel can list your past
+and Ciel can still find and read it when you ask about it. **Show hidden chats** below
+the list (shown when something is hidden) lists them with **Restore** to bring one back. Ciel can list your past
 conversations and read any of them, including hidden ones, within the same privacy rules
 as memory search (private chats are only read by private, local requests).
 

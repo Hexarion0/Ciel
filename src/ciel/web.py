@@ -336,7 +336,9 @@ class DesktopWebUI:
                         query = parse_qs(parsed.query)
                         paging = {key: int(query[key][0]) for key in ('before', 'limit')
                                   if key in query}
-                        result = (ui.catalog.list(**paging) if parsed.path == '/api/conversations'
+                        hidden = query.get('hidden', ['0'])[0] == '1'
+                        result = (ui.catalog.list(**paging, hidden=hidden)
+                                  if parsed.path == '/api/conversations'
                                   else ui.catalog.read(parsed.path.rsplit('/', 1)[-1], **paging))
                         self._json(200, result)
                     except (ValueError, TypeError):
@@ -383,8 +385,9 @@ class DesktopWebUI:
                     except (ValueError, TypeError, AttributeError):
                         self._json(409, {'error': 'The active chat changed. Refresh and retry.'})
                     return
-                if self.path == '/api/conversations/hide' and ui.catalog:
-                    # Removes it from the list only; history and memory stay for Ciel.
+                hide_paths = {'/api/conversations/hide', '/api/conversations/unhide'}
+                if self.path in hide_paths and ui.catalog:
+                    # Hiding only changes the list; history and memory stay for Ciel.
                     try:
                         length = int(self.headers.get('Content-Length', '0'))
                         if not 0 < length <= 1024:
@@ -394,8 +397,9 @@ class DesktopWebUI:
                         handle = json.loads(self.rfile.read(length)).get('handle')
                         if not isinstance(handle, str) or len(handle) > 64:
                             raise ValueError()
-                        ui.catalog.hide(handle)
-                        self._json(200, {'hidden': True})
+                        hide = self.path.endswith('/hide')
+                        (ui.catalog.hide if hide else ui.catalog.unhide)(handle)
+                        self._json(200, {'hidden': hide})
                     except (ValueError, TypeError, AttributeError):
                         self._json(404, {'error': 'This conversation is no longer available.'})
                     return

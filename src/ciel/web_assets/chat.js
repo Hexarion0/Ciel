@@ -302,12 +302,13 @@ for (const id of ['stop', 'exit', 'help']) element(id).addEventListener('click',
 
 let activeSelection = null, browsingHandle = null, viewEpoch = 0;
 let catalogCursor = null, historyCursor = null, historyMessages = [], catalogTime = 0;
-let catalogBusy = false;
+let catalogBusy = false, showingHidden = false;
 async function loadConversations(append = false) {
   if (catalogBusy) return;
   catalogBusy = true;
   try {
-    const {response, data} = await requestJSON('/api/conversations' + (append && catalogCursor ? '?before=' + catalogCursor : ''));
+    const params = [append && catalogCursor ? 'before=' + catalogCursor : '', showingHidden ? 'hidden=1' : ''].filter(Boolean);
+    const {response, data} = await requestJSON('/api/conversations' + (params.length ? '?' + params.join('&') : ''));
     if (!response.ok || !Array.isArray(data.conversations)) return;
     const nav = element('conversation-list');
     if (!append) clearNode(nav);
@@ -318,14 +319,40 @@ async function loadConversations(append = false) {
       button.setAttribute('aria-current', String(item.handle === (browsingHandle || activeSelection?.handle)));
       button.addEventListener('click', () => browseConversation(item.handle, item.title));
       const remove = document.createElement('button'); remove.type = 'button';
-      remove.className = 'conversation-remove'; remove.textContent = '×';
-      remove.setAttribute('aria-label', 'Remove ' + item.title + ' from the list');
-      remove.addEventListener('click', () => hideConversation(item.handle, item.title));
+      if (showingHidden) {
+        remove.className = 'conversation-restore'; remove.textContent = 'Restore';
+        remove.setAttribute('aria-label', 'Restore ' + item.title + ' to your list');
+        remove.addEventListener('click', () => restoreConversation(item.handle));
+      } else {
+        remove.className = 'conversation-remove'; remove.textContent = '×';
+        remove.setAttribute('aria-label', 'Remove ' + item.title + ' from the list');
+        remove.addEventListener('click', () => hideConversation(item.handle, item.title));
+      }
       row.append(button, remove); nav.append(row);
     }
     catalogCursor = data.next_before; element('history-more').hidden = !catalogCursor;
+    syncHiddenToggle(data.hidden_count || 0);
   } catch { /* Status polling supplies the connection warning. */ }
   finally { catalogBusy = false; }
+}
+/** Offer the hidden chats view only when something is hidden (or while viewing it). */
+function syncHiddenToggle(count) {
+  const toggle = element('history-hidden');
+  if (showingHidden && !count) { showingHidden = false; loadConversations(); return; }
+  toggle.hidden = !showingHidden && !count;
+  text(toggle, showingHidden ? 'Back to your chats' : 'Show hidden chats (' + count + ')');
+  text(element('history-heading'), showingHidden ? 'Hidden chats' : 'Your conversations');
+}
+async function restoreConversation(handle) {
+  try {
+    const {response, data} = await requestJSON('/api/conversations/unhide', {
+      method: 'POST', headers: browserAudio.headers({'Content-Type': 'application/json'}),
+      body: JSON.stringify({handle})
+    });
+    if (!response.ok) throw Error(data.error || 'Could not restore this conversation.');
+    await loadConversations();
+    feedback('Restored to your list.');
+  } catch (error) { feedback(error.message, true); }
 }
 /** Remove a conversation from the list; Ciel keeps its history and can still look it up. */
 async function hideConversation(handle, title) {
@@ -381,6 +408,9 @@ element('return-active').addEventListener('click', () => {
   poll(); syncControls();
 });
 element('history-more').addEventListener('click', () => loadConversations(true));
+element('history-hidden').addEventListener('click', () => {
+  showingHidden = !showingHidden; catalogCursor = null; loadConversations();
+});
 element('history-earlier').addEventListener('click', async () => {
   if (!browsingHandle || !historyCursor) return;
   const handle = browsingHandle, epoch = viewEpoch, feed = element('messages'), height = feed.scrollHeight;
