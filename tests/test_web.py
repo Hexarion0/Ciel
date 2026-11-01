@@ -73,15 +73,22 @@ def test_http_serves_page_and_submits_to_the_existing_worker(web_server):
     for text in ["hello", "/mute", "/stop", "/exit"]:
         assert client.post("/api/message", json={"text": text}).json() == {"accepted": True}
     assert [call.args[0] for call in submit.call_args_list] == [
-        "hello", "/mute", "/stop", "/exit",
+        "hello",
+        "/mute",
+        "/stop",
+        "/exit",
     ]
     assert ui.snapshot()["messages"] == []  # Queuing isn't proof of a completed reply.
 
 
-@pytest.mark.parametrize("headers", [
-    {"Host": "evil.example"}, {"Origin": "https://evil.example"},
-    {"Sec-Fetch-Site": "cross-site"},
-])
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"Host": "evil.example"},
+        {"Origin": "https://evil.example"},
+        {"Sec-Fetch-Site": "cross-site"},
+    ],
+)
 def test_http_rejects_requests_from_other_websites(web_server, headers):
     _ui, submit, client = web_server
     assert client.post("/api/message", json={"text": "/exit"}, headers=headers).status_code == 403
@@ -107,25 +114,43 @@ def test_http_reports_unavailable_worker_and_does_not_accept_form_posts(web_serv
 def test_runtime_warnings_are_masked_for_browser():
     ui = DesktopWebUI("owner", "hey ciel")
     handler = WebErrorHandler(ui)
-    handler.handle(logging.LogRecord(
-        "ciel", logging.ERROR, "file.py", 1, "key=%s", ("sk-0123456789secret",), None,
-    ))
+    handler.handle(
+        logging.LogRecord(
+            "ciel",
+            logging.ERROR,
+            "file.py",
+            1,
+            "key=%s",
+            ("sk-0123456789secret",),
+            None,
+        )
+    )
     assert ui.snapshot()["activity"][-1]["text"] == "key=[REDACTED_SECRET]"
 
 
 def test_history_uses_current_conversation():
     ui = DesktopWebUI("owner", "hey ciel")
-    ui.load_history([SimpleNamespace(role="user", content="hello"),
-                     SimpleNamespace(role="assistant", content="Hi!")])
+    ui.load_history(
+        [
+            SimpleNamespace(role="user", content="hello"),
+            SimpleNamespace(role="assistant", content="Hi!"),
+        ]
+    )
     assert [entry["text"] for entry in ui.snapshot()["messages"]] == ["hello", "Hi!"]
 
 
 def test_history_preserves_dates_and_omits_internal_playback_notes():
     ui = DesktopWebUI("owner", "hey ciel")
     timestamp = datetime(2026, 10, 8, tzinfo=timezone.utc)
-    ui.load_history([SimpleNamespace(
-        role="assistant", content="Hi!\n[Playback was interrupted.]", timestamp=timestamp,
-    )])
+    ui.load_history(
+        [
+            SimpleNamespace(
+                role="assistant",
+                content="Hi!\n[Playback was interrupted.]",
+                timestamp=timestamp,
+            )
+        ]
+    )
     message = ui.snapshot()["messages"][0]
     assert message["text"] == "Hi!"
     assert message["time"] == timestamp.timestamp()
@@ -133,12 +158,18 @@ def test_history_preserves_dates_and_omits_internal_playback_notes():
 
 def test_history_restores_safe_sources_for_assistant_replies():
     ui = DesktopWebUI("owner", "hey ciel")
-    ui.load_history([SimpleNamespace(
-        role="assistant", content="Verified answer", sources=[
-            {"title": "Public page", "url": "https://example.com/article"},
-            {"title": "Bad", "url": "javascript:alert(1)"},
-        ],
-    )])
+    ui.load_history(
+        [
+            SimpleNamespace(
+                role="assistant",
+                content="Verified answer",
+                sources=[
+                    {"title": "Public page", "url": "https://example.com/article"},
+                    {"title": "Bad", "url": "javascript:alert(1)"},
+                ],
+            )
+        ]
+    )
     assert ui.snapshot()["messages"][0]["sources"] == [
         {"title": "Public page", "url": "https://example.com/article"},
     ]
@@ -221,3 +252,165 @@ def test_http_get_rejects_untrusted_host_and_port_conflicts_are_reported(web_ser
     with pytest.raises(OSError):
         second_ui.start(lambda _text: True, port=client.base_url.port)
     second_ui.close()
+
+
+@pytest.mark.parametrize(
+    "asset,kind",
+    [
+        ("chat.css", "text/css"),
+        ("chat.js", "javascript"),
+        ("orb.js", "javascript"),
+        ("render.js", "javascript"),
+    ],
+)
+def test_packaged_assets_are_served_without_arbitrary_file_access(web_server, asset, kind):
+    _ui, _submit, client = web_server
+    response = client.get("/assets/" + asset)
+    assert response.status_code == 200
+    assert kind in response.headers["Content-Type"]
+    assert response.content
+    assert client.get("/assets/unknown.js").status_code == 404
+    assert client.get("/assets/%2e%2e/web.py").status_code == 404
+
+
+def test_incremental_state_includes_stream_changes_and_resets_after_switch():
+    ui = DesktopWebUI("owner", "hey ciel")
+    ui.user_message("Hello")
+    initial = ui.snapshot()
+    cursor = initial["cursor"]
+    assert ui.snapshot(after=cursor)["messages"] == []
+    ui.start_sentence()
+    ui.progress("Hi")
+    update = ui.snapshot(after=cursor)
+    assert [m["text"] for m in update["messages"]] == ["Hi"]
+    ui.progress("Hi there")
+    assert ui.snapshot(after=update["cursor"])["messages"][0]["text"] == "Hi there"
+    ui.replace_history([])
+    assert ui.snapshot(after=cursor)["reset"] is True
+
+
+def test_routing_prefixes_keep_browser_request_and_local_pair_code_can_be_renewed(web_server):
+    ui, legacy, client = web_server
+    received = []
+    ui.channels.configure(
+        lambda request, audio, current: received.append(request) or True, SimpleNamespace()
+    )
+    for text in ["/fast hello", "/strong hello", "/deep hello"]:
+        response = client.post("/api/message", json={"text": text})
+        assert response.status_code == 200
+    assert [r.text for r in received] == ["/fast hello", "/strong hello", "/deep hello"]
+    legacy.assert_not_called()
+    first = client.post("/api/pair-code", json={}).json()["code"]
+    second = client.post("/api/pair-code", json={}).json()["code"]
+    assert len(first) == 8 and len(second) == 8
+    device = ui.channels.auth.pair(second, source="phone")
+    assert ui.channels.auth.authenticate(device.token)
+
+
+def test_lan_mode_keeps_separate_pc_loopback_listener(monkeypatch):
+    from ciel import web
+
+    # Two actual loopback addresses exercise dual binding without exposing a test on Wi-Fi.
+    class TLS:
+        def wrap_socket(self, sock, **kwargs):
+            return sock
+
+    monkeypatch.setattr(web, "server_tls", lambda *_args: TLS())
+    ui = DesktopWebUI("owner", "hey ciel")
+    ui.start(lambda text: True, port=0, host="127.0.0.2", certificate="fixture", key="fixture")
+    try:
+        port = ui._server.server_address[1]
+        with httpx.Client(trust_env=False) as client:
+            response = client.get(f"http://127.0.0.1:{port}/api/session")
+            assert response.status_code == 200
+            assert response.json()["device_id"] == "pc"
+    finally:
+        ui.close()
+
+
+def test_configured_https_handshake_and_exact_origin(tmp_path):
+    import shutil
+    import subprocess
+
+    openssl = shutil.which("openssl")
+    if openssl is None:
+        pytest.skip("OpenSSL is needed for the local TLS integration check")
+    certificate, key = tmp_path / "fixture.pem", tmp_path / "fixture-key.pem"
+    subprocess.run(
+        [
+            openssl,
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-days",
+            "1",
+            "-keyout",
+            str(key),
+            "-out",
+            str(certificate),
+            "-subj",
+            "/CN=127.0.0.1",
+            "-addext",
+            "subjectAltName=IP:127.0.0.1",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    ui = DesktopWebUI("owner", "hey ciel")
+    url = ui.start(lambda text: True, port=0, certificate=str(certificate), key=str(key))
+    try:
+        import ssl
+
+        context = ssl.create_default_context(cafile=str(certificate))
+        with httpx.Client(base_url=url, verify=context, trust_env=False) as client:
+            assert client.get("/api/session").json()["device_id"] == "pc"
+            assert client.post("/api/message", json={"text": "Hello"}).status_code == 403
+            assert (
+                client.post(
+                    "/api/message", json={"text": "Hello"}, headers={"Origin": url}
+                ).status_code
+                == 200
+            )
+            assert (
+                client.post(
+                    "/api/message",
+                    json={"text": "Hello"},
+                    headers={"Origin": "https://evil.example"},
+                ).status_code
+                == 403
+            )
+    finally:
+        ui.close()
+
+
+def test_authenticated_web_admin_settings_memory_and_confirmed_restart(web_server, tmp_path):
+    import threading
+
+    from ciel.config import Settings
+    from ciel.webapp.admin import WebAdministration
+    from ciel.webapp.settings import WebSettings
+
+    ui, _submit, client = web_server
+    settings = Settings(_env_file=None, nim_api_key='hidden-secret')
+    preferences = WebSettings(settings, tmp_path / '.env', apply=lambda fields: None)
+    restarted = threading.Event()
+    forgotten = []
+    network = SimpleNamespace(snapshot=lambda: {'host':'192.168.1.100'}, close=lambda: None)
+    ui.admin = WebAdministration(ui, preferences, network, restart=restarted.set,
+                                 memories=lambda: [{'id':1,'text':'A saved fact'}],
+                                 forget=lambda identity: forgotten.append(identity) or True)
+    response = client.get('/api/settings')
+    assert response.status_code == 200 and 'hidden-secret' not in response.text
+    assert client.post('/api/settings', json={'nim_model':'browser-selected'}).status_code == 200
+    assert settings.nim_model == 'browser-selected'
+    assert client.post('/api/settings', json={'tts_speed':-5}).status_code == 400
+    assert client.get('/api/memory').json()['memories'][0]['text'] == 'A saved fact'
+    assert client.post('/api/memory/forget', json={'id':1}).status_code == 400
+    assert not forgotten
+    assert client.post('/api/memory/forget', json={'id':1,'confirmed':True}).json()['forgotten']
+    assert forgotten == [1]
+    assert client.post('/api/server/restart', json={}).status_code == 400
+    assert client.post('/api/server/restart', json={'confirmed':True}).status_code == 200
+    assert restarted.wait(1)

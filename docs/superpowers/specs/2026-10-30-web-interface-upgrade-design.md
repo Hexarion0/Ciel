@@ -1,7 +1,8 @@
 # CIEL web interface upgrade
 
 Date: 2026-10-30
-Status: Written design for review; implementation has not started.
+Status: Approved design, including the welcoming visual direction and visible animated orb.
+Implementation is present; device acceptance and final verification are tracked in docs/web-interface.md.
 
 ## Intent and agreed outcome
 
@@ -75,6 +76,14 @@ Retain the current dark surfaces, readable typography, purple/cyan accents, and
 procedural CIEL orb. The primary object is the conversation. A single composer is
 the main action; voice and attachments sit beside it. Avoid dashboard cards,
 decorative metrics, and a large empty center dedicated to the orb.
+
+The visual interview refined this direction to welcoming, calm, and cozy: soft
+charcoal surfaces, warm white text, muted lavender accents, and gentle animation.
+Use [Bear](https://bear.app/) as a reference for readable typography and spacing,
+while keeping CIEL's own identity and chat workflow. The owner explicitly
+reaffirmed keeping the orb. Keep it animated and visible beside the conversation,
+with distinct listening, thinking, and speaking states; retain compact presentation
+on phone so the composer and messages remain usable.
 
 ### PC
 

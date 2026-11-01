@@ -20,11 +20,12 @@ class Element {
       toggle: (name, on) => on ? this.classes.add(name) : this.classes.delete(name)
     };
   }
-  append(...nodes) { this.children.push(...nodes); }
+  append(...nodes) { for (const n of nodes) { n.parent = this; this.children.push(n); } }
+  get parentElement() { return this.parent; }
   get firstElementChild() { return this.children[0]; }
   setAttribute(key, value) { this.attributes[key] = value; }
   addEventListener(name, callback) { this.listeners[name] = callback; }
-  remove() {}
+  remove() { if (this.parent) this.parent.children.splice(this.parent.children.indexOf(this), 1); }
   getContext() { return null; }
   focus() {}
   requestSubmit() { return this.listeners.submit({preventDefault() {}}); }
@@ -40,7 +41,7 @@ const elements = new Map(
     return [match[1], node];
   })
 );
-elements.get('speech').hidden = true;
+
 const timers = new Map();
 let nextTimer = 0;
 const starters = [new Element(), new Element()];
@@ -84,6 +85,8 @@ const context = {
     querySelectorAll: () => starters,
     createElement: () => new Element()
   },
+  URL, crypto: require('node:crypto').webcrypto,
+  window: {},
   AbortController,
   setInterval() {},
   setTimeout(callback, delay) {
@@ -93,6 +96,7 @@ const context = {
   },
   clearTimeout(id) { timers.delete(id); },
   fetch: async (url, options) => {
+    if (url === '/api/conversations/activate') { state.active={handle:'next-chat',revision:2}; return {ok:true,json:async()=>state.active}; }
     if (url === '/api/message') {
       const text = JSON.parse(options.body).text;
       requests.push(text);
@@ -107,61 +111,33 @@ const context = {
   }
 };
 vm.createContext(context);
-vm.runInContext(html.split('<script>')[1].split('</script>')[0], context);
+vm.runInContext(['orb.js', 'render.js', 'audio.js', 'attachments.js', 'settings.js', 'chat.js'].map(name => fs.readFileSync('src/ciel/web_assets/' + name, 'utf8')).join('\n'), context);
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
 (async () => {
   await settle();
   assert.equal(elements.get('input-label').textContent, '[a different owner]');
-  assert(elements.get('speech').hidden, 'Opening the page must not replay history');
+  assert.equal(elements.get('messages').children.length, 2, 'Opening chat shows saved history');
   assert.equal(elements.get('core-state').textContent, 'Awaiting your command.');
-  assert(!html.includes('id="messages"'), 'The voice page must not contain a conversation feed');
-  assert.equal(elements.get('speech-text').attributes.tabindex, '0');
-  assert.equal(elements.get('speech-text').attributes['aria-live'], 'off');
-  const announcements = [];
-  let announcement = '';
-  Object.defineProperty(elements.get('reply-announcement'), 'textContent', {
-    get: () => announcement,
-    set: value => {
-      announcement = value;
-      if (value) announcements.push(value);
-    }
-  });
+  const feed = elements.get('messages');
+  const first = feed.children[0];
   const reply = {id: 4, role: 'assistant', text: 'Reply <script>literal</script>', time: 4, live: true};
   state.messages.push({id: 3, role: 'user', text: 'Speak', time: 3}, reply);
-  state.state = 'speaking';
+  feed.scrollHeight = 2000; feed.scrollTop = 100;
   vm.runInContext('render(' + JSON.stringify(state) + ')', context);
-  assert(!elements.get('speech').hidden);
-  assert.equal(elements.get('speech-text').textContent, reply.text);
-  assert.equal(announcements.length, 0, 'Do not repeatedly announce streaming text');
-  reply.text += ' with another sentence.';
+  assert.equal(feed.children.length, 4);
+  assert.equal(feed.children[0], first, 'Polling keeps old message nodes');
+  assert.equal(feed.scrollTop, 100, 'Reading earlier messages must not force scroll');
+  assert(!elements.get('new-messages').hidden);
+  elements.get('new-messages').listeners.click();
+  assert.equal(feed.scrollTop, feed.scrollHeight);
+  reply.text += ' with another sentence.'; reply.live = false;
   vm.runInContext('render(' + JSON.stringify(state) + ')', context);
-  assert.equal(elements.get('speech-text').textContent, reply.text);
-  reply.live = false;
-  state.state = 'listening_wake';
-  vm.runInContext('render(' + JSON.stringify(state) + ')', context);
-  assert(!elements.get('speech').hidden, 'Keep completed speech available to read');
-  assert.equal(announcements.length, 1);
-  const completedAnnouncement = announcements[0];
-  assert(completedAnnouncement.endsWith(reply.text), 'Announce the full completed reply');
-  assert.equal(timers.size, 0, 'Completed speech must not expire on a timer');
-  vm.runInContext('render(' + JSON.stringify(state) + ')', context);
-  assert.deepEqual(announcements, [completedAnnouncement], 'Announce a completed reply only once');
-  elements.get('dismiss-speech').listeners.click();
-  assert(elements.get('speech').hidden);
-  vm.runInContext('render(' + JSON.stringify(state) + ')', context);
-  assert(elements.get('speech').hidden, 'Polling must not reopen a dismissed reply');
-
-  // Distinct replies with identical wording must each reach assistive technology.
-  const repeatedReply = {...reply, id: 6, time: 6, live: true};
-  state.messages.push({id: 5, role: 'user', text: 'Repeat that', time: 5}, repeatedReply);
-  state.state = 'speaking';
-  vm.runInContext('render(' + JSON.stringify(state) + ')', context);
-  assert.equal(announcements.length, 1, 'Do not announce the next reply while streaming');
-  repeatedReply.live = false;
-  state.state = 'listening_wake';
-  vm.runInContext('render(' + JSON.stringify(state) + ')', context);
-  assert.deepEqual(announcements, [completedAnnouncement, completedAnnouncement]);
+  assert.equal(feed.children.length, 4, 'Stream updates the same message');
+  elements.get('history-toggle').listeners.click();
+  assert.equal(elements.get('history-toggle').attributes['aria-expanded'], 'true');
+  elements.get('history-close').listeners.click();
+  assert.equal(elements.get('history-toggle').attributes['aria-expanded'], 'false');
 
   await vm.runInContext("submit('/mute')", context);
   assert.equal(elements.get('core').attributes['aria-pressed'], 'true');
@@ -244,6 +220,29 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
   await vm.runInContext('poll()', context);
   assert(!elements.get('send').disabled, 'Polling must recover after a status timeout');
   assert.equal(elements.get('input').value, 'prepared while disconnected');
+
+  vm.runInContext('attachments.busy=true',context);
+  assert(await vm.runInContext("submit('/stop')",context), 'Stop works while an image is uploading');
+  vm.runInContext('attachments.busy=false; attachments.items=[{error:true}]',context);
+  assert(await vm.runInContext("submit('/help')",context), 'Session controls work with failed images');
+  vm.runInContext('attachments.items=[]',context);
+
+  // Explicit switching clears temporary local audio and attachments as well as the server queue.
+  state.active={handle:'current-chat',revision:1};
+  vm.runInContext('render('+JSON.stringify(state)+'); attachments.items=[{handle:"uploaded",url:"blob:preview"}]; attachments.render()',context);
+  await vm.runInContext('activateConversation(null)',context);
+  assert.equal(vm.runInContext('attachments.admittedIds().length',context),0,'New chat clears old attachments');
+
+  context.matchMedia=()=>({matches:true});
+  vm.runInContext('setDrawer(false)',context);
+  assert.equal(elements.get('sidebar').inert,true,'Closed mobile history is not keyboard focusable');
+  assert.equal(elements.get('presence').parentElement,elements.get('topbar'),'Phone orb stays outside the inert drawer');
+  vm.runInContext('setDrawer(true)',context);
+  assert.equal(elements.get('sidebar').inert,false);
+  delete context.matchMedia;
+
+  vm.runInContext('renderTimeline([{id:1,role:"assistant",text:"An archived reply"}])',context);
+  assert.equal(elements.get('messages').children[0].className,'message assistant','A different archive must not inherit a user label from a colliding message ID');
 
   // Either exit command ends the session; late status cannot re-enable controls.
   for (const command of ['/exit', '/QuIt']) {

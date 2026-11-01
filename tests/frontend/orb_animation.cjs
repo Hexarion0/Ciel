@@ -4,7 +4,7 @@ const vm = require('vm');
 const assert = require('assert/strict');
 
 const html = fs.readFileSync('src/ciel/web_assets/index.html', 'utf8');
-const source = html.slice(html.indexOf('function createOrb() {'), html.indexOf('const orb = createOrb();'));
+const source = fs.readFileSync('src/ciel/web_assets/orb.js', 'utf8');
 
 function harness({reduced = false, canvasAvailable = true} = {}) {
   const callbacks = new Map(), listeners = {}, pointerListeners = {};
