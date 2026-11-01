@@ -132,6 +132,38 @@ def _memory_confirmation_prompt(
     )
 
 
+def prepare_voice(
+    stt: Any, tts: Any, *, stt_timeout: float, web_mode: bool,
+    logger: logging.Logger | None = None,
+) -> bool | None:
+    """Load recognition and the voice model before listening starts or the web app opens.
+
+    Returns True when the heavy voice (Pocket or Chatterbox Turbo) is ready, False when it
+    failed and a local fallback will speak, and None when there was nothing heavy to load
+    or recognition did not become ready in time (the model then loads on first use).
+    ``ciel web`` always waits for recognition, so the first browser request is never cold.
+    """
+    logger = logger or logging.getLogger("ciel")
+    heavy_voice = tts.enabled and tts.engine in {"pocket", "chatterbox_turbo"}
+    if not heavy_voice and not web_mode:
+        return None
+    target = "opening the web app" if web_mode else "enabling listening"
+    logger.info("Loading speech recognition%s before %s; first startup can take a moment.",
+                f" and {tts.engine}" if heavy_voice else "", target)
+    started = time.monotonic()
+    if not stt.wait_ready(timeout=stt_timeout):
+        logger.warning("Speech recognition did not become ready in time; %s anyway. "
+                       "Models finish loading on first use.", target)
+        return None
+    if not heavy_voice:
+        logger.info("Speech recognition ready in %.2fs.", time.monotonic() - started)
+        return None
+    warmed = bool(tts.warmup())
+    logger.info("%s startup preparation finished in %.2fs (%s).", tts.engine,
+                time.monotonic() - started, "voice ready" if warmed else "local fallback available")
+    return warmed
+
+
 def run_desktop(
     args: argparse.Namespace, settings: Settings, logger: logging.Logger,
     audio_backend: Any, *, clock: Any = time,
@@ -2338,26 +2370,10 @@ def run_desktop(
 
         restore_caption_logging = install_caption_logging(captions)
     try:
-        voice_prepared = None
-        if not web_mode and tts.enabled and tts.engine in {"pocket", "chatterbox_turbo"}:
-            logger.info(
-                "Preparing %s before enabling listening; "
-                "first startup can take several seconds.", tts.engine,
-            )
-            warmup_started = time.monotonic()
-            if stt.wait_ready(timeout=settings.audio.stt_startup_timeout_seconds):
-                warmed = tts.warmup()
-                voice_prepared = bool(warmed)
-                logger.info(
-                    "%s startup preparation finished in %.2fs (%s).", tts.engine,
-                    time.monotonic() - warmup_started,
-                    "voice ready" if warmed else "local fallback available",
-                )
-            else:
-                logger.warning(
-                    "STT did not become ready; starting listener and "
-                    "deferring %s initialization.", tts.engine,
-                )
+        voice_prepared = prepare_voice(
+            stt, tts, stt_timeout=settings.audio.stt_startup_timeout_seconds, web_mode=web_mode,
+            logger=logger,
+        )
         from ciel.platform.base import AudioInputError
 
         try:

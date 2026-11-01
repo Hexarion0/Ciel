@@ -2,6 +2,9 @@
 
 ## Unreleased — 0.3.6 development
 
+- Load speech recognition and the Pocket or Chatterbox Turbo voice before `ciel web`
+  opens the web app, so the first browser request never waits on a cold model.
+
 - Caption spoken web replies live: the playing device reveals each reply in step with
   its voice using per-chunk caption ranges, then shows the full answer. Add the
   terminal's `/` command picker to the web composer, served from the same command list.
