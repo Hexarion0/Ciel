@@ -73,7 +73,8 @@ def launch_session(tmp_path, monkeypatch):
     for component in ("WakeWordDetector", "VoiceRecorder"):
         monkeypatch.setattr(audio, component, MagicMock())
     recognition = SimpleNamespace(
-        is_ready=lambda: True, model_size="small.en", device="cpu",
+        is_ready=lambda: True, wait_ready=lambda **_kwargs: True,
+        model_size="small.en", device="cpu",
     )
     monkeypatch.setattr(audio, "SpeechToText", lambda **_kwargs: recognition)
     original_terminal = terminal.TerminalInput
