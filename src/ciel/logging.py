@@ -14,6 +14,13 @@ SENSITIVE_PATTERNS = [
     re.compile(r"(?<!\w)[0-9]{5,15}:[A-Za-z0-9_-]{20,}(?!\w)"),
     re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/-]+", re.IGNORECASE),
 ]
+_SECRET_MARKERS = ("nvapi-", "sk-", "gsk_", "tvly-", "bearer")
+_PARTIAL_TOKEN_SUFFIX = re.compile(
+    r"(?:nvapi-|sk-|gsk_|tvly-)[A-Za-z0-9_-]*\Z"
+    r"|Bearer\s*\Z"
+    r"|(?<!\w)(?:[0-9]{1,15}|[0-9]{5,15}:[A-Za-z0-9_-]*)\Z",
+    re.IGNORECASE,
+)
 
 
 class SecretMaskingFilter(logging.Filter):
@@ -62,6 +69,41 @@ class SecretMaskingFilter(logging.Filter):
         for pattern in SENSITIVE_PATTERNS:
             text = pattern.sub("[REDACTED_SECRET]", text)
         return text
+
+    @classmethod
+    def _redact_partial(cls, text: str) -> str:
+        """Redact cumulative streamed text and hold possible unfinished secret suffixes.
+
+        Callers retain the raw cumulative text and call again as it grows. Only a
+        successful completion may release benign held text with ``_redact``;
+        interrupted streams must discard the held suffix.
+        """
+        text = cls._redact(text)
+        with cls._secret_lock:
+            secrets = cls._configured_secrets
+        # Complete masks are atomic: a key beginning with ']' must not trim one.
+        mask = "[REDACTED_SECRET]"
+        last_mask = text.rfind(mask)
+        tail_start = last_mask + len(mask) if last_mask >= 0 else 0
+        tail = text[tail_start:]
+        end = len(tail)
+        for secret in secrets:
+            start = max(0, len(tail) - len(secret) + 1)
+            candidate = tail.find(secret[0], start, end)
+            while candidate >= 0:
+                if secret.startswith(tail[candidate:]):
+                    end = candidate
+                    break
+                candidate = tail.find(secret[0], candidate + 1, end)
+        lowered = tail.lower()
+        for marker in _SECRET_MARKERS:
+            for length in range(1, len(marker) + 1):
+                if lowered.endswith(marker[:length]):
+                    end = min(end, len(tail) - length)
+        token = _PARTIAL_TOKEN_SUFFIX.search(tail)
+        if token is not None:
+            end = min(end, token.start())
+        return text[:tail_start + end]
 
 
 class CielFormatter(logging.Formatter):

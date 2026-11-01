@@ -99,26 +99,34 @@ def _status(settings: Settings) -> dict[str, Any]:
 
 def _print_status(status: dict[str, Any]) -> None:
     """Print a compact report with an explicit configuration-only scope."""
+    from ciel.terminal_ui import ConsoleUI
+
+    ui = ConsoleUI()
     voice, recognition = status["voice"], status["recognition"]
-    print(f"CIEL {status['version']} - configured setup")
-    print(f"Listening: {status['mode']} | wake phrase: {status['wake_word']}")
-    print(f"Voice: {voice['profile']} ({voice['engine']}); "
-          f"{'enabled' if voice['enabled'] else 'disabled'}")
-    print(f"Recognition: {recognition['model']} on {recognition['device']} "
-          f"({recognition['compute_type']})")
-    print(f"AI captions: {'on' if status['captions'] else 'off'}")
+    ui.banner("Configured setup", version=status["version"])
+    ui.panel([
+        ("Listening", status["mode"]),
+        ("Wake phrase", status["wake_word"]),
+        ("Voice", f"{voice['profile']} ({voice['engine']})"),
+        ("Voice output", "Enabled" if voice["enabled"] else "Disabled"),
+        ("Recognition", f"{recognition['model']} on {recognition['device']} "
+         f"({recognition['compute_type']})"),
+        ("AI captions", "On" if status["captions"] else "Off"),
+    ])
+    providers = []
     for name, provider in status["providers"].items():
         if name == "ollama":
-            print(f"Ollama: {provider['host']} (connectivity not checked)")
+            providers.append(("Ollama", f"{provider['host']} (connectivity not checked)"))
         else:
             state = "configured" if provider["configured"] else "unconfigured"
-            print(f"{name.upper()}: {state}")
-    for name, value in status["paths"].items():
-        if name != "config_file_exists":
-            print(f"{name.replace('_', ' ').capitalize()}: {value}")
+            providers.append((name.upper(), state))
+    ui.commands([("Connections", providers), ("Local files", [
+        (name.replace("_", " ").capitalize(), str(value))
+        for name, value in status["paths"].items() if name != "config_file_exists"
+    ])])
     if not status["paths"]["config_file_exists"]:
-        print("No .env file here; environment settings and defaults still apply.")
-    print("Running sessions, models, and provider health are not checked. Try 'ciel doctor'.")
+        ui.note("No .env file here; environment settings and defaults still apply.")
+    ui.note("Running sessions, models, and provider health are not checked. Try 'ciel doctor'.")
 
 
 def _devices(args: argparse.Namespace) -> int:

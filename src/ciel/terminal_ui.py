@@ -127,7 +127,35 @@ class ConsoleUI:
         lines = [self._paint(line, "violet") for line in _wrap(heading, self._width())]
         lines.extend(self._paint(line, "muted") for line in
                      _wrap(self._text(subtitle), self._width()))
-        lines.append(self._paint(("─" if self._unicode else "-") * self._width(), "cyan"))
+        lines.append(self._paint(("─" if self._unicode else "-")
+                                 * min(56, self._width()), "muted"))
+        self._write("\n".join(lines) + "\n")
+
+    def commands(
+        self, groups: Sequence[tuple[str, Sequence[tuple[str, str]]]],
+    ) -> None:
+        """Render grouped command references with aligned, narrow-terminal-safe columns."""
+        width = self._width()
+        lines: list[str] = []
+        for title, rows in groups:
+            if lines:
+                lines.append("")
+            lines.extend(self._paint(line, "violet") for line in
+                         _wrap(self._text(title), width))
+            key_width = max((_cells(self._text(key)) for key, _ in rows), default=0)
+            columns = width >= key_width + 22
+            for key, description in rows:
+                key, description = self._text(key), self._text(description)
+                if columns:
+                    prefix = "  " + key + " " * (key_width - _cells(key) + 3)
+                    wrapped = _wrap(description, width - _cells(prefix))
+                    lines.append(self._paint(prefix, "cyan") + wrapped[0])
+                    lines.extend(" " * _cells(prefix) + line for line in wrapped[1:])
+                else:
+                    indent = "  " if width > 4 else ""
+                    lines.extend(self._paint(line, "cyan") for line in _wrap(key, width))
+                    lines.extend(indent + line for line in
+                                 _wrap(description, width - len(indent)))
         self._write("\n".join(lines) + "\n")
 
     def chat_header(
@@ -141,7 +169,7 @@ class ConsoleUI:
         if status:
             lines.extend(self._paint(line, "muted") for line in
                          _wrap(self._text(status), width))
-        self._write("\n".join(lines) + "\n\n")
+        self._write("\n".join(lines) + "\n")
 
     def message(self, role: str, text: str) -> None:
         """Write a chat turn, retaining paragraphs and fenced code indentation."""
@@ -149,7 +177,8 @@ class ConsoleUI:
         label = "CIEL" if role.casefold() in {"assistant", "ciel"} else (
             "You" if role.casefold() in {"user", "you"} else self._text(role)
         )
-        lines = [self._paint(line, "cyan") for line in _wrap(label, width)]
+        inline = label == "CIEL"
+        lines = [] if inline else [self._paint(line, "cyan") for line in _wrap(label, width)]
         indent = "  " if width > 4 else ""
         fence: tuple[str, int] | None = None
         for paragraph in str(text).splitlines():
@@ -164,15 +193,24 @@ class ConsoleUI:
                     fence = None
                 continue
             if marker:
+                if inline and not lines:
+                    lines.extend(self._paint(line, "cyan") for line in _wrap("CIEL:", width))
                 fence = (marker[1][0], len(marker[1]))
                 lines.append(content)
                 continue
             if not paragraph.strip():
                 lines.append("")
                 continue
-            lines.extend(indent + line for line in
-                         _wrap(self._text(paragraph), width - len(indent)))
-        self._write("\n".join(lines) + "\n\n")
+            if inline and not lines:
+                wrapped = _wrap("CIEL: " + self._text(paragraph), width)
+                first = wrapped[0]
+                label_end = min(len("CIEL:"), len(first))
+                lines.append(self._paint(first[:label_end], "cyan") + first[label_end:])
+                lines.extend(wrapped[1:])
+            else:
+                lines.extend(indent + line for line in
+                             _wrap(self._text(paragraph), width - len(indent)))
+        self._write("\n".join(lines) + "\n")
 
     def work_status(self, text: str) -> None:
         """Show a short status for work that the caller has actually started."""
@@ -196,7 +234,9 @@ class ConsoleUI:
 
     def panel(self, rows: Sequence[tuple[str, str]]) -> None:
         """Write an entire aligned status panel atomically to prevent interleaved logs."""
-        width = self._width()
+        label_size = min(18, max((_cells(self._text(key)) for key, _ in rows), default=0))
+        value_size = max((_cells(self._text(value)) for _, value in rows), default=0)
+        width = min(self._width(), max(36, label_size + value_size + 6))
         if width < 10:
             lines = [line for label, value in rows
                      for line in _wrap(self._text(f"{label}: {value}"), width)]
@@ -211,7 +251,7 @@ class ConsoleUI:
 
         lines = [border(left + horizontal * (width - 2) + right)]
         inner = width - 4
-        label_width = min(14, max(1, inner // 3))
+        label_width = min(max(10, label_size), max(1, inner // 3))
         value_width = inner - label_width - 2
         for label, value in rows:
             labels = _wrap(self._text(label), label_width)

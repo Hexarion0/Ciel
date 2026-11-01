@@ -72,6 +72,19 @@ def test_help_does_not_offer_removed_local_command():
     assert callbacks["write"].call_args.args[0].startswith("Unknown command")
 
 
+def test_observation_controls_validate_arguments_and_never_forward_to_model():
+    observe = MagicMock(return_value="Screen observation: on.")
+    terminal, callbacks = make_terminal(observe=observe)
+    for command in ("/observe", "/observe on", "/observe pause", "/observe off"):
+        terminal.handle_line(command)
+    assert [call.args[0] for call in observe.call_args_list] == ["status", "on", "pause", "off"]
+    terminal.handle_line("/observe always")
+    terminal.handle_line("/observe on please")
+    assert observe.call_count == 4
+    callbacks["submit"].assert_not_called()
+    assert callbacks["write"].call_args.args[0].startswith("Usage: /observe")
+
+
 def test_reader_handles_multiple_lines_and_exit_without_waiting_for_a_reply():
     read_fd, write_fd = os.pipe()
     exited = threading.Event()

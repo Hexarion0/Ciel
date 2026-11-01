@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import codecs
 import getpass
+import io
 import os
 import select
 import sys
@@ -15,6 +16,52 @@ from ciel.conversation import contains_retired_local_command
 from ciel.terminal_output import TerminalOutput
 
 _PROVIDER_COMMANDS = {"/fast", "/strong", "/deep"}
+COMMAND_GROUPS = (
+    ("Conversation", (
+        ("/stop", "Stop the current recording and reply"),
+        ("/mute [on|off]", "Toggle or set microphone mute"),
+        ("/unmute", "Turn the microphone back on"),
+        ("/mode [ambient|wake]", "Choose how CIEL listens"),
+    )),
+    ("Memory and awareness", (
+        ("/memory [status|pause|resume]", "Manage saved-memory recall"),
+        ("/observe [on|off|pause|resume|status]", "Control temporary screen hints"),
+    )),
+    ("Model and reasoning", (
+        ("/reasoning [auto|on|off]", "Set reasoning for this session"),
+        ("/fast MESSAGE", "Use the fast route for one message"),
+        ("/strong MESSAGE", "Use the strong route for one message"),
+        ("/deep MESSAGE", "Use the deep route for one message"),
+    )),
+    ("Session", (
+        ("/status", "Show your current session"),
+        ("/help COMMAND", "Get help with a command"),
+        ("/exit", "Close CIEL; /quit also works"),
+    )),
+)
+_COMMAND_CHOICES = tuple(sorted(
+    ((label.split()[0], description) for _, rows in COMMAND_GROUPS for label, description in rows),
+    key=lambda row: {"/help": 0, "/status": 1}.get(row[0], 2),
+))
+_COMMAND_ARGUMENTS = {
+    "/mute": ("on", "off"), "/mode": ("ambient", "wake"),
+    "/memory": ("status", "pause", "resume"), "/reasoning": ("auto", "on", "off"),
+    "/observe": ("on", "off", "pause", "resume", "status"),
+    "/help": tuple(name[1:] for name, _ in _COMMAND_CHOICES),
+}
+
+
+def command_suggestions(draft: str) -> list[tuple[str, str]]:
+    """Complete only a leading slash command or its supported local arguments."""
+    if not draft.startswith("/"):
+        return []
+    if " " not in draft:
+        return [(name, description) for name, description in _COMMAND_CHOICES
+                if name.startswith(draft.casefold())]
+    command, argument = draft.casefold().split(" ", 1)
+    description = dict(_COMMAND_CHOICES).get(command, "")
+    return [(f"{command} {value}", description)
+            for value in _COMMAND_ARGUMENTS.get(command, ()) if value.startswith(argument)]
 _COMMAND_HELP = {
     "/status": "/status — Show the current session, microphone, listening mode, and memory status.",
     "/mute": "/mute [on|off] — Toggle the microphone, or explicitly mute/unmute it.",
@@ -23,6 +70,8 @@ _COMMAND_HELP = {
     "/memory": "/memory [status|pause|resume] — Inspect or pause/resume saved-memory recall. "
                "Saved facts are kept; recent conversation and learning remain active.",
     "/reasoning": "/reasoning [auto|on|off] — Show or change reasoning for this session.",
+    "/observe": "/observe [on|off|pause|resume|status] — Opt in to temporary screen "
+                "observation and occasional coding hints. Off at every launch.",
     "/stop": "/stop — Cancel the current recording and reply.",
     "/exit": "/exit — Shut down CIEL. /quit is an alias.",
     "/quit": "/quit — Shut down CIEL. Alias for /exit.",
@@ -35,6 +84,7 @@ _COMMAND_USAGE = {
     "/status": "/status", "/mute": "/mute [on|off]", "/unmute": "/unmute",
     "/mode": "/mode [ambient|wake]", "/memory": "/memory [status|pause|resume]",
     "/reasoning": "/reasoning [auto|on|off]",
+    "/observe": "/observe [on|off|pause|resume|status]",
     "/stop": "/stop", "/exit": "/exit", "/quit": "/quit",
     "/help": "/help [command]",
 }
@@ -59,7 +109,9 @@ class TerminalInput:
         mode: Callable[[str | None], str] | None = None,
         memory: Callable[[str], str] | None = None,
         reasoning: Callable[[str | None], str] | None = None,
+        observe: Callable[[str], str] | None = None,
         microphone_available: Callable[[], bool] | None = None,
+        show_help: Callable[[], None] | None = None,
     ) -> None:
         self.stream = sys.stdin if stream is None else stream
         self.output = sys.stdout if output is None else output
@@ -74,10 +126,51 @@ class TerminalInput:
         self.mode = mode
         self.memory = memory
         self.reasoning = reasoning
+        self.observe = observe
         self.microphone_available = microphone_available
+        self.show_help = show_help
         self._command_lock = threading.RLock()
         self._closed = threading.Event()
         self._thread: threading.Thread | None = None
+        self._completion_query = ""
+        self._completion_index = 0
+        self._completion_dismissed: str | None = None
+        self._history: list[str] = []
+        self._history_index: int | None = None
+        self._history_draft = ""
+
+    def _suggestions(self, draft: str, cursor: int) -> list[tuple[str, str]]:
+        if draft != self._completion_query:
+            self._completion_query = draft
+            self._completion_index = 0
+            self._completion_dismissed = None
+        if (cursor != len(draft) or self._completion_dismissed == draft
+                or self._history_index is not None or not self.output.supports_command_picker()):
+            return []
+        return command_suggestions(draft)
+
+    def _redraw(self, draft: str, cursor: int) -> None:
+        choices = self._suggestions(draft, cursor)
+        if choices:
+            self._completion_index %= len(choices)
+        self.output.set_input(self.owner_name, draft, cursor=cursor,
+                              suggestions=choices, selected=self._completion_index)
+
+    def _navigate(self, draft: str, cursor: int, direction: int) -> tuple[str, int]:
+        choices = self._suggestions(draft, cursor)
+        if choices:
+            self._completion_index = (self._completion_index + direction) % len(choices)
+        elif self._history:
+            if self._history_index is None:
+                if direction > 0:
+                    return draft, cursor
+                self._history_draft = draft
+                self._history_index = len(self._history)
+            self._history_index = max(0, min(len(self._history), self._history_index + direction))
+            draft = (self._history_draft if self._history_index == len(self._history)
+                     else self._history[self._history_index])
+            cursor = len(draft)
+        return draft, cursor
 
     def handle_line(self, line: str) -> None:
         """Handle controls locally; send ordinary text through the listener queue."""
@@ -108,6 +201,7 @@ class TerminalInput:
             "/mute": {"on", "off"}, "/mode": {"ambient", "wake"},
             "/memory": {"status", "pause", "resume"},
             "/reasoning": {"auto", "on", "off"},
+            "/observe": {"on", "off", "pause", "resume", "status"},
         }
         if (
             len(arguments) > 1
@@ -142,14 +236,14 @@ class TerminalInput:
                 topic = "/" + arguments[0].lstrip("/")
                 self.write(_COMMAND_HELP.get(topic, "Unknown command. Use /help for controls."))
             else:
-                self.write(
-                    "Type a message and press Enter. /mute toggles the microphone; "
-                    "/stop cancels the reply; /exit quits; /help shows these controls.\n"
-                    "More controls: /status; /mute on|off; /unmute; /mode [ambient|wake]; "
-                    "/memory [status|pause|resume]; /reasoning [auto|on|off]; /quit.\n"
-                    "Route one message with /fast, /strong, or /deep. "
-                    "Use /help COMMAND for details."
-                )
+                if self.show_help is not None:
+                    self.show_help()
+                else:
+                    from ciel.terminal_ui import ConsoleUI
+
+                    output = io.StringIO()
+                    ConsoleUI(stream=output).commands(COMMAND_GROUPS)
+                    self.write(output.getvalue().rstrip())
         elif command == "/status":
             self.write(self.status() if self.status is not None else
                        "/status is unavailable in this session.")
@@ -163,6 +257,10 @@ class TerminalInput:
             self.write(self.reasoning(arguments[0] if arguments else None)
                        if self.reasoning is not None else
                        "/reasoning is unavailable in this session.")
+        elif command == "/observe":
+            self.write(self.observe(arguments[0] if arguments else "status")
+                       if self.observe is not None else
+                       "/observe is unavailable in this session.")
 
     def start(self) -> None:
         """Start reading stdin; EOF ends keyboard input without stopping voice."""
@@ -185,11 +283,18 @@ class TerminalInput:
                 tty.setcbreak(descriptor, termios.TCSANOW)
             decoder = codecs.getincrementaldecoder(self.stream.encoding or "utf-8")("replace")
             pending = ""
+            cursor = 0
             self._show_prompt()
             escape = ""
             while not self._closed.is_set():
                 ready, _, _ = select.select([descriptor], [], [], 0.1)
                 if not ready:
+                    if interactive:
+                        self.output.refresh_layout()
+                    if escape == "\x1b":
+                        self._completion_dismissed = pending
+                        escape = ""
+                        self._redraw(pending, cursor)
                     continue
                 data = os.read(descriptor, 4096)
                 if not data:
@@ -203,30 +308,83 @@ class TerminalInput:
                         if self._closed.is_set():
                             break
                         if escape:
-                            escape += char
-                            if char.isalpha() or char == "~" or len(escape) > 8:
+                            if escape == "\x1b" and char not in {"[", "O"}:
+                                self._completion_dismissed = pending
                                 escape = ""
-                            continue
+                            else:
+                                escape += char
+                                if char.isalpha() or char == "~" or len(escape) > 8:
+                                    key, escape = escape[2:], ""
+                                    if key in {"A", "B"}:
+                                        pending, cursor = self._navigate(
+                                            pending, cursor, -1 if key == "A" else 1,
+                                        )
+                                    elif key == "D":
+                                        cursor = max(0, cursor - 1)
+                                    elif key == "C":
+                                        cursor = min(len(pending), cursor + 1)
+                                    elif key in {"H", "1~", "7~"}:
+                                        cursor = 0
+                                    elif key in {"F", "4~", "8~"}:
+                                        cursor = len(pending)
+                                    elif key == "3~":
+                                        pending = pending[:cursor] + pending[cursor + 1:]
+                                        self._history_index = None
+                                    self._redraw(pending, cursor)
+                                continue
                         if char == "\x1b":
                             escape = char
-                        elif char in {"\r", "\n"}:
-                            self.output.submit_input(pending)
-                            line, pending = pending, ""
-                            self.handle_line(line)
+                            continue
+                        elif char in {"\t", "\r", "\n"}:
+                            choices = self._suggestions(pending, cursor)
+                            completion = (choices[self._completion_index % len(choices)][0]
+                                          if choices else None)
+                            if completion is not None and (
+                                char == "\t" or completion.casefold() != pending.casefold()
+                            ):
+                                pending = completion
+                                if char == "\t" and (
+                                    completion in _COMMAND_ARGUMENTS
+                                    or completion in _PROVIDER_COMMANDS
+                                ):
+                                    pending += " "
+                                cursor = len(pending)
+                                self._history_index = None
+                            elif char != "\t":
+                                self.output.submit_input(pending)
+                                line, pending, cursor = pending, "", 0
+                                if line.strip() and (
+                                    not self._history or self._history[-1] != line
+                                ):
+                                    self._history = [*self._history[-99:], line]
+                                self._history_index = None
+                                self.handle_line(line)
                         elif char in {"\x7f", "\b"}:
-                            pending = pending[:-1]
+                            if cursor:
+                                pending = pending[:cursor - 1] + pending[cursor:]
+                                cursor -= 1
+                            self._history_index = None
                         elif char == "\x15":  # Ctrl-U: clear draft.
-                            pending = ""
+                            pending, cursor = "", 0
+                            self._history_index = None
                         elif char == "\x17":  # Ctrl-W: remove last word.
-                            pending = pending.rstrip().rsplit(" ", 1)[0] if " " in (
-                                pending.rstrip()
-                            ) else ""
+                            before = pending[:cursor].rstrip()
+                            before = before.rsplit(" ", 1)[0] if " " in before else ""
+                            pending = before + pending[cursor:]
+                            cursor = len(before)
+                            self._history_index = None
+                        elif char == "\x01":  # Ctrl-A: beginning of line.
+                            cursor = 0
+                        elif char == "\x05":  # Ctrl-E: end of line.
+                            cursor = len(pending)
                         elif char == "\x04" and not pending:  # Ctrl-D: keyboard EOF.
                             return
                         elif char.isprintable():
-                            pending += char
+                            pending = pending[:cursor] + char + pending[cursor:]
+                            cursor += 1
+                            self._history_index = None
                         if not self._closed.is_set():
-                            self.output.set_input(self.owner_name, pending)
+                            self._redraw(pending, cursor)
                     continue
                 pending += decoded
                 while "\n" in pending and not self._closed.is_set():

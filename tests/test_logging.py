@@ -93,6 +93,56 @@ def test_configured_secret_registry_is_bounded_and_refreshes_active_keys(monkeyp
     assert SecretMaskingFilter._redact(active_key) == "[REDACTED_SECRET]"
 
 
+def test_partial_redaction_withholds_every_configured_secret_prefix(monkeypatch):
+    monkeypatch.setattr(SecretMaskingFilter, "_configured_secrets", ())
+    key = "fixture_" + "x" * 24 + "z"
+    SecretMaskingFilter.register_secrets(key)
+    for end in range(1, len(key)):
+        assert SecretMaskingFilter._redact_partial("Answer: " + key[:end]) == "Answer: "
+    assert SecretMaskingFilter._redact_partial("Answer: " + key) == (
+        "Answer: [REDACTED_SECRET]"
+    )
+
+
+@pytest.mark.parametrize("key", ["fixture" * 4, "]fixture_private_credential"])
+def test_partial_redaction_keeps_complete_overlapping_secrets_masked(monkeypatch, key):
+    monkeypatch.setattr(SecretMaskingFilter, "_configured_secrets", ())
+    SecretMaskingFilter.register_secrets(key)
+    assert SecretMaskingFilter._redact_partial(key) == "[REDACTED_SECRET]"
+
+
+@pytest.mark.parametrize("key", [
+    "nvapi-" + "x" * 24,
+    "SK-" + "x" * 24,
+    "gsk_" + "x" * 24,
+    "TVLY-" + "x" * 24,
+    "Bearer " + "x" * 24,
+    "bEaReR\t" + "x" * 24,
+    "123456789:" + "x" * 24,
+])
+def test_partial_redaction_protects_unconfigured_token_patterns_at_every_split(monkeypatch, key):
+    monkeypatch.setattr(SecretMaskingFilter, "_configured_secrets", ())
+    for end in range(1, len(key) + 1):
+        visible = SecretMaskingFilter._redact_partial("Answer: " + key[:end])
+        assert visible in {"Answer: ", "Answer: [REDACTED_SECRET]"}
+    assert visible == "Answer: [REDACTED_SECRET]"
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("Ordinary reply.", "Ordinary reply."),
+    ("An unfinished nva", "An unfinished "),
+    ("An unfinished BeAr", "An unfinished "),
+    ("The count is 12345", "The count is "),
+    ("The count is 1234567890123456", "The count is 1234567890123456"),
+    ("Boundary x12345:abcdefQ", "Boundary x12345:abcdefQ"),
+    ("Short nvapi-abc!", "Short nvapi-abc!"),
+    ("Complete nvapi-" + "x" * 12 + ".", "Complete [REDACTED_SECRET]."),
+])
+def test_partial_redaction_only_holds_ambiguous_trailing_text(monkeypatch, text, expected):
+    monkeypatch.setattr(SecretMaskingFilter, "_configured_secrets", ())
+    assert SecretMaskingFilter._redact_partial(text) == expected
+
+
 def test_setup_logging():
     """Verify logger creation and namespacing."""
     logger = setup_logging("DEBUG")

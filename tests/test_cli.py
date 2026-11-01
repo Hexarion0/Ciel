@@ -257,7 +257,8 @@ def test_web_mode_reuses_voice_callbacks_and_controls(tmp_path, monkeypatch):
     tts.speak.side_effect = speak
     monkeypatch.setattr(audio, "TextToSpeech", MagicMock(return_value=tts))
     loop = SimpleNamespace(
-        is_running=True, start=MagicMock(), stop=MagicMock(), cancel_response=MagicMock(),
+        is_running=True, start=MagicMock(), start_text_only=MagicMock(),
+        stop=MagicMock(), cancel_response=MagicMock(),
         toggle_microphone_mute=MagicMock(return_value=True),
     )
 
@@ -281,7 +282,8 @@ def test_web_mode_reuses_voice_callbacks_and_controls(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["ciel", "web", "--no-open-browser"])
     assert __main__.main() == 0
     assert [entry["text"] for entry in ui.snapshot()["messages"]] == ["hello there", "Hi there."]
-    assert ui.snapshot()["muted"]
+    assert ui.snapshot()["pc_capture"] is False
+    tts.speak.assert_not_called()
     assert ui.snapshot()["provider"] == "test / test"
     loop.stop.assert_called_once()
     tts.close.assert_called_once()

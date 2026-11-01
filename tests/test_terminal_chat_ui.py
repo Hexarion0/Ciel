@@ -127,7 +127,7 @@ def test_fenced_python_keeps_copyable_indentation_blank_lines_and_tabs():
     assert code == ("def greet(names):\n    for name in names:\n        print(name)\n\n"
                     "greet(['CIEL'])")
     compile(code, "<terminal-example>", "exec")
-    assert "  Try this:" in rendered
+    assert "CIEL: Try this:" in rendered
     assert "  It keeps each greeting on its own line." in rendered
 
 
