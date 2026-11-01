@@ -1,6 +1,6 @@
 # CIEL development roadmap
 
-Last reviewed: **2026-10-28**. Package version: **0.3.6 development**.
+Last reviewed: **2026-10-30**. Package version: **0.3.6 development**.
 
 The goal is a personal companion with natural voice conversation, persistent memory,
 shared context across voice and chat, and useful awareness of what the user is doing.
@@ -22,7 +22,7 @@ before treating it as ready for everyday use.
 | Setup | Configure/review/save before selected package/model installation; CPU recognition choice by default; preserved existing settings; missing-asset reporting | Automatic Turbo setup, managed desktop runtime, clean-machine validation |
 | Desktop web interface | PC-local voice/text chat, live captions, status, and controls | Same-Wi-Fi phone access and desktop acceptance |
 | Messaging | Owner-paired Telegram text, automatic startup, shared conversation with separate archives | Live Telegram acceptance, reminders, additional services |
-| Screen awareness | On-request all-monitor/cursor capture, selected vision model, temporary shared images, explicit Telegram screenshot output | Live image quality, pointer targeting, and paired voice/Telegram acceptance |
+| Screen awareness | On-request all-monitor/cursor capture, selected vision model, temporary shared images, Telegram screenshot output, opt-in desktop observation and repeated-error coding hints | Live image quality, pointer targeting, sustained observation load and hint quality, paired voice/Telegram acceptance, verified player pause signals |
 | Tone, Windows, presence | Planned | Implementation |
 
 A checked item below means the implementation exists. It does not establish
@@ -44,12 +44,13 @@ The default native conversation path now shares a bounded task projection across
 voice and chat, handles retries/corrections, and reserves a final sourced answer
 within its normal 30-second research budget. The [conversation/search evaluation](
 conversation-search-evaluation.md) records automated, synthetic hosted-model, and
-public-retrieval checks. Sustained microphone acceptance and the optional observation
-coordinator remain pending; the legacy controller diagnostics retain their old bounds.
+public-retrieval checks. The [optional observation coordinator](screen-initiative.md)
+and coding hints are implemented. Sustained microphone/desktop acceptance and verified
+Zen pause detection remain pending; legacy controller diagnostics retain their old bounds.
 
-These are planned capabilities. Existing screen capture remains on request until
-the optional observation coordinator is implemented. Desktop edits, commands,
-clicking, and typing are deferred to a later phase.
+Screen capture remains on request unless observation is explicitly enabled for the
+current desktop session. Anime comments, desktop edits, commands, clicking, and typing
+remain deferred.
 
 ## Proposed feature order
 
@@ -359,3 +360,10 @@ to judge the sound and timing of effects in real conversations.
 - Keep automated tests distinct from real microphone, GPU, speaker, and desktop checks.
 - Update this checklist when functionality changes; preserve detailed historical
   results in release notes rather than accumulating contradictory current claims.
+
+## Local web interface upgrade
+
+Persistent chat, archive browsing/continuation, the retained orb, browser voice, local
+HTTPS pairing, and temporary image questions are implemented. Automated and synthetic
+checks are documented in [web interface](web-interface.md). Final real-phone HTTPS,
+microphone/speaker, mobile keyboard, and interruption acceptance remains pending.

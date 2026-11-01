@@ -2,6 +2,44 @@
 
 ## Unreleased — 0.3.6 development
 
+- Replace per-turn browser recording with continuous listening, automatic speech
+  boundaries, persistent microphone pause, and suppression during reply playback.
+  Keep capture open between turns, resume after reconnecting, and keep Stop reply
+  and Sound off independent of the microphone.
+
+- Redirect accidental HTTP visits on the phone's HTTPS port instead of dumping SSL
+  tracebacks. Reject plain HTTP submissions, keep client disconnects quiet, and show
+  the full PC and phone addresses in the web startup panel.
+
+- Add `ciel pair` to prepare local HTTPS phone access and display the address,
+  first-time certificate instructions, and a fresh five-minute pairing code without
+  loading another voice runtime.
+
+- Make web mode a hosted browser application with browser-owned microphone/playback
+  and no host capture stream. Add graphical model, voice, key, memory, personality,
+  restart and network controls. Prepare private HTTPS and a public-only Android
+  certificate setup page, while keeping the PC-local app available.
+
+- Try the configured NIM backup model after a pre-answer timeout instead of skipping
+  directly to the next provider. Keep canceled requests and partially delivered streams
+  from starting another answer, and attempt the selected backup only once.
+
+- Add an opt-in `AMBIENT_FOLLOWUP_POLICY=always` for replies to every non-empty
+  ambient transcript, even after cancellation or an expired conversation window.
+  Ask for a repeat for unclear speech. Keep assistant names used as sentence subjects
+  in the transcript rather than stripping them as wake phrases.
+
+- Replace the temporary web reply bubble with persistent chat, explicit archive
+  continuation, a responsive conversation sidebar, safe formatted messages, and the
+  existing animated orb. Add opt-in local HTTPS phone pairing, browser microphone
+  capture, origin-only Ciel speech, and bounded temporary image questions. Keep actual
+  phone trust/audio acceptance separate from automated checks; see docs/web-interface.md.
+
+- Add session-only `/observe` and directly addressed voice controls for optional
+  screen observation and brief hints about repeated coding errors. Keep unspoken
+  observations temporary, prioritize foreground conversation, recheck current pixels,
+  and enforce a 15-minute gap plus owner reengagement. Show observation status in the
+  desktop web page and local status controls; start disabled at every launch.
 - Preserve private restrictions across archived paired-session memory recall, including
   transitive channel projections without a summary. Require observation requests for
   native screen captures and honor strict ambient admission before saving inferred speech.

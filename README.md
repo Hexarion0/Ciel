@@ -28,6 +28,9 @@ internet, and desktop acceptance checks remain open in
 - On-request Hyprland screen understanding across all monitors, including mouse
   position, temporary image context, and explicit screenshot delivery in Telegram.
   See [screen awareness](docs/screen-awareness.md) for setup and acceptance status.
+- Optional desktop screen observation and brief hints for repeated coding errors.
+  Enable with `/observe on`; pause with `/observe pause`. Off at each launch;
+  see [observation behavior and limits](docs/screen-initiative.md).
 
 Reminders, additional chat services, model-selected tool calls, Windows support, tone detection,
 and presence detection are **planned**.
@@ -111,18 +114,31 @@ Linux distribution's PortAudio runtime and rerun setup.
 
 ### Desktop web interface
 
-Run `ciel web` to start the assistant and open its desktop page at
-`http://127.0.0.1:8765`. The page centers on a voice orb, with the current reply
-in a temporary speech bubble and an input for typed messages and commands.
-Microphone, stop, help, and exit controls report their results on the page.
-It uses the PC's microphone and speakers, with the same memory and validated
-actions as the terminal. Both accept the in-session commands listed below.
+Run `ciel web` to open a persistent chat at `http://127.0.0.1:8765`. The animated
+orb stays visible beside the conversation, with a compact header version on phones.
+Browse earlier chats in the sidebar; **Continue this chat** explicitly activates one
+for new text and voice. **New conversation** keeps saved facts and earlier history.
 
-Use `ciel web --no-open-browser` to open the page yourself, or
-`ciel web --web-port 8766` if the default port is in use. Stop an existing
-terminal Ciel session before starting web mode so two processes do not
-share the microphone and voice models. This first interface serves the PC;
-same-Wi-Fi dashboard access remains planned. Telegram chat runs separately below.
+The PC hosts the backend; the browser owns its microphone and speaker. Web mode opens
+no PC capture stream. **Settings** manages models, voices, recognition, keys, memory,
+personality, and server restart.
+
+The browser listens continuously once microphone access is allowed. Speak naturally;
+Ciel sends each utterance when you pause and resumes listening after its reply. Use
+**Enable microphone** if the browser needs an initial click, or **Pause mic** to stop.
+You can also type or attach up to two images. New browser replies use Ciel's configured
+voice on the requesting device,
+with full written text and a brief spoken excerpt for long answers. **Sound off**,
+**Enable sound**, **Read full answer**, and **Stop reply** control playback.
+
+Use `ciel web --no-open-browser` to open the page yourself, or `--web-port 8766` for
+another port. Use **Settings → Connect your Android phone** for private-network HTTPS, a local
+certificate setup page, and an expiring pairing code. Or keep `ciel web` running and use
+`ciel pair` in another terminal to prepare phone access and display a fresh code.
+See [web interface setup and verification](docs/web-interface.md)
+for the certificate flags, media limits, and device acceptance still to perform.
+Stop an existing desktop Ciel process before starting web mode to avoid sharing audio
+hardware and voice models. Telegram chat runs separately below.
 
 ## Telegram chat
 
@@ -209,12 +225,25 @@ No provider setup is needed for local clock, memory, or supported desktop action
 ## Everyday use
 
 The terminal clears the visible screen on launch, shows a boxed status panel,
-and keeps an editable `❯` composer. Typed replies
-stay visible in chat, with room for explanations, lists, and copyable code. Ciel
-also speaks typed replies; longer answers get a brief excerpt and a pointer to the
-full text. Voice requests keep their brief spoken style. `/status` shows requested
+and keeps an editable `❯` composer. Recognized speech and typed input appear as the
+same user messages in interactive chat. Both receive full written replies, with room
+for explanations, lists, and copyable code. Ciel speaks a brief excerpt of longer
+answers and points to the full text. Speech still requires normal listening admission
+and confidence checks; a transcript needing clarification is not sent as a typed command.
+Incoming speech leaves your unsent keyboard draft in place. `/status` shows requested
 models, reasoning mode,
-and the last served model; `/help` lists controls. Plain and narrow terminals remain
+and the last served model; `/help` lists controls. The input bar stays at the bottom
+of the terminal, with replies and command suggestions above it, including after resizing.
+Type `/` to open the command
+picker and keep typing to filter it. The picker overlays the text above the input
+without scrolling it and restores that text when closed. The full list appears when
+the terminal is tall enough; smaller windows scroll through the options.
+Up/Down selects a command; Enter fills it and
+a second Enter runs it. Tab completes commands and opens supported argument choices.
+Escape closes the picker. Outside the picker, Up/Down recalls earlier input and
+restores your unsent draft, Left/Right moves the cursor, Home/End moves to either
+end, and Delete removes the next character. Input history lasts for this process.
+Plain and narrow terminals remain
 supported.
 
 Each new `ciel` or `ciel web` launch starts a fresh conversation. Saved personal
@@ -268,6 +297,7 @@ While CIEL is running, type these commands in the terminal or desktop web input:
 | `/unmute` | Unmute the microphone |
 | `/mode [ambient\|wake]` | Show or change the listening mode |
 | `/memory [status\|pause\|resume]` | Show or pause/resume saved-fact recall |
+| `/observe [on\|off\|pause\|resume\|status]` | Enable, pause, or inspect temporary screen observation and coding hints |
 | `/stop` | Cancel the current recording and reply |
 | `/help [command]` | Show controls or help for one command, such as `/help memory` |
 | `/exit` or `/quit` | Shut down CIEL |
@@ -429,9 +459,15 @@ additional model rounds; ordinary chat answers in one main request.
 | `UTTERANCE_PAUSE_GRACE_SECONDS` | `0.2` | Extra pause tolerance; total default 0.9 seconds |
 | `AMBIENT_LISTENING` | `true` | Capture speech and classify intended-listener context |
 | `AMBIENT_FOLLOWUP_SECONDS` | `300` | Active ambient conversation window |
+| `AMBIENT_FOLLOWUP_POLICY` | `conversation` | Use `always` to reply to every non-empty transcript; `strict` retains listener checks |
 | `BARGE_IN_MODE` | `speech` | Interrupt with speech; use `wake` to require a name |
 | `SHOW_TRANSCRIPTS` | `false` | Raw STT diagnostics in development output |
 | `SHOW_AI_TRANSCRIPTS` | `true` | Captions during playback |
+
+With `AMBIENT_FOLLOWUP_POLICY=always`, “Never mind” cancels the current task with
+a brief acknowledgement; the next transcript still receives a reply. Unclear speech
+gets a request to repeat. Restart CIEL after changing the setting. Microphone mute,
+wake-word-only mode, and interruption still apply.
 
 Increase pause grace if CIEL cuts you off while thinking. The previous
 1.8-second endpoint was more tolerant of pauses in recorded reference passages;
@@ -504,6 +540,10 @@ choose a response or action. Clear inactive or third-party speech is filtered
 before the action decision. There is no speaker identification or acoustic echo
 cancellation. Diagnostic transcript logging can
 expose nearby speech, so enable it deliberately.
+
+Optional `/observe on` sends periodic desktop views to the selected image model
+while enabled. Background images and unspoken observations stay temporary; only
+delivered hints enter conversation history. Observation is off after restart.
 
 ## Development
 
