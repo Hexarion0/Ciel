@@ -12,6 +12,12 @@ from ciel.audio.text_reply import spoken_text_reply
 from ciel.webapp.audio import encode_audio_wav
 from ciel.webapp.requests import WebRequest
 
+ECHO_MARGIN_SECONDS = 0.8
+"""After handed-out audio should have finished, keep treating Ciel as audible this long.
+
+Covers network delivery, decoding, and device output latency, so a speaker's tail is not
+picked up by any microphone, in this tab, another tab, or another device.
+"""
 
 class _Cancellation(threading.Event):
     """Let the voice engine observe parent cancellation and revocation immediately."""
@@ -41,10 +47,23 @@ class _Playback:
 class BrowserSpeech:
     """Synthesize through CIEL's configured voice, without opening PC audio output."""
 
-    def __init__(self, tts: Any) -> None:
+    def __init__(self, tts: Any, *, clock: Callable[[], float] = time.monotonic) -> None:
         self.tts = tts
+        self.clock = clock
         self._lock = threading.RLock()
         self._jobs: dict[str, _Playback] = {}
+        self._audible_until = 0.0
+
+    def audible(self) -> bool:
+        """Whether some browser is, or may still be, playing Ciel's voice."""
+        with self._lock:
+            return self.clock() < self._audible_until + ECHO_MARGIN_SECONDS
+
+    def overlaps_playback(self, clip_seconds: float) -> bool:
+        """Whether a just-finished recording of this length began while Ciel was audible."""
+        with self._lock:
+            started = self.clock() - max(0.0, clip_seconds)
+            return started < self._audible_until + ECHO_MARGIN_SECONDS
 
     def speak(
         self,
@@ -75,7 +94,8 @@ class BrowserSpeech:
                     for start in range(0, len(audio), rate):
                         if not self._valid(job):
                             return
-                        chunk = encode_audio_wav(audio[start : start + rate], rate)
+                        samples = audio[start : start + rate]
+                        chunk = (encode_audio_wav(samples, rate), len(samples) / rate)
                         deadline = time.monotonic() + 30
                         while self._valid(job):
                             try:
@@ -132,11 +152,15 @@ class BrowserSpeech:
                 raise ValueError("This playback is no longer available.")
             job.client = client
             try:
-                return job.chunks.get_nowait()
+                data, seconds = job.chunks.get_nowait()
             except queue.Empty:
                 if job.done:
-                    raise EOFError(job.error)
+                    raise EOFError(job.error) from None
                 return None
+            # Browsers play chunks back to back, so audibility extends from the later of now
+            # and the end of the audio already handed out.
+            self._audible_until = max(self.clock(), self._audible_until) + seconds
+            return data
 
     def replay(self, handle: str, device_id: str, revision: int) -> str:
         """Read the already generated full answer; never make another model request."""
@@ -159,3 +183,5 @@ class BrowserSpeech:
             for job in self._jobs.values():
                 job.canceled.set()
             self._jobs.clear()
+            # Stop silences the browser at once, so the mic is free immediately afterwards.
+            self._audible_until = min(self._audible_until, self.clock() - ECHO_MARGIN_SECONDS)

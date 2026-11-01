@@ -333,6 +333,10 @@ class WebChannels:
                     raise ValueError("Browser voice is unavailable in this session.")
                 raw = self.read(handler, 1_920_256)
                 audio = decode_voice_wav(raw)
+                if self.speech and self.speech.overlaps_playback(len(audio) / 16000):
+                    # A clip that began while Ciel was audible is its own voice coming back.
+                    handler._json(200, {"accepted": False, "ignored": True})
+                    return True
                 data = {
                     "request_id": handler.headers.get("X-Request-ID", ""),
                     "revision": int(handler.headers.get("X-Revision", "-1")),

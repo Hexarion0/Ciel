@@ -166,6 +166,8 @@ class BrowserAudio {
         'Content-Type':'audio/wav','X-Request-ID':crypto.randomUUID().replaceAll('-',''),
         'X-Revision':String(recording.selection.revision),'X-Conversation':recording.selection.handle
       }),body:buffer});
+      // The server drops clips that began while Ciel was speaking: that was its own voice.
+      if (response.ok && data.ignored) {if(this.waiting===waiting) this.waiting=null;this.pauseUntil=Date.now()+600;return;}
       if (!response.ok || !data.accepted) throw Error(data.error || 'Could not send the recording. Try again.');
       feedback('Heard you.');
     } catch(error) {if(this.waiting===waiting) this.waiting=null;feedback(error.message,true);this.pauseUntil=Date.now()+1000;}

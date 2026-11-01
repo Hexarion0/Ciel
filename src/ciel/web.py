@@ -181,6 +181,11 @@ class DesktopWebUI:
         with self._lock:
             self._observation_status = status
 
+    def _browser_audible(self) -> bool:
+        """Report speaking to every page while any browser plays Ciel, so no mic hears it."""
+        speech = getattr(self.channels, "speech", None)
+        return bool(speech and speech.audible())
+
     def snapshot(self, *, after: int | None = None) -> dict[str, Any]:
         with self._lock:
             reset = after is None or after < self._reset_cursor or after > self._cursor
@@ -190,7 +195,8 @@ class DesktopWebUI:
                     "active": asdict(self.selection.current()) if self.selection else None,
                     "voice_enabled": self.voice_enabled, "pc_capture": self.pc_capture,
                     "muted": self._muted,
-                    "state": "speaking" if self._speaking else self._state,
+                    "state": "speaking" if self._speaking or self._browser_audible()
+                    else self._state,
                     "provider": self._provider,
                     "observation": self._observation_status(),
                     "messages": [
