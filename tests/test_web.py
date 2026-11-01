@@ -99,11 +99,14 @@ LAUNCH = {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate",
           "Sec-Fetch-Dest": "document"}
 
 
-def test_installed_app_launch_from_home_screen_opens_the_page(web_server):
-    """Android may label a home-screen launch as cross-site; the public shell still opens."""
+@pytest.mark.parametrize("dest", ["document", "empty", None])
+def test_installed_app_launch_from_home_screen_opens_the_page(web_server, dest):
+    """Android may label a home-screen launch as cross-site; Brave also sends dest=empty."""
     _ui, _submit, client = web_server
+    headers = {key: value for key, value in {**LAUNCH, "Sec-Fetch-Dest": dest}.items()
+               if value is not None}
 
-    response = client.get("/", headers=LAUNCH)
+    response = client.get("/", headers=headers)
 
     assert response.status_code == 200
     assert "Message Ciel" in response.text
@@ -119,18 +122,24 @@ def test_cross_site_navigation_still_cannot_reach_anything_but_the_page(web_serv
 def test_cross_site_page_request_must_be_a_top_level_navigation(web_server):
     _ui, _submit, client = web_server
 
-    embedded = {**LAUNCH, "Sec-Fetch-Dest": "iframe"}
     fetched = {**LAUNCH, "Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty"}
-    assert client.get("/", headers=embedded).status_code == 403
     assert client.get("/", headers=fetched).status_code == 403
+    for dest in ["iframe", "frame", "embed", "object"]:
+        embedded = {**LAUNCH, "Sec-Fetch-Dest": dest}
+        assert client.get("/", headers=embedded).status_code == 403
 
 
 def test_rejection_names_the_failed_check(web_server):
     _ui, _submit, client = web_server
 
-    response = client.get("/api/state", headers={"Sec-Fetch-Site": "cross-site"})
+    response = client.get("/api/state?after=5", headers={
+        "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty",
+    })
 
-    assert "another site" in response.json()["error"]
+    error = response.json()["error"]
+    assert "another site" in error
+    assert "GET /api/state" in error and "mode=cors" in error and "dest=empty" in error
+    assert "after=5" not in error
 
 
 @pytest.mark.parametrize("data", [{}, [], {"text": ""}, {"text": 5}, {"text": "x" * 4001}])

@@ -246,12 +246,16 @@ class DesktopWebUI:
                 request_host = self.headers.get("Host", "")
                 origin = self.headers.get("Origin")
                 request_scheme = 'https' if isinstance(self.connection, ssl.SSLSocket) else 'http'
-                # Android can label a home-screen app launch as cross-site. Opening the public
-                # page is harmless; every API request it then makes is same-origin.
+                # Android can label a home-screen app launch as cross-site (Brave also sends
+                # dest=empty). Only real navigations carry mode=navigate, and frame-ancestors
+                # blocks embedding, so opening the public page is harmless; every API request
+                # it then makes is same-origin.
                 app_launch = (
                     self.command == 'GET' and urlsplit(self.path).path == '/'
                     and self.headers.get("Sec-Fetch-Mode") == "navigate"
-                    and self.headers.get("Sec-Fetch-Dest") == "document"
+                    and self.headers.get("Sec-Fetch-Dest") not in {
+                        "iframe", "frame", "embed", "object",
+                    }
                 )
                 if request_host not in allowed:
                     reason = "unknown address"
@@ -264,8 +268,13 @@ class DesktopWebUI:
                 else:
                     reason = ""
                 if reason:
+                    # Name the request (never its query) so a blocked device can be diagnosed.
+                    detail = (f"{reason}: {self.command} {urlsplit(self.path).path}, "
+                              f"mode={self.headers.get('Sec-Fetch-Mode', '-')}, "
+                              f"dest={self.headers.get('Sec-Fetch-Dest', '-')}")
+                    logging.getLogger(__name__).warning("Rejected web request (%s)", detail)
                     self._json(403, {"error": "This interface accepts PC-local requests only "
-                                              f"({reason})."})
+                                              f"({detail})."})
                     return False
                 if self.server.tls_context is not None and request_scheme != 'https':
                     if self.command in {'GET', 'HEAD'}:
