@@ -1,6 +1,6 @@
 # CIEL development roadmap
 
-Last reviewed: **2026-10-30**. Package version: **0.3.6 development**.
+Last reviewed: **2026-11-02**. Package version: **0.3.6 development**.
 
 The goal is a personal companion with natural voice conversation, persistent memory,
 shared context across voice and chat, and useful awareness of what the user is doing.
@@ -20,7 +20,7 @@ before treating it as ready for everyday use.
 | Internet | Free Parallel search; optional DDGS/Brave/Tavily; article/news/feed reading, dates, supported partial answers, shared source observations, full research goals, relevance checks, and a shared 30-second native research budget | Broader live news quality, site compatibility, PDF/media extraction |
 | Personality | Modular persona prompt, continuity rules, opinions/initiative, editable preferences, voice-requested style updates/reset | Continued evaluation during real conversations |
 | Setup | Configure/review/save before selected package/model installation; CPU recognition choice by default; preserved existing settings; missing-asset reporting | Automatic Turbo setup, managed desktop runtime, clean-machine validation |
-| Desktop web interface | PC-local voice/text chat, live captions, status, and controls | Same-Wi-Fi phone access and desktop acceptance |
+| Web interface | PC and paired-phone browser app: persistent chats, continuous browser voice, speech from the first finished sentence, live captions, status, settings, installable phone app | Physical phone HTTPS, microphone/speaker, and measured first-audio acceptance |
 | Messaging | Owner-paired Telegram text, automatic startup, shared conversation with separate archives | Live Telegram acceptance, reminders, additional services |
 | Screen awareness | On-request all-monitor/cursor capture, selected vision model, temporary shared images, Telegram screenshot output, opt-in desktop observation and repeated-error coding hints | Live image quality, pointer targeting, sustained observation load and hint quality, paired voice/Telegram acceptance, verified player pause signals |
 | Tone, Windows, presence | Planned | Implementation |
@@ -288,8 +288,8 @@ not use model-selected action calls or grant website account access.
 - [ ] Complete UI and accessibility checks against real desktop use.
 
 The first desktop interface uses Python's HTTP server and a small HTML/CSS/JS
-frontend. PC voice input stays in the existing listener. Add same-Wi-Fi phone
-access after desktop acceptance. Telegram now runs independently using shared
+frontend. Same-Wi-Fi phone access now uses local HTTPS pairing; see the
+[web interface](web-interface.md). Telegram now runs independently using shared
 persona, memory, and provider components. Reassess FastAPI/WebSocket if later
 dashboard requirements need them.
 
@@ -364,6 +364,8 @@ to judge the sound and timing of effects in real conversations.
 ## Local web interface upgrade
 
 Persistent chat, archive browsing/continuation, the retained orb, browser voice, local
-HTTPS pairing, and temporary image questions are implemented. Automated and synthetic
-checks are documented in [web interface](web-interface.md). Final real-phone HTTPS,
-microphone/speaker, mobile keyboard, and interruption acceptance remains pending.
+HTTPS pairing, and temporary image questions are implemented. Replies start speaking
+at their first finished sentence, and web turns log stage timing. Automated and
+synthetic checks are documented in [web interface](web-interface.md). Final
+real-phone HTTPS, microphone/speaker, mobile keyboard, interruption, and first-audio
+timing acceptance remains pending.
