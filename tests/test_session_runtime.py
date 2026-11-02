@@ -905,6 +905,68 @@ def test_browser_stream_never_exposes_split_secret(launch_session, monkeypatch, 
         store.close()
 
 
+@pytest.mark.parametrize("kind", ["text", "voice"])
+def test_browser_reply_starts_speaking_before_generation_finishes(
+    launch_session, monkeypatch, kind,
+):
+    """The first sentence plays while the rest of a browser answer is still generating."""
+    import numpy as np
+
+    from ciel.agent import AgentResult, MainAgent
+    from ciel.providers.base import LLMStreamChunk
+    from ciel.webapp import speech as speech_module
+    from ciel.webapp.requests import WebRequest
+
+    first_spoken = threading.Event()
+    calls, services, observed = [], [], {}
+    original_init = speech_module.BrowserSpeech.__init__
+
+    def init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        services.append(self)
+
+    def stream(self, *_args, **_kwargs):
+        self.last_result = AgentResult(provider="fixture", model="fixture")
+        yield LLMStreamChunk("Sure thing. ", "fixture", "fixture")
+        yield LLMStreamChunk("Here is", "fixture", "fixture")
+        observed["early"] = first_spoken.wait(2)
+        yield LLMStreamChunk(" the rest of it.", "fixture", "fixture", is_final=True)
+
+    monkeypatch.setattr(speech_module.BrowserSpeech, "__init__", init)
+    monkeypatch.setattr(MainAgent, "stream", stream)
+
+    def drive(_submit, loop):
+        def synthesize(text, **_kwargs):
+            calls.append(text)
+            first_spoken.set()
+            yield np.zeros(160, dtype=np.float32), 16000
+
+        loop.tts.synthesize_stream.side_effect = synthesize
+        request = WebRequest("request", "phone", "chat", 1, kind, "Tell me something.")
+        loop.on_transcription(request.text, {
+            "input_source": "web_text" if kind == "text" else "web_voice",
+            "web_request": request, "web_current": lambda: True,
+            "wake_verified": True, "cancel_event": threading.Event(),
+        }, None)
+        jobs = services[0].list("phone", 1)
+        observed["jobs"] = len(jobs)
+        for _ in range(400):
+            try:
+                if services[0].chunk(jobs[0]["id"], "phone", 1, "tab-one") is None:
+                    threading.Event().wait(0.005)
+            except EOFError:
+                break
+        observed["calls"] = list(calls)
+        loop.tts.speak.assert_not_called()
+
+    result = launch_session("web", ["/exit"], before_commands=drive)
+    assert observed["early"], "Speech waited for the rest of the answer"
+    assert observed["jobs"] == 1
+    assert observed["calls"] == ["Sure thing.", "Here is the rest of it."]
+    replies = [m["text"] for m in result.ui.snapshot()["messages"] if m["role"] == "assistant"]
+    assert replies == ["Sure thing. Here is the rest of it."]
+
+
 def test_browser_stream_flushes_benign_trailing_digits(launch_session, monkeypatch):
     """A possible token prefix is only withheld until successful completion."""
     from ciel.agent import AgentResult, MainAgent

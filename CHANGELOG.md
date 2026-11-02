@@ -2,6 +2,13 @@
 
 ## Unreleased — 0.3.6 development
 
+- Start speaking web replies at their first finished sentence instead of after the
+  whole answer, then voice each sentence as it completes. The spoken words are the same
+  excerpt as before, so Chatterbox Turbo no longer renders it in one long request before
+  the first sound. Time web turns like microphone turns, log when each reply's first
+  audio reaches the browser (stage times only), and offer **Read full answer** once a
+  streamed answer completes.
+
 - Let Ciel name and rename conversations (background titling on the economical or local
   route, plus a rename tool), list and read past conversations with owner-scoped tools,
   and remove conversations from the web sidebar without deleting history or memory;

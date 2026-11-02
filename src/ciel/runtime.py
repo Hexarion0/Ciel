@@ -753,7 +753,7 @@ def run_desktop(
 
         def finish(text: str, provider="local", model="local", sources=None,
                    lookup=None, research_scope=None, screen_result=None,
-                   displayed: bool = False) -> bool:
+                   displayed: bool = False, voice=None) -> bool:
             if not current() or turn_scope != conv_manager.context_session_ids():
                 return False
             if turn_version != screen_scope(conv_manager):
@@ -800,7 +800,7 @@ def run_desktop(
                 if current() and web_ui is not None and metadata:
                     web_ui.set_reply_sources(metadata, user_message_id=owner_id)
 
-            said = say(text, on_start=started, displayed=written_reply or displayed)
+            said = say(text, on_start=started, displayed=written_reply or displayed, voice=voice)
             if not said and current() and web_ui is not None and metadata:
                 web_ui.set_reply_sources(metadata, user_message_id=owner_id)
             if metadata and current():
@@ -1064,11 +1064,20 @@ def run_desktop(
                 browser_text = ""
                 browser_visible = ""
                 browser_request = wake_info.get("web_request")
+                voice = None
                 if captions is not None:
                     captions.close()
                 if settings.audio.tts_streaming:
                     from ciel.logging import SecretMaskingFilter
                     from ciel.text_streaming import stream_text_reply
+
+                    if (web_mode and browser_request is not None and web_ui is not None
+                            and web_ui.channels.speech is not None and cancel_event is not None
+                            and settings.audio.tts_enabled and tts.enabled):
+                        # Speak each finished sentence while the rest is still generating.
+                        voice = web_ui.channels.speech.stream(
+                            browser_request, cancel_event=cancel_event, current=current,
+                        )
 
                     def text_delta(delta: str) -> None:
                         nonlocal displayed, browser_text, browser_visible
@@ -1077,9 +1086,12 @@ def run_desktop(
                         if browser_request is not None and web_ui is not None:
                             if not displayed:
                                 web_ui.start_sentence()
+                                mark("first_visible_text")
                             browser_text += delta
                             browser_visible = SecretMaskingFilter._redact_partial(browser_text)
                             web_ui.progress(browser_visible)
+                            if voice is not None:
+                                voice.update(browser_visible)
                         elif terminal_output is not None:
                             if not displayed:
                                 terminal_output.write("CIEL: ")
@@ -1097,7 +1109,10 @@ def run_desktop(
                     )
                     if displayed and terminal_output is not None:
                         terminal_output.write("\n")
+                    mark("reply_text_complete")
                     if streamed_text.canceled or agent.last_result.canceled or not current():
+                        if voice is not None:
+                            voice.abandon()
                         if (displayed and turn_scope == conv_manager.context_session_ids()
                                 and turn_version == screen_scope(conv_manager)):
                             if browser_request is not None and web_ui is not None:
@@ -1145,6 +1160,7 @@ def run_desktop(
                     strip_internal_reply_notes(response.content), response.provider, response.model,
                     agent.last_result.sources, lookup=native_tools.lookup,
                     research_scope=turn_scope, screen_result=screen_result, displayed=displayed,
+                    voice=voice,
                 )
             if settings.audio.tts_streaming and wake_info.get("web_request") is None:
                 from ciel.audio.streaming import stream_reply
@@ -1266,7 +1282,7 @@ def run_desktop(
                 terminal_output.received_input(transcript)
                 user_message_shown = True
 
-        def say(reply: str, *, on_start=None, displayed: bool = False) -> bool:
+        def say(reply: str, *, on_start=None, displayed: bool = False, voice=None) -> bool:
             if not current():
                 return False
             browser_request = wake_info.get('web_request')
@@ -1280,10 +1296,14 @@ def run_desktop(
                     on_start()
                 if voiced:
                     try:
-                        web_ui.channels.speech.speak(
-                            reply, browser_request, cancel_event=cancel_event, current=current,
-                            message_id=message_id,
-                        )
+                        if voice is not None:
+                            # Already speaking as it streamed; say what remains of it.
+                            voice.finish(reply)
+                        else:
+                            web_ui.channels.speech.speak(
+                                reply, browser_request, cancel_event=cancel_event,
+                                current=current, message_id=message_id,
+                            )
                     except ValueError:
                         web_ui.feedback('Audio is unavailable. Your answer is below.', error=True)
                 return False  # Queued audio is not proof of successful playback.

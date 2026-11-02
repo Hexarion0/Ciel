@@ -213,6 +213,10 @@ class DesktopWebUI:
         with self._lock:
             self._finished.append(str(getattr(request, "request_id", "")))
             self._finished = self._finished[-32:]
+        speech = getattr(self.channels, "speech", None)
+        if speech is not None:
+            # A streamed reply the turn never completed must not keep a browser waiting.
+            speech.abandon(request)
 
     def snapshot(self, *, after: int | None = None) -> dict[str, Any]:
         with self._lock:

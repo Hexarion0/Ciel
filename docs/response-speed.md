@@ -62,13 +62,45 @@ working alongside all indexed notes:
 These figures measure curated search only. They do not establish an improvement of
 the same size for complete memory assembly or an everyday spoken turn.
 
+## Browser speech starts at the first sentence — 2026-11-02
+
+Before this change, a browser reply's voice waited for two things: the complete written
+answer, and then Chatterbox Turbo rendering the whole spoken excerpt (up to 80 words) in
+one call, since Turbo returns one segment per request. From the 2026-10-05 Turbo
+real-time factors of 0.39–0.61, a full-length excerpt of about 30 seconds of audio
+needed roughly 10–20 seconds of synthesis before the first sound, on top of generation.
+That figure is an estimate from earlier component runs, not a measurement of this path.
+
+Browser replies now release their spoken excerpt sentence by sentence while the text
+streams. The first finished sentence opens the reply's audio, and each later sentence is
+synthesized as it completes, as `ciel start` already does. Joined, the streamed sentences
+equal the excerpt computed from the finished answer; 160 regression cases and a
+3,000-answer random markdown fuzz with random chunking found no difference. A long
+answer settles its excerpt, including the pointer to the chat, before generation ends.
+Stop, a conversation switch, a newer request, or the end of the turn silences an
+unfinished stream. Speech consumes only the masked text the page displays.
+
+Web turns now carry the same privacy-safe stage trace as microphone turns, starting
+when the request reaches the PC. Each reply's first served audio chunk also logs one
+line with stage times and no text, for example:
+
+```text
+Browser reply audio (streamed, turn 3f2a…): {"first_chunk_ready": 2.41,
+"first_chunk_served": 2.52, "first_visible_text": 1.37, "reply_text_complete": 6.9,
+"speech_started": 1.88, "stt_finished": 0.61, "web_request_received": 0.0}
+```
+
+The values above illustrate the format only. Before this change, `speech_started` came
+after `reply_text_complete`; now it should follow the first finished sentence.
+
 ## Remaining measurements
 
-Browser speech still derives its brief excerpt from the completed written answer.
-First-turn voice initialization, actual microphone recognition, hosted inference
-under normal conversation context, public research, and audible device playback
-need separate current measurements. Historical benchmarks are useful leads, but
-are not current end-to-end acceptance results.
+Record the line above for a few real phone voice turns to measure the first-audio
+gain on the owner's devices. First-turn voice initialization, actual microphone
+recognition, hosted inference under normal conversation context, public research,
+and audible device playback need separate current measurements. **Read full answer**
+still synthesizes the stored answer in one Turbo request. Historical benchmarks are
+useful leads, but are not current end-to-end acceptance results.
 
 ## Validation
 

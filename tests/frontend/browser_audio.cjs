@@ -106,6 +106,30 @@ async function testPrefetchFailuresAndAbort() {
   }
  } finally {process.off('unhandledRejection',onUnhandled);}
 }
+async function testReadFullAnswerFromLaterListing() {
+ element('read-full').hidden=true;
+ let listing=[{id:'stream-job'}],fetched=0,replayed=null;
+ const {player,sources}=playbackPlayer('stream-job');
+ context.requestJSON=async(url,options)=>{
+  if(url==='/api/replay'){replayed=JSON.parse(options.body);return {response:{ok:true},data:{job:'again'}};}
+  return {response:{ok:true},data:{jobs:listing}};
+ };
+ context.fetch=async()=>++fetched===1?{status:200,ok:true,arrayBuffer:async()=>wave(1)}:{status:410,ok:false};
+ const polling=player.poll();await settle();
+ sources[0].onended();await polling;
+ assert.equal(element('read-full').hidden,true,'A streamed reply offers nothing before its answer completes');
+ listing=[{id:'stream-job',excerpt:true}];
+ await player.poll();
+ assert.equal(element('read-full').hidden,false,'A completed streamed excerpt offers the full answer');
+ assert.equal(fetched,2,'Offering the full answer never replays the excerpt');
+ player.enable=async()=>{};
+ await element('read-full').onclick();
+ assert.deepEqual(replayed,{job:'stream-job'});
+ element('read-full').hidden=true;
+ listing=[{id:'stream-job',excerpt:true,error:'Audio is unavailable.'}];
+ await player.poll();
+ assert.equal(element('read-full').hidden,true,'Failed audio does not offer a replay');
+}
 (async()=>{
  audio.available=true;audio.enable=async()=>{};
  await audio.toggleRecording();
@@ -128,5 +152,6 @@ async function testPrefetchFailuresAndAbort() {
  await testPlaybackPrefetch();
  await testOrderedPlaybackAndAutoplayRecovery();
  await testPrefetchFailuresAndAbort();
+ await testReadFullAnswerFromLaterListing();
  console.log('Browser playback prefetch, ordered audio, autoplay recovery, cancellation, and failures passed.');
 })().catch(error=>{console.error(error);process.exitCode=1});

@@ -267,10 +267,13 @@ class WakeListenerLoop:
                 return False
             self._cancel_response_locked()
             self._response_cancel = threading.Event()
+            # Time web turns from their arrival, like microphone turns from their endpoint.
+            trace = TurnTrace()
+            trace.mark("web_request_received", kind=request.input_kind)
             info = {'input_source': 'web_text' if request.input_kind == 'text' else 'web_voice',
                     'typed_text': request.text if request.input_kind == 'text' else '',
                     'web_request': request, 'web_current': current, 'wake_verified': True,
-                    'cancel_event': self._response_cancel}
+                    'cancel_event': self._response_cancel, 'latency_trace': trace}
             self._offer(self._processing_queue, (
                 audio if audio is not None else np.empty(0, dtype=np.float32),
                 info, self._recording_generation,

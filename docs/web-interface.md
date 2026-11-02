@@ -43,6 +43,12 @@ history is never automatically read aloud. Long answers keep the full text and u
 short spoken excerpt; **Read full answer** reads the stored answer without another
 model request. Playback queues are temporary and expire; very old answers may need
 another explicit request. Audio failure leaves the written reply available.
+
+Ciel starts speaking as soon as a reply's first sentence is finished, while the rest is
+still being written, and voices each sentence as it completes. The spoken words are the
+same excerpt as before: up to 80 words of complete sentences, then "The full answer is in
+the chat." when the answer is longer or contains code. A long answer can finish speaking
+before its text does. **Read full answer** appears once the whole answer has arrived.
 Browser speech and typing use the same written-answer depth. Speech recognition
 still checks uncertainty before a recognized request is accepted.
 

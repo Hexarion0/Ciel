@@ -231,6 +231,13 @@ class BrowserAudio {
     });
     this.source=null;this.pauseUntil=Date.now()+600;return true;
   }
+  offerFullAnswer(id) {
+    element('read-full').hidden=false;
+    element('read-full').onclick=async()=>{
+      await this.enable();
+      await requestJSON('/api/replay',{method:'POST',headers:this.headers({'Content-Type':'application/json'}),body:JSON.stringify({job:id})});
+    };
+  }
   async poll() {
     if (!runtime.online) { this.resync=true; return; }
     if (!this.available || this.playing || this.pendingChunk) return;
@@ -244,16 +251,12 @@ class BrowserAudio {
         this.resync=false; return;
       }
       for(const job of data.jobs || []) {
+        // A streamed reply learns it spoke an excerpt only when its answer completes,
+        // often after its audio ended, so offer the full answer from any later listing.
+        if (job.excerpt && !job.error) this.offerFullAnswer(job.id);
         if (this.seen.has(job.id)) continue;
         this.seen.add(job.id);
         if (job.error) { feedback(job.error,true); captionsOrNull()?.finish(job.message); continue; }
-        if (job.excerpt) {
-          element('read-full').hidden=false;
-          element('read-full').onclick=async()=>{
-            await this.enable();
-            await requestJSON('/api/replay',{method:'POST',headers:this.headers({'Content-Type':'application/json'}),body:JSON.stringify({job:job.id})});
-          };
-        }
         if (this.muted) {captionsOrNull()?.finish(job.message);continue;}
         captionsOrNull()?.begin(job.message, job.caption);
         if (typeof watchCaptions === 'function') watchCaptions();

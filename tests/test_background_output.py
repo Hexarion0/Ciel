@@ -157,3 +157,29 @@ def test_browser_requests_report_when_handled_even_without_a_reply():
         callback, args = loop._notifications.get_nowait()
         callback(*args)
     assert finished == [request]
+
+
+@pytest.mark.parametrize("kind", ["text", "voice"])
+def test_browser_requests_are_timed_like_microphone_turns(listener, kind):
+    """Web turns carry the same privacy-safe stage trace as desktop microphone turns."""
+    import numpy as np
+
+    from ciel.latency import TurnTrace
+    from ciel.webapp.requests import WebRequest
+
+    stages = []
+    listener.stt = None
+    listener.on_transcription.side_effect = lambda *_args: stages.append(
+        set(_args[1]["latency_trace"].report()["events"]))
+    request = WebRequest('request', 'phone', 'chat', 1, kind, 'Hello')
+    assert listener.submit_request(
+        request, np.ones(160, dtype=np.float32) if kind == "voice" else None,
+    )
+    run_worker_until_queue_drained(listener)
+
+    trace = listener.on_transcription.call_args.args[1]["latency_trace"]
+    assert isinstance(trace, TurnTrace)
+    events = trace.report()["events"]
+    assert events["web_request_received"]["kind"] == kind
+    assert {"web_request_received", "processing_dequeued"} <= stages[0]
+    assert "turn_finished" in events
