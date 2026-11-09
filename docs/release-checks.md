@@ -1,6 +1,8 @@
 # v0.3 Release Checks
 
 Run from the repository root with the development environment active.
+For the short hands-on list used to decide the v0.3 tag, see
+[v0.3 acceptance](v0.3-acceptance.md); this file keeps the detailed evidence.
 
 ## Repository review before commit — 2026-10-28
 
