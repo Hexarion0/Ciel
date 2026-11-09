@@ -284,17 +284,17 @@ def test_free_search_needs_no_key_and_preserves_unused_keys(tmp_path, wizard_fac
     assert not harness.secret_prompts
 
 
-def test_fresh_search_setup_defaults_to_parallel_without_a_secret(tmp_path, wizard_factory):
+def test_fresh_search_setup_defaults_to_duckduckgo_without_a_secret(tmp_path, wizard_factory):
     harness = wizard_factory(["quick", "save", "yes"], provider_choices=["done"])
 
     assert setup_wizard.run_setup_wizard()
 
     saved = dotenv_values(tmp_path / ".env")
-    assert saved["INTERNET_PROVIDER"] == "parallel"
+    assert saved["INTERNET_PROVIDER"] == "duckduckgo"
     assert not harness.secret_prompts
     assert not any(key.endswith("_API_KEY") for key in saved)
     summary = dict(harness.ui.summaries[-1])
-    assert "Parallel" in summary["Web search"]
+    assert "DuckDuckGo" in summary["Web search"]
 
 
 def test_search_setup_keeps_existing_selected_key_when_input_is_blank(tmp_path, wizard_factory):

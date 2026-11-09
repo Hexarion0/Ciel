@@ -111,11 +111,13 @@ Evidence checks use the configured normal responder without thinking, regardless
 of chat reasoning mode. A timeout is reported as an evidence-check timeout; it is
 not treated as proof that the retrieved pages lack an answer.
 
-Public search defaults to Parallel's free anonymous service. No account or API key
-is required; the free service has lower usage limits than paid access. Ciel reads
-the returned source excerpts and, when needed, public pages to support her answer.
+Public search defaults to DuckDuckGo's results page, with Parallel's free anonymous
+service as the fallback. No account or API key is required; Parallel's free service
+has lower usage limits than paid access. Ciel reads Parallel's source excerpts or the
+search snippets and, when needed, public pages to support her answer.
 The main responding AI writes the search keywords from your conversation and latest
-corrections. It can use aliases and send up to three distinct queries together. Ciel
+corrections. It can use aliases and send up to three distinct queries together (DuckDuckGo
+searches only the first; Yahoo and Parallel search all three). Ciel
 keeps your full question separately to check whether the sources answer it. Missing
 or invalid queries go back to the same AI for a rewrite before a search runs.
 She can fetch fuller passages when the excerpts omit a requested detail.
@@ -125,10 +127,23 @@ Earlier supported findings survive failed lookups and page refreshes. Unverified
 details remain explicit gaps.
 See the [Parallel MCP documentation](https://docs.parallel.ai/integrations/mcp/quickstart).
 
-`ciel setup` offers Parallel, the free DuckDuckGo/public Brave option (`ddgs`),
-Brave Search, and Tavily. `INTERNET_PROVIDER=parallel` selects Parallel in `.env`.
-Only the selected provider is used, so keeping other API keys saved does not spend
-their quota or enable automatic fallback. Switching providers preserves those keys.
+`INTERNET_MODE` picks how answers use the web. `verified` (the default) filters
+results by keyword, reads the top pages, and checks each claim against its source
+before replying. `direct` works like OpenClaw: `web_search` returns the numbered
+results as ranked, `read_page` returns a page's text, and the model decides what to
+read and writes the answer. Ciel only renumbers its citations to match the sources
+shown. Direct mode is faster and hedges less; verified mode guards weaker models.
+
+`ciel setup` offers DuckDuckGo (the default), Yahoo, Parallel, the `ddgs` package
+(DuckDuckGo/public Brave), Brave Search, and Tavily. `INTERNET_PROVIDER=duckduckgo`
+works like OpenClaw's DuckDuckGo provider: it posts one query per search to
+DuckDuckGo's HTML results page with an honest User-Agent, unwraps its redirect links,
+and sends `INTERNET_DUCKDUCKGO_REGION` (for example `uk-en`) and
+`INTERNET_DUCKDUCKGO_SAFE_SEARCH` (`strict`, `moderate`, or `off`). `yahoo` reads Yahoo's
+results page instead, with up to three phrasings at once. Either one sends a search to
+Parallel when the engine blocks the network, fails, or returns nothing. A blocked
+engine is skipped for five minutes, and a failing one for one. Keeping Brave or Tavily keys saved does not
+spend their quota or enable fallback to them. Switching providers preserves those keys.
 An existing explicit provider setting remains selected until you change it.
 `INTERNET_ENABLED=false` disables all public retrieval.
 

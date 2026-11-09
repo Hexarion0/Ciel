@@ -40,6 +40,12 @@ def test_numeric_citations_are_not_spoken():
     )
 
 
+def test_citation_lists_and_ranges_are_not_spoken():
+    assert spoken_text_reply("Spain won [1, 3]. Argentina lost [2-4].") == (
+        "Spain won. Argentina lost."
+    )
+
+
 @pytest.mark.parametrize("code", ["```python\nanswer = 42\n```", "```python\nanswer = 42"])
 def test_code_only_reply_gets_a_brief_acknowledgement(code):
     assert spoken_text_reply(code) == "The code is in the chat."

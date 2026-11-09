@@ -10,7 +10,8 @@ _MAX_WORDS = 80
 _FULL_ANSWER = "The full answer is in the chat."
 _CODE_ANSWER = "The code is in the chat."
 _CODE_MARKER = "[code omitted]"
-_CITATION = re.compile(r"\[\s*\d+\s*\]")
+# Source markers as web answers write them: [1], [1, 3], [1-3].
+_CITATION = re.compile(r"\[\s*\d+(?:\s*[,\-\u2013]\s*\d+)*\s*\]")
 _BUDGET = _MAX_WORDS - len(_FULL_ANSWER.split())
 """Words available to answer sentences once the pointer to the chat is added."""
 _TERMINAL = '.!?…"”’\x27'

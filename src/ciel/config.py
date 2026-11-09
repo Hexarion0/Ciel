@@ -1,5 +1,6 @@
 """Centralized configuration and secrets management for CIEL."""
 
+import re
 from functools import lru_cache
 from typing import Literal
 
@@ -12,6 +13,19 @@ DEFAULT_NIM_COMPLEX_MODEL = "nvidia/nemotron-3-ultra-550b-a55b"
 DEFAULT_NIM_FALLBACK_MODEL = DEFAULT_NIM_COMPLEX_MODEL
 DEFAULT_CONTROLLER_MODEL = "nvidia/nemotron-3.5-lightning-30b-a3b"
 DEFAULT_SCREEN_MODEL = "nvidia/nemotron-3.5-super-vl-120b-a12b"
+
+
+_SEARCH_PROVIDERS = Literal["duckduckgo", "yahoo", "parallel", "ddgs", "brave", "tavily"]
+
+
+def _duckduckgo_region(value: object) -> object:
+    """Normalize a DuckDuckGo region code such as us-en; empty means no region."""
+    if not isinstance(value, str):
+        return value
+    region = value.strip().lower()
+    if region and not re.fullmatch(r"[a-z]{2}-[a-z]{2,3}", region):
+        raise ValueError("DuckDuckGo region must look like us-en, de-de, or tw-tzh")
+    return region
 
 
 def _register_search_secret(value: SecretStr | None) -> SecretStr | None:
@@ -110,12 +124,39 @@ class ControllerConfig(BaseModel):
     max_tool_steps: int = Field(default=3, ge=1, le=5)
 
 
+class ExecConfig(BaseModel):
+    """The main model's shell-command tool on the owner's PC; off unless enabled."""
+
+    enabled: bool = Field(default=False, description="Offer the exec tool to the model")
+    approval: Literal["always", "safe", "never"] = Field(
+        default="always",
+        description="always asks for every command; safe runs a fixed read-only list "
+                    "without asking; never runs commands without asking",
+    )
+    safeguards: bool = Field(
+        default=True,
+        description="Still ask after web results in the same turn and for destructive "
+                    "commands, whatever the approval setting",
+    )
+    timeout_seconds: int = Field(default=30, ge=1, le=600)
+    max_output_chars: int = Field(default=12_000, ge=1_000, le=30_000)
+
+
 class InternetConfig(BaseModel):
     """Selected public search provider, credentials, and page-reading limits."""
 
     enabled: bool = Field(default=True, description="Enable public web retrieval")
     automatic: bool = Field(default=True, description="Search requests needing current facts")
-    provider: Literal["parallel", "ddgs", "brave", "tavily"] = Field(default="parallel")
+    provider: _SEARCH_PROVIDERS = Field(default="duckduckgo")
+    duckduckgo_region: str = Field(
+        default="", description="Optional DuckDuckGo region code such as us-en or de-de",
+    )
+    duckduckgo_safe_search: Literal["strict", "moderate", "off"] = Field(default="moderate")
+    mode: Literal["verified", "direct"] = Field(
+        default="verified",
+        description="verified filters results and checks claims; direct hands raw results "
+                    "to the model, as OpenClaw does",
+    )
     brave_api_key: SecretStr | None = Field(default=None)
     tavily_api_key: SecretStr | None = Field(default=None)
     home_city: str = Field(
@@ -133,6 +174,12 @@ class InternetConfig(BaseModel):
     def register_search_key(cls, value: SecretStr | None) -> SecretStr | None:
         """Register validated keys without reading any configuration file again."""
         return _register_search_secret(value)
+
+    @field_validator("duckduckgo_region", mode="before")
+    @classmethod
+    def normalize_duckduckgo_region(cls, value: object) -> object:
+        """Accept only region codes, so a value cannot add other form fields."""
+        return _duckduckgo_region(value)
 
     @field_validator("home_city", mode="before")
     @classmethod
@@ -397,9 +444,14 @@ class Settings(BaseSettings):
     # Public internet retrieval settings
     internet_enabled: bool = Field(default=True)
     internet_automatic: bool = Field(default=True)
-    internet_provider: Literal["parallel", "ddgs", "brave", "tavily"] = Field(default="parallel")
+    internet_provider: _SEARCH_PROVIDERS = Field(default="duckduckgo")
+    internet_duckduckgo_region: str = Field(default="")
+    internet_duckduckgo_safe_search: Literal["strict", "moderate", "off"] = Field(
+        default="moderate",
+    )
     brave_search_api_key: SecretStr | None = Field(default=None)
     tavily_api_key: SecretStr | None = Field(default=None)
+    internet_mode: Literal["verified", "direct"] = Field(default="verified")
     internet_home_city: str = Field(default="", max_length=200)
     internet_timeout_seconds: float = Field(default=8.0, ge=0.1, le=60)
     internet_research_timeout_seconds: float = Field(default=20.0, ge=0.1, le=120)
@@ -407,6 +459,11 @@ class Settings(BaseSettings):
     internet_research_max_results: int = Field(default=8, ge=1, le=20)
     internet_max_pages: int = Field(default=2, ge=0, le=5)
     internet_research_max_pages: int = Field(default=4, ge=0, le=10)
+    exec_enabled: bool = Field(default=False)
+    exec_approval: Literal["always", "safe", "never"] = Field(default="always")
+    exec_safeguards: bool = Field(default=True)
+    exec_timeout_seconds: int = Field(default=30, ge=1, le=600)
+    exec_max_output_chars: int = Field(default=12_000, ge=1_000, le=30_000)
 
     # Audio & Voice settings
     wake_word: str = Field(default="hey ciel")
@@ -471,6 +528,12 @@ class Settings(BaseSettings):
     def preserve_explicit_voice_selection(cls, values: object) -> object:
         """Apply new voice defaults without changing existing Piper selections."""
         return _preserve_explicit_voice_selection(values)
+
+    @field_validator("internet_duckduckgo_region", mode="before")
+    @classmethod
+    def normalize_duckduckgo_region(cls, value: object) -> object:
+        """Reject a malformed region when settings load, not on first search."""
+        return _duckduckgo_region(value)
 
     @field_validator("internet_home_city", mode="before")
     @classmethod
@@ -555,6 +618,9 @@ class Settings(BaseSettings):
             enabled=self.internet_enabled,
             automatic=self.internet_automatic,
             provider=self.internet_provider,
+            duckduckgo_region=self.internet_duckduckgo_region,
+            duckduckgo_safe_search=self.internet_duckduckgo_safe_search,
+            mode=self.internet_mode,
             brave_api_key=self.brave_search_api_key,
             tavily_api_key=self.tavily_api_key,
             home_city=self.internet_home_city,
@@ -564,6 +630,15 @@ class Settings(BaseSettings):
             research_max_results=self.internet_research_max_results,
             max_pages=self.internet_max_pages,
             research_max_pages=self.internet_research_max_pages,
+        )
+
+    @property
+    def exec_tool(self) -> ExecConfig:
+        """Structured shell-command tool configuration."""
+        return ExecConfig(
+            enabled=self.exec_enabled, approval=self.exec_approval,
+            safeguards=self.exec_safeguards, timeout_seconds=self.exec_timeout_seconds,
+            max_output_chars=self.exec_max_output_chars,
         )
 
     @property

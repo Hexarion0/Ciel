@@ -2,11 +2,37 @@
 
 ## Unreleased — 0.3.6 development
 
+- Add an `exec` tool that lets Ciel run shell commands on this PC (`EXEC_ENABLED`, off by
+  default) from every channel. `EXEC_APPROVAL` picks `always` (default), `safe`, or
+  `never`; approval is the owner replying "yes" to the exact command, held by the app.
+  `EXEC_SAFEGUARDS` still asks after web results in the same turn and for destructive
+  commands. Commands run without credential environment variables, stdin, or a shell
+  login, with a timeout that ends the process group and masked, bounded output.
+
 - Paste long or multi-line text into the terminal prompt without it sending line by line.
   Ciel turns on bracketed paste, shows a long paste as `[Pasted text #1 +42 lines]` that
   you can type around, and sends the full text when you press Enter. Backspace removes a
   whole placeholder, and a paste that starts with `/` is sent as a message, never run as
   a command. Terminals without bracketed paste get the same result from a timing check.
+
+- Search DuckDuckGo by default the way OpenClaw's DuckDuckGo provider does: one query
+  per search to its keyless HTML results page, an honest `ciel-duckduckgo` User-Agent,
+  `uddg` redirects unwrapped, ads and bot-check pages recognized, and an optional
+  region and SafeSearch level (`INTERNET_DUCKDUCKGO_REGION`,
+  `INTERNET_DUCKDUCKGO_SAFE_SEARCH`). Yahoo's results page stays available as
+  `INTERNET_PROVIDER=yahoo`, sending up to three model-written phrasings together.
+  When either engine blocks the network, fails, or returns nothing, that search goes to
+  Parallel's free service instead; a blocked engine is skipped for five minutes, a
+  failing one for one. Tell the model its own knowledge is likely
+  outdated, so it searches before answering about versions, prices, news, scores,
+  schedules, or officeholders. Renumber reply citations to match the displayed source
+  list, and list an article once when one site serves it under two paths.
+
+- Add `INTERNET_MODE=direct`, an OpenClaw-style web mode: `web_search` returns raw
+  numbered results, `read_page` returns page text, and the model's answer is trusted
+  with only its citations renumbered. It skips keyword filtering, automatic page reads,
+  the claims format, and claim checks. A failed read is reported to the model instead
+  of ending the turn. `verified` remains the default.
 
 - Start speaking web replies at their first finished sentence instead of after the
   whole answer, then voice each sentence as it completes. The spoken words are the same

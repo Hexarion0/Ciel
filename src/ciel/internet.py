@@ -36,6 +36,18 @@ _WORKERS = threading.BoundedSemaphore(2)
 _MAX_BYTES = 262_144
 _MAX_TEXT = 9000
 _GAP_MARKER = "[... omitted source text ...]"
+# Providers whose search accepts several model-written phrasings in one lookup.
+# DuckDuckGo takes them too but, like OpenClaw, sends only the first.
+_MULTI_QUERY_PROVIDERS = frozenset({"parallel", "yahoo", "duckduckgo"})
+# Backends that search every phrasing they are given; the others search the first.
+_ALL_PHRASING_BACKENDS = frozenset({"parallel", "yahoo"})
+# Free engines whose parsers already HTML-decode result URLs once.
+_SCRAPED_BACKENDS = frozenset({"yahoo", "duckduckgo"})
+# Below this much budget, skip the free engine and go straight to Parallel.
+_MIN_ENGINE_SECONDS = 3.0
+# Direct mode hands text to the model unranked; these bound each tool message.
+_DIRECT_EXCERPT_CHARS = 1500
+_DIRECT_PAGE_CHARS = 12_000
 _SOURCE_GAP = re.compile(
     re.escape(_GAP_MARKER) + r"|^[ \t]*(?:\.{3}|…)[ \t]*\r?$", re.M,
 )
@@ -1224,6 +1236,9 @@ class InternetService:
 
     def __init__(self, config: InternetConfig) -> None:
         self.config = config
+        # Which service answered the latest search on this thread; DuckDuckGo or
+        # Yahoo can hand a turn to Parallel, whose rows carry source excerpts.
+        self._backend = threading.local()
         self.reset_session()
 
     def reset_session(self) -> None:
@@ -1388,12 +1403,116 @@ class InternetService:
                        else None),
             )
 
+    def search_direct(
+        self, queries: list[str], *, deadline: float,
+        cancel_event: threading.Event | None = None, searched: list[str] | None = None,
+    ) -> list[InternetSource]:
+        """Return ranked results as the search service gave them, without filtering.
+
+        Direct mode leaves relevance judgment to the model, so only unsafe or
+        malformed addresses and duplicates are dropped here. ``searched`` receives
+        the phrasings the answering backend actually used.
+        """
+        if not self.config.enabled:
+            from ciel.search_providers import SearchProviderError
+
+            raise SearchProviderError("Public web retrieval is disabled.")
+        # Model-written queries get the same secret masking as verified lookups.
+        queries = list(dict.fromkeys(q for q in (_clean(item) for item in queries) if q))
+        if not queries:
+            return []
+        maximum = self.config.research_max_results
+        logger.info("[system]: Searching: %s", " | ".join(queries))
+        self._backend.name = self.config.provider
+        rows = self._search(
+            queries[0], maximum, deadline, cancel_event,
+            **({"search_queries": queries} if self.config.provider in _MULTI_QUERY_PROVIDERS
+               else {}),
+        )
+        backend = getattr(self._backend, "name", self.config.provider)
+        if searched is not None:
+            searched.extend(queries if backend in _ALL_PHRASING_BACKENDS else queries[:1])
+        fetched_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        sources: dict[str, InternetSource] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            raw_url = str(row.get("href") or row.get("url") or "")
+            try:
+                url = _public_url(raw_url if backend in _SCRAPED_BACKENDS else unescape(raw_url))
+            except ValueError:
+                continue
+            excerpt = row.get("content") if backend == "parallel" else ""
+            published = row.get("date") or row.get("published") or ""
+            source = InternetSource(
+                _clean(str(row.get("title") or urlsplit(url).hostname), 160), url,
+                _clean(str(row.get("body") or row.get("snippet") or ""), 800),
+                content=_clean_content(excerpt, _DIRECT_EXCERPT_CHARS)
+                if isinstance(excerpt, str) else "",
+                content_kind="provider_excerpt" if excerpt else "",
+                published_at=_clean(str(published), 100), fetched_at=fetched_at,
+                publisher=_clean(str(row.get("publisher") or row.get("source") or ""), 160),
+                date_kind="reported" if published else "",
+            )
+            sources.setdefault(source_identity(url), source)
+        return list(sources.values())[:maximum]
+
+    def read_direct(
+        self, url: str, *, deadline: float, cancel_event: threading.Event | None = None,
+    ) -> InternetSource:
+        """Read one public page's text from its start, bounded for a tool message."""
+        if not self.config.enabled:
+            raise ValueError("Public web retrieval is disabled.")
+        logger.info("[system]: Reading public pages: %s", url)
+        page = self._read_page(_public_url(url), deadline, cancel_event)
+        page.content = _clean_content(page.content, _DIRECT_PAGE_CHARS)
+        page.discovered_links = []
+        return page
+
+    def _search_engine(
+        self, queries: list[str], *, timeout: float, maximum: int, news: bool,
+        canceled: threading.Event | None,
+    ) -> list[dict]:
+        """Search the selected keyless results-page engine (DuckDuckGo or Yahoo)."""
+        if self.config.provider == "duckduckgo":
+            import ciel.duckduckgo_search as duckduckgo
+
+            return duckduckgo.search_duckduckgo(
+                queries, timeout=timeout, maximum=maximum, news=news, cancel_event=canceled,
+                region=self.config.duckduckgo_region,
+                safe_search=self.config.duckduckgo_safe_search,
+            )
+        import ciel.yahoo_search as yahoo
+
+        return yahoo.search_yahoo(queries, timeout=timeout, maximum=maximum, news=news,
+                                  cancel_event=canceled)
+
     def _search(
         self, query: str, maximum: int, deadline: float, canceled: threading.Event | None,
         *, objective: str = "", search_queries: list[str] | None = None,
     ) -> list[dict]:
         remaining = _remaining(deadline, canceled)
-        if self.config.provider == "parallel":
+        self._backend.name = self.config.provider
+        if self.config.provider in _SCRAPED_BACKENDS:
+            from ciel.scraped_search import EngineUnavailable
+
+            # Below the minimum, keep what is left for Parallel rather than a doomed request.
+            if remaining >= _MIN_ENGINE_SECONDS:
+                try:
+                    # Leave most of the budget for the Parallel fallback and page reads.
+                    results = self._search_engine(
+                        [query, *(search_queries or [])], timeout=min(remaining * 0.4, 5.0),
+                        maximum=min(maximum * 2, 20), news=is_news_query(objective or query),
+                        canceled=canceled,
+                    )
+                    _remaining(deadline, canceled)
+                    return results
+                except EngineUnavailable as error:
+                    # A blocked engine raises at once during its cooldown.
+                    remaining = _remaining(deadline, canceled)
+                    logger.info("[system]: %s; searching with Parallel instead.", error)
+            self._backend.name = "parallel"
+        if self._backend.name == "parallel":
             from ciel.parallel_search import search_parallel
 
             results = search_parallel(
@@ -1471,17 +1590,23 @@ class InternetService:
                     if time.monotonic() >= read_deadline:
                         break
         else:
+            self._backend.name = self.config.provider
             results = self._search(query, maximum, deadline, canceled,
                                    **({"objective": objective} if objective else {}),
                                    **({"search_queries": search_queries}
-                                      if search_queries and self.config.provider == "parallel"
+                                      if search_queries
+                                      and self.config.provider in _MULTI_QUERY_PROVIDERS
                                       else {}))
+            backend = getattr(self._backend, "name", self.config.provider)
             candidates: dict[str, InternetSource] = {}
             for result in results[:min(maximum * 2, 20)]:
                 if not isinstance(result, dict):
                     continue
                 try:
-                    url = _public_url(unescape(str(result.get("href") or result.get("url") or "")))
+                    raw_url = str(result.get("href") or result.get("url") or "")
+                    # Free-engine parsers already decoded the HTML attribute once.
+                    decoded = raw_url if backend in _SCRAPED_BACKENDS else unescape(raw_url)
+                    url = _public_url(decoded)
                 except ValueError:
                     continue
                 parsed = urlsplit(url)
@@ -1494,7 +1619,7 @@ class InternetService:
                 snippet = _clean(str(result.get("body") or result.get("snippet") or ""), 800)
                 # Parallel returns extracted source passages, not just search previews.
                 # Keep their provenance and exact bounded text for answer verification.
-                excerpt = result.get("content") if self.config.provider == "parallel" else ""
+                excerpt = result.get("content") if backend == "parallel" else ""
                 content = (
                     _excerpt(_clean_content(excerpt), goal)
                     if isinstance(excerpt, str) else ""
@@ -1532,7 +1657,7 @@ class InternetService:
             remember_sources(sources)
             read_deadline = deadline - min(0.15, _remaining(deadline, canceled) * 0.1)
             selected = _incomplete_sources(goal, sources, pages)
-            if self.config.provider == "parallel" and selected:
+            if backend == "parallel" and selected:
                 self._expand_excerpts(
                     goal, selected, sources, read_deadline, canceled,
                     remember_sources, search_queries=search_queries,
@@ -1603,6 +1728,19 @@ class InternetService:
             previous = unique.get(identity)
             if previous is None or (source.content and not previous.content):
                 unique[identity] = source
+        # One site can publish an article under several paths (for example a
+        # section prefix). A long identical title on one host is the same story.
+        by_title: dict[tuple[str, str], str] = {}
+        for identity, source in list(unique.items()) if not urls else []:
+            title = " ".join(source.title.casefold().split())
+            if len(title) < 20:
+                continue
+            key = ((urlsplit(source.url).hostname or "").removeprefix("www."), title)
+            kept = by_title.setdefault(key, identity)
+            if kept != identity:
+                if source.content and not unique[kept].content:
+                    unique[kept] = source
+                del unique[identity]
         sources = list(unique.values())
         if news:
             sources.sort(key=lambda item: (bool(item.content) and _article_url(item.url),

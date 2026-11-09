@@ -993,7 +993,15 @@ def run_desktop(
             messages = conv_manager.get_active_messages(system_prompt=prompt)
             if turn_scope != conv_manager.context_session_ids():
                 return False
-            if prior_lookup is not None:
+            if prior_lookup is not None and prior_lookup.reply is None and (
+                settings.internet.mode == "direct"
+            ):
+                from ciel.direct_web import prior_evidence
+
+                messages = [*messages[:-1], ChatMessage(
+                    "system", prior_evidence(prior_lookup), local_only=messages[0].local_only,
+                ), messages[-1]]
+            elif prior_lookup is not None:
                 if prior_lookup.reply is not None:
                     return finish(prior_lookup.reply, lookup=prior_lookup)
                 from ciel.web_answers import web_answer_messages
@@ -1049,6 +1057,7 @@ def run_desktop(
                 progress=progress, channel=reply_channel, previous=prior_lookup,
                 objective=task.request, contextual_web=contextual_web and reliable,
                 explanation_only=task.kind == "explanation",
+                exec_authorized=authorized, spoken=not typed,
             )
             agent = MainAgent(
                 router, native_tools.schemas, native_tools.execute,

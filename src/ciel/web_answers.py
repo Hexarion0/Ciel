@@ -1027,15 +1027,77 @@ def rag_answer_instructions(channel: str = "voice") -> str:
     )
 
 
+# Bracketed source numbers not attached to a name: [2], [1][2], [1, 3], (Reuters)[2].
+# xs[2] is indexing, and code spans are skipped entirely.
+_CITATION = re.compile(r"(?<!\w)\[(\d{1,3}(?:\s*,\s*\d{1,3})*)\]")
+# Range markers like [1-3] cannot be renumbered one number at a time.
+_CITATION_RANGE = re.compile(r"(?<!\w)\[\d{1,3}\s*[-\u2013]\s*\d{1,3}\]")
+_CODE = re.compile(r"(```.*?(?:```|\Z)|`[^`\n]*`)", re.S)
+
+
+def _prose(text: str) -> list[tuple[bool, str]]:
+    """Split text into (is_prose, segment) pairs so code is never read or rewritten."""
+    return [(index % 2 == 0, part) for index, part in enumerate(_CODE.split(text))]
+
+
+def citation_numbers(text: str) -> list[int]:
+    """Every source number cited in prose, in order of appearance."""
+    return [int(number) for prose, part in _prose(text) if prose
+            for marker in _CITATION.findall(part) for number in marker.split(",")]
+
+
+def has_citation_ranges(text: str) -> bool:
+    """Report [1-3]-style markers, which renumbering would leave pointing elsewhere."""
+    return any(prose and _CITATION_RANGE.search(part) for prose, part in _prose(text))
+
+
+def strip_citations(text: str, copied: set[int] | None = None) -> str:
+    """Remove [n] markers from prose, for a reply with no sources to show.
+
+    With ``copied``, only markers whose every number is in it are removed, so
+    interval notation like [0, 1] or a number the user wrote is left alone.
+    """
+    def replace(match: re.Match[str]) -> str:
+        numbers = {int(number) for number in match.group(1).split(",")}
+        return "" if copied is None or numbers <= copied else match.group(0)
+
+    pattern = re.compile(r"[ \t]*" + _CITATION.pattern)
+    return "".join(pattern.sub(replace, part) if prose else part
+                   for prose, part in _prose(text))
+
+
 def extract_citations(text: str, sources: list[InternetSource]) -> list[InternetSource]:
     """Find source references like [1], [2] in text and return matching InternetSource objects."""
     if not sources:
         return []
-    matches = re.findall(r"\[(\d+)\]", text)
-    indexes = {int(m) for m in matches if 1 <= int(m) <= len(sources)}
+    indexes = {n for n in citation_numbers(text) if 1 <= n <= len(sources)}
     if not indexes:
         return sources[:3]
     return [sources[i - 1] for i in sorted(indexes)]
+
+
+def renumber_citations(
+    text: str, sources: list[InternetSource], cited: list[InternetSource],
+) -> str:
+    """Rewrite [n] markers so they index ``cited``, the list shown under the reply.
+
+    The model cites positions in every retrieved source; only cited ones are
+    displayed, renumbered from 1. Numbers that name no displayed source and
+    anything inside code are left unchanged.
+    """
+    position = {id(source): index for index, source in enumerate(cited, 1)}
+
+    def renumber(number: int) -> int:
+        if not 1 <= number <= len(sources):
+            return number
+        return position.get(id(sources[number - 1]), number)
+
+    def replace(match: re.Match[str]) -> str:
+        numbers = [renumber(int(n)) for n in match.group(1).split(",")]
+        return "[" + ", ".join(str(n) for n in dict.fromkeys(numbers)) + "]"
+
+    return "".join(_CITATION.sub(replace, part) if prose else part
+                   for prose, part in _prose(text))
 
 
 def clean_voice_reply(text: str) -> str:

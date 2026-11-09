@@ -71,6 +71,24 @@ user request and applies the existing authorization checks; model-generated argu
 cannot create shell commands or approve memory writes. General function calling and
 reminders remain future work.
 
+## Shell commands (`exec`)
+
+`EXEC_ENABLED=true` gives the main model an `exec` tool that runs bash commands on
+this PC as the owner, from every channel. This is a deliberate exception to the rule
+above that model-generated arguments cannot create shell commands. Commands run from the
+home directory with no stdin (so `sudo` cannot prompt), a per-command timeout that ends
+the whole process group, and bounded output. Environment variables whose names look
+like credentials are not passed to the child, and secret-looking output is masked
+before the model sees it. Output still goes to whichever model provider answers.
+
+`EXEC_APPROVAL` decides when the owner is asked first: `always` (the default), `safe`
+(a fixed read-only list in `shell_tool.SAFE_COMMANDS`, with no pipes or redirects, runs
+at once), or `never`. With `EXEC_SAFEGUARDS=true`, commands proposed after web results
+in the same turn and obviously destructive ones still ask. The application, not the
+model, holds the exact pending command for that conversation; only the owner's own
+reply ("yes", "run it", ...) in the next turn lets that same command run, once,
+within 60 seconds.
+
 ## Public internet retrieval
 
 The AI controller uses configured providers to select search or public HTML/text page reading,

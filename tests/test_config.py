@@ -349,7 +349,8 @@ def test_internet_defaults_allow_free_automatic_search_without_assuming_a_city()
         internet = Settings(_env_file=None).internet
     assert internet == InternetConfig()
     assert internet.enabled and internet.automatic
-    assert internet.provider == "parallel"
+    assert internet.provider == "duckduckgo"
+    assert (internet.duckduckgo_region, internet.duckduckgo_safe_search) == ("", "moderate")
     assert internet.brave_api_key is None and internet.tavily_api_key is None
     assert internet.home_city == ""
     assert (internet.timeout_seconds, internet.research_timeout_seconds) == (8.0, 20.0)
@@ -397,7 +398,7 @@ def test_internet_process_environment_overrides_env_file(tmp_path):
     assert internet.home_city == "Dublin, Ireland"
 
 
-@pytest.mark.parametrize("provider", ["parallel", "ddgs", "brave", "tavily"])
+@pytest.mark.parametrize("provider", ["yahoo", "parallel", "ddgs", "brave", "tavily"])
 def test_selected_search_provider_and_secret_keys_reach_structured_config(tmp_path, provider):
     """Saved keys stay masked and do not change the chosen search provider."""
     env_file = tmp_path / ".env"
@@ -415,7 +416,7 @@ def test_selected_search_provider_and_secret_keys_reach_structured_config(tmp_pa
         assert "synthetic-tavily-key" not in configuration.model_dump_json()
 
 
-def test_example_configuration_uses_parallel_without_a_key():
+def test_example_configuration_uses_duckduckgo_without_a_key():
     """Fresh installs use the anonymous search service without enabling saved paid keys."""
     example = Path(__file__).resolve().parents[1] / ".env.example"
     with patch.dict(os.environ, {}, clear=True):
@@ -425,11 +426,24 @@ def test_example_configuration_uses_parallel_without_a_key():
             brave_search_api_key="synthetic-unused-brave-key",
             tavily_api_key="synthetic-unused-tavily-key",
         ).internet
-    assert internet.provider == saved_keys.provider == "parallel"
+    assert internet.provider == saved_keys.provider == "duckduckgo"
     assert internet.brave_api_key is None or not internet.brave_api_key.get_secret_value()
     assert internet.tavily_api_key is None or not internet.tavily_api_key.get_secret_value()
     assert saved_keys.brave_api_key.get_secret_value() == "synthetic-unused-brave-key"
     assert saved_keys.tavily_api_key.get_secret_value() == "synthetic-unused-tavily-key"
+
+
+def test_duckduckgo_options_reach_structured_config():
+    environment = {"INTERNET_DUCKDUCKGO_REGION": " DE-de ",
+                   "INTERNET_DUCKDUCKGO_SAFE_SEARCH": "off"}
+    with patch.dict(os.environ, environment, clear=True):
+        internet = Settings(_env_file=None).internet
+    assert (internet.duckduckgo_region, internet.duckduckgo_safe_search) == ("de-de", "off")
+    assert InternetConfig(duckduckgo_region="tw-tzh").duckduckgo_region == "tw-tzh"
+    with pytest.raises(ValueError):
+        InternetConfig(duckduckgo_safe_search="sometimes")
+    with pytest.raises(ValueError):
+        InternetConfig(duckduckgo_region="germany&kp=-2")
 
 
 def test_unknown_search_provider_is_rejected():

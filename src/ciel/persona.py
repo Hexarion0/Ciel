@@ -389,7 +389,12 @@ def build_advanced_persona(
         context += (
             "\nConfigured Public Internet: enabled. The application can retrieve public web "
             "information before answer generation. Follow per-turn lookup status to determine "
-            "what ran and whether evidence supports the answer."
+            "what ran and whether evidence supports the answer. Your built-in knowledge stops "
+            "at a training cutoff and is often out of date by the local time above. When the "
+            "web_search tool is offered, call it before answering about anything that changes: "
+            "latest or current versions and releases, prices, news, sports results, schedules, "
+            "who currently holds a role, or recent events. Do this even when you think you know. "
+            "Events you remember as upcoming may already have happened by the local time above."
         )
     elif internet_enabled is False:
         context += (

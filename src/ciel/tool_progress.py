@@ -23,6 +23,7 @@ _FALLBACKS = {
     "search": ("Lemme look that up.", "Let me check a few sources.", "I'll check online."),
     "read_page": ("Let me read that page.", "I'll take a look through that page."),
     "open_app": ("I'll open that for you.", "Let me bring that up."),
+    "exec": ("Let me run that.", "I'll run that on your computer.", "Running it now."),
     "local": ("Let me check that.", "Lemme see."),
 }
 _PURPOSES = {
@@ -34,6 +35,7 @@ _PURPOSES = {
     "search": "look online to help answer your question",
     "read_page": "read the web page you asked about",
     "open_app": "open the app you asked for",
+    "exec": "run a command on your computer",
     "local": "check the system information you asked for",
 }
 

@@ -406,13 +406,19 @@ across the currently paired voice/chat context, including after restart. Observa
 remain separate from personal facts; a failed lookup cannot replay an older topic as
 its evidence. A later unrelated conversation ends implicit research continuation.
 
-Search defaults to [Parallel's free search service](https://docs.parallel.ai/integrations/mcp/search-mcp),
-which supplies ranked excerpts without an account or API key. The anonymous service
-has lower usage limits than paid access. Setup also offers the free `ddgs` package
-(DuckDuckGo and public Brave backends), Brave Search, and Tavily. For the latter two,
-choose the service first, then enter its masked API key. Only
-the selected search provider is used; saving another key never enables automatic
-fallback or spending that service's quota. Switching providers preserves saved keys.
+Search defaults to DuckDuckGo's non-JavaScript HTML results page, which needs no
+account or API key. It works like OpenClaw's DuckDuckGo provider: one request per
+search under an honest `ciel-duckduckgo` User-Agent, with an optional region
+(`INTERNET_DUCKDUCKGO_REGION`) and SafeSearch level (`INTERNET_DUCKDUCKGO_SAFE_SEARCH`).
+It reads an unofficial page, so expect occasional bot checks or breakage when
+DuckDuckGo changes its markup. When DuckDuckGo blocks the network, fails, or returns
+nothing, Ciel sends the search to
+[Parallel's free search service](https://docs.parallel.ai/integrations/mcp/search-mcp)
+instead. A blocked engine is skipped for five minutes, so later searches go straight to
+Parallel. Setup also offers Yahoo's results page (same fallback), Parallel alone, the
+`ddgs` package (DuckDuckGo and public Brave backends), Brave Search, and Tavily. For the
+latter two, choose the service first, then enter its masked API key. Saving a Brave or
+Tavily key never enables fallback to it or spends its quota unless it is selected. Switching providers preserves saved keys.
 Optional services may charge according to your account plan. Search connections are
 not tested or charged during setup. The integrations use the official
 [Brave web/news APIs](https://api-dashboard.search.brave.com/app/documentation/news-search)
@@ -431,7 +437,13 @@ Edit `.env` and restart to change these controls:
 | `CONTROLLER_TIMEOUT_SECONDS` | `8.0` | Web claim relevance check budget; legacy decision deadline |
 | `CONTROLLER_MAX_TOOL_STEPS` | `3` | Main model rounds per request, clamped to 3–5 |
 | `INTERNET_ENABLED` | `true` | Enable public search and page reading |
-| `INTERNET_PROVIDER` | `parallel` | Use only this search service: `parallel`, `ddgs`, `brave`, or `tavily` |
+| `EXEC_ENABLED` | `false` | Let the model run shell commands on this PC through an `exec` tool, from every channel |
+| `EXEC_APPROVAL` | `always` | `always` asks before every command, `safe` runs a fixed read-only list without asking, `never` runs commands at once; reply "yes" to approve |
+| `EXEC_SAFEGUARDS` | `true` | Still ask after web results in the same turn and for destructive commands, whatever `EXEC_APPROVAL` says |
+| `INTERNET_MODE` | `verified` | `verified` filters results, reads pages, and checks claims; `direct` gives the model raw numbered results and page text and trusts its answer, like OpenClaw |
+| `INTERNET_PROVIDER` | `duckduckgo` | Search service: `duckduckgo` or `yahoo` (Parallel when blocked), `parallel`, `ddgs`, `brave`, or `tavily` |
+| `INTERNET_DUCKDUCKGO_REGION` | Empty | DuckDuckGo region code such as `us-en`, `uk-en`, or `de-de` |
+| `INTERNET_DUCKDUCKGO_SAFE_SEARCH` | `moderate` | DuckDuckGo SafeSearch: `strict`, `moderate`, or `off` |
 | `BRAVE_SEARCH_API_KEY` / `TAVILY_API_KEY` | Empty | Credentials for the selected optional service |
 | `INTERNET_AUTOMATIC` | `true` | Search current facts without an explicit search command |
 | `INTERNET_HOME_CITY` | Empty | Default city and country for local questions |

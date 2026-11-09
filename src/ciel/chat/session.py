@@ -360,14 +360,21 @@ class ChatSession:
         self._search_paused = self.context.web_paused()
         recalled = self.context.recall(query)
         prompt = self.context.system_prompt(recalled, generate=_text_prompt, task=task)
+        commands = (
+            " Shell commands on the owner's PC are available through the exec tool; only a "
+            "returned exec result shows that a command ran. Reminders, scheduled delivery, "
+            "and voice playback are unavailable in this channel."
+            if self.settings.exec_tool.enabled else
+            " No desktop action, reminder, scheduled delivery, voice playback, or arbitrary "
+            "file access was performed. Those features are unavailable in this channel."
+        )
         prompt += (
             f"\nCurrent channel: {self.channel} text chat. This channel supports conversation, "
             "clock questions, saved memory, public web retrieval when enabled, and admitted "
-            "screen requests. No desktop action, reminder, scheduled delivery, voice playback, "
-            "or arbitrary file access was performed. Those features are unavailable in this "
-            "channel. Do not claim success or promise future work. The latest user message "
-            "was typed intentionally. Earlier screen discussions are historical text; "
-            "current visual access requires a successful screen result for this turn."
+            "screen requests." + commands + " Do not claim success or promise future work. "
+            "The latest user message was typed intentionally. Earlier screen discussions are "
+            "historical text; current visual access requires a successful screen result for "
+            "this turn."
         )
         messages = self.conversation.get_active_messages(system_prompt=prompt)
         visual_revision = [self.screen.task_revision() if self.screen.active() else None]
@@ -393,7 +400,13 @@ class ChatSession:
                "prior retrieved evidence is supplied below." if previous is not None else
                "no lookup has run. Use an available native tool when evidence is needed.")
         )
-        if previous is not None and previous.attempted:
+        if previous is not None and previous.attempted and self.settings.internet.mode == "direct":
+            from ciel.direct_web import prior_evidence
+            from ciel.providers.base import ChatMessage
+
+            messages[-1:-1] = [ChatMessage("system", prior_evidence(previous),
+                                           local_only=messages[0].local_only)]
+        elif previous is not None and previous.attempted:
             evidence = web_answer_messages(messages, previous, channel="text")
             messages[0].content = evidence[0].content
             messages[-1:-1] = evidence[1:-1]
