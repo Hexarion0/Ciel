@@ -9,11 +9,13 @@ import os
 import select
 import sys
 import threading
+import time
 from collections.abc import Callable
 from typing import TextIO
 
 from ciel.conversation import contains_retired_local_command
 from ciel.terminal_output import TerminalOutput
+from ciel.terminal_paste import END_SEQUENCE, START, Pastes, looks_pasted
 
 _PROVIDER_COMMANDS = {"/fast", "/strong", "/deep"}
 COMMAND_GROUPS = (
@@ -154,6 +156,7 @@ class TerminalInput:
         self._history: list[str] = []
         self._history_index: int | None = None
         self._history_draft = ""
+        self._pastes = Pastes()
 
     def _suggestions(self, draft: str, cursor: int) -> list[tuple[str, str]]:
         if draft != self._completion_query:
@@ -186,16 +189,26 @@ class TerminalInput:
             draft = (self._history_draft if self._history_index == len(self._history)
                      else self._history[self._history_index])
             cursor = len(draft)
+            if "\n" in draft:  # A recalled multi-line message shows as its placeholder.
+                draft, cursor = self._pastes.insert("", 0, draft)
         return draft, cursor
 
-    def handle_line(self, line: str) -> None:
-        """Handle controls locally; send ordinary text through the listener queue."""
+    def handle_line(self, line: str, *, pasted: bool = False) -> None:
+        """Handle controls locally; send ordinary text through the listener queue.
+
+        A message containing pasted text is never run as a command, even when the
+        paste starts with "/".
+        """
         text = line.strip()
         if not text:
             return
         if contains_retired_local_command(text):
             with self._command_lock:
                 self.write("/local is no longer available. Send your message normally.")
+            return
+        if pasted:
+            if not self.submit(text):
+                self.write("Message wasn't submitted: the listener is stopping.")
             return
         words = text.split()
         command = words[0].casefold()
@@ -296,12 +309,21 @@ class TerminalInput:
                 import tty
 
                 terminal_settings = termios.tcgetattr(descriptor)
+                # Read CR and LF as sent: ICRNL would turn a pasted CRLF into two
+                # line breaks. Enter arrives as CR, which the editor already accepts.
+                # Cleared before cbreak, so no input is read under the old mode.
+                raw = termios.tcgetattr(descriptor)
+                raw[0] &= ~termios.ICRNL
+                termios.tcsetattr(descriptor, termios.TCSANOW, raw)
                 tty.setcbreak(descriptor, termios.TCSANOW)
+                self.output.set_bracketed_paste(True)
             decoder = codecs.getincrementaldecoder(self.stream.encoding or "utf-8")("replace")
             pending = ""
             cursor = 0
             self._show_prompt()
             escape = ""
+            in_paste, paste_text = False, ""
+            last_unmarked_paste = 0.0
             while not self._closed.is_set():
                 ready, _, _ = select.select([descriptor], [], [], 0.1)
                 if not ready:
@@ -316,13 +338,40 @@ class TerminalInput:
                 if not data:
                     pending += decoder.decode(b"", final=True)
                     if pending:
-                        self.handle_line(pending)
+                        pasted = self._pastes.contains(pending)
+                        self.handle_line(self._pastes.expand(pending), pasted=pasted)
+                        self._pastes.clear()
                     break
                 decoded = decoder.decode(data)
                 if interactive:
+                    # Terminals without bracketed paste: a line break followed by more
+                    # text in one read, or a read right after such a chunk, is a paste.
+                    now = time.monotonic()
+                    if not in_paste and not escape and (
+                        looks_pasted(decoded)
+                        or (now - last_unmarked_paste < 0.05 and "\x1b" not in decoded)
+                    ):
+                        self._pastes.continuing(now - last_unmarked_paste < 0.05)
+                        pending, cursor = self._pastes.insert(pending, cursor, decoded)
+                        last_unmarked_paste = now
+                        self._history_index = None
+                        self._redraw(pending, cursor)
+                        continue
+                    last_unmarked_paste = 0.0
                     for char in decoded:
                         if self._closed.is_set():
                             break
+                        if in_paste:
+                            paste_text += char
+                            if paste_text.endswith(END_SEQUENCE):
+                                self._pastes.continuing(False)
+                                pending, cursor = self._pastes.insert(
+                                    pending, cursor, paste_text[:-len(END_SEQUENCE)],
+                                )
+                                in_paste, paste_text = False, ""
+                                self._history_index = None
+                                self._redraw(pending, cursor)
+                            continue
                         if escape:
                             if escape == "\x1b" and char not in {"[", "O"}:
                                 self._completion_dismissed = pending
@@ -331,20 +380,27 @@ class TerminalInput:
                                 escape += char
                                 if char.isalpha() or char == "~" or len(escape) > 8:
                                     key, escape = escape[2:], ""
+                                    if key == START:
+                                        in_paste, paste_text = True, ""
+                                        continue
+                                    span = self._pastes.span_at(pending, cursor)
                                     if key in {"A", "B"}:
                                         pending, cursor = self._navigate(
                                             pending, cursor, -1 if key == "A" else 1,
                                         )
-                                    elif key == "D":
-                                        cursor = max(0, cursor - 1)
+                                    elif key == "D":  # Left; step over a whole placeholder.
+                                        cursor = (span[0] if span and span[1] == cursor
+                                                  else max(0, cursor - 1))
                                     elif key == "C":
-                                        cursor = min(len(pending), cursor + 1)
+                                        cursor = (span[1] if span and span[0] == cursor
+                                                  else min(len(pending), cursor + 1))
                                     elif key in {"H", "1~", "7~"}:
                                         cursor = 0
                                     elif key in {"F", "4~", "8~"}:
                                         cursor = len(pending)
                                     elif key == "3~":
-                                        pending = pending[:cursor] + pending[cursor + 1:]
+                                        pending = (self._pastes.remove_after(pending, cursor)
+                                                   or pending[:cursor] + pending[cursor + 1:])
                                         self._history_index = None
                                     self._redraw(pending, cursor)
                                 continue
@@ -367,21 +423,34 @@ class TerminalInput:
                                 cursor = len(pending)
                                 self._history_index = None
                             elif char != "\t":
+                                # Show placeholders in the transcript; send the full text.
                                 self.output.submit_input(pending)
-                                line, pending, cursor = pending, "", 0
+                                pasted = self._pastes.contains(pending)
+                                line = self._pastes.expand(pending)
+                                pending, cursor = "", 0
+                                self._pastes.clear()
                                 if line.strip() and (
                                     not self._history or self._history[-1] != line
                                 ):
                                     self._history = [*self._history[-99:], line]
                                 self._history_index = None
-                                self.handle_line(line)
+                                self.handle_line(line, pasted=pasted)
                         elif char in {"\x7f", "\b"}:
-                            if cursor:
+                            removed = self._pastes.remove_before(pending, cursor)
+                            if removed is not None:
+                                pending, cursor = removed
+                            elif cursor:
                                 pending = pending[:cursor - 1] + pending[cursor:]
                                 cursor -= 1
                             self._history_index = None
                         elif char == "\x15":  # Ctrl-U: clear draft.
                             pending, cursor = "", 0
+                            self._pastes.clear()
+                            self._history_index = None
+                        elif char == "\x17" and (
+                            removed := self._pastes.remove_before(pending, cursor)
+                        ) is not None:  # Ctrl-W over a placeholder removes all of it.
+                            pending, cursor = removed
                             self._history_index = None
                         elif char == "\x17":  # Ctrl-W: remove last word.
                             before = pending[:cursor].rstrip()
@@ -413,7 +482,11 @@ class TerminalInput:
                 self.write("Keyboard input unavailable; voice listening is still active.")
         finally:
             if terminal_settings is not None:
-                termios.tcsetattr(descriptor, termios.TCSANOW, terminal_settings)
+                # Restore the terminal first: a closed output must not leave it raw.
+                try:
+                    termios.tcsetattr(descriptor, termios.TCSANOW, terminal_settings)
+                finally:
+                    self.output.set_bracketed_paste(False)
             if isinstance(self.output, TerminalOutput):
                 self.output.hide_input()
 

@@ -188,6 +188,14 @@ class TerminalOutput:
         """Show accepted speech as a user message without changing the keyboard draft."""
         self.write(self._input_message(text))
 
+    def set_bracketed_paste(self, enabled: bool) -> None:
+        """Ask the terminal to mark pasted text, so a paste is never a line-by-line submit."""
+        from ciel.terminal_paste import DISABLE, ENABLE
+
+        with self._lock:
+            self.stream.write(ENABLE if enabled else DISABLE)
+            self.stream.flush()
+
     def hide_input(self) -> None:
         """Leave scrollback intact and restore an ordinary output stream."""
         with self._lock:

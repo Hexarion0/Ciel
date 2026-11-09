@@ -2,6 +2,12 @@
 
 ## Unreleased — 0.3.6 development
 
+- Paste long or multi-line text into the terminal prompt without it sending line by line.
+  Ciel turns on bracketed paste, shows a long paste as `[Pasted text #1 +42 lines]` that
+  you can type around, and sends the full text when you press Enter. Backspace removes a
+  whole placeholder, and a paste that starts with `/` is sent as a message, never run as
+  a command. Terminals without bracketed paste get the same result from a timing check.
+
 - Start speaking web replies at their first finished sentence instead of after the
   whole answer, then voice each sentence as it completes. The spoken words are the same
   excerpt as before, so Chatterbox Turbo no longer renders it in one long request before
