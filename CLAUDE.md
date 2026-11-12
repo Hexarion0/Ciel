@@ -23,8 +23,10 @@ bash -n setup.sh scripts/*.sh                # CI syntax-checks every shell scri
 
 Running the app: `python -m ciel start [dev]` (voice; `dev` = verbose logging), `ciel web`,
 `ciel pair`, `ciel chat`, `ciel setup`, `ciel doctor`, `ciel config`. Run `ciel --help` for
-the full list. Configuration comes from `.env` (template: `.env.example`) via pydantic-settings
-in `config.py`. Add new options to `.env.example` with safe placeholders.
+the full list. Configuration comes from `config.json` (ordinary settings, template:
+`config.example.json`) and `.env` (secrets only, template: `.env.example`) via pydantic-settings
+in `config.py` and `config_store.py`; `.env` overrides `config.json`. `SecretStr` fields are the
+secrets. Add new options to `.env.example` and regenerate `config.example.json`.
 
 ## Testing notes
 

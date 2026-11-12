@@ -7,8 +7,17 @@ from dotenv import dotenv_values
 
 from ciel import persona, setup_persona, setup_wizard
 from ciel.config import Settings
+from ciel.config_store import config_path_for, read_config
 from ciel.platform.system_info import SystemSnapshot, generate_system_prompt
 from tests.test_setup_wizard import wizard_factory as wizard_factory
+
+
+def saved_values(env_path, interpolate=True):
+    """What setup saved: config.json settings, then .env (secrets) on top."""
+    values = dict(read_config(config_path_for(env_path)))
+    if env_path.exists():
+        values.update(dotenv_values(env_path, interpolate=interpolate))
+    return values
 
 
 @pytest.mark.parametrize("disabled", ["", "   ", "${UNSET_CIEL_PROFILE}"])
@@ -30,7 +39,7 @@ def test_failed_persona_save_keeps_disabled_profile_disabled(
 
     setup_wizard.run_setup_wizard()
 
-    raw = dotenv_values(tmp_path / ".env", interpolate=False)
+    raw = saved_values(tmp_path / ".env", interpolate=False)
     assert raw["CIEL_PERSONA_FILE"] == disabled
     assert not Settings(_env_file=tmp_path / ".env").ciel_persona_file.strip()
     assert persona_path.read_text() == original
@@ -46,7 +55,7 @@ def test_disabled_persona_is_enabled_only_after_profile_is_saved(
     write_persona = persona.update_setup_persona_file
 
     def check_before_write(path, content):
-        assert dotenv_values(env_path)["CIEL_PERSONA_FILE"] == ""
+        assert saved_values(env_path)["CIEL_PERSONA_FILE"] == ""
         return write_persona(path, content)
 
     monkeypatch.setattr(persona, "update_setup_persona_file", check_before_write)
@@ -54,7 +63,7 @@ def test_disabled_persona_is_enabled_only_after_profile_is_saved(
 
     setup_wizard.run_setup_wizard()
 
-    assert dotenv_values(env_path)["CIEL_PERSONA_FILE"] == "persona.txt"
+    assert saved_values(env_path)["CIEL_PERSONA_FILE"] == "persona.txt"
     assert draft in persona.load_persona_preferences(str(tmp_path / "persona.txt"))
 
 
@@ -80,7 +89,7 @@ def test_activation_save_failure_keeps_saved_profile_disabled(
 
     setup_wizard.run_setup_wizard()
 
-    assert dotenv_values(env_path)["CIEL_PERSONA_FILE"] == ""
+    assert saved_values(env_path)["CIEL_PERSONA_FILE"] == ""
     assert draft in persona.load_persona_preferences(str(tmp_path / "persona.txt"))
     assert "could not be enabled" in capsys.readouterr().out
 
@@ -108,7 +117,7 @@ def test_persona_save_uses_expanded_path_and_preserves_stored_reference(
 
     setup_wizard.run_setup_wizard()
 
-    raw = dotenv_values(tmp_path / ".env", interpolate=False)
+    raw = saved_values(tmp_path / ".env", interpolate=False)
     assert raw[field] == reference
     assert draft in persona.load_persona_preferences(str(tmp_path / "custom/persona.txt"))
     assert Settings(_env_file=tmp_path / ".env").ciel_persona_file == "custom/persona.txt"
@@ -159,7 +168,7 @@ def test_accepted_personality_saves_after_review_and_preserves_user_content(
     assert "Use a calm tone." in saved_persona
     assert draft in saved_persona
     assert "Previous setup personality." not in saved_persona
-    assert dotenv_values(tmp_path / ".env")["CIEL_PERSONA_FILE"] == "persona.txt"
+    assert saved_values(tmp_path / ".env")["CIEL_PERSONA_FILE"] == "persona.txt"
     assert len(received) == 1
     assert draft in capsys.readouterr().out
     with patch.dict("os.environ", {}, clear=True):
@@ -259,7 +268,7 @@ def test_personality_save_failure_reports_saved_settings_and_preserves_personali
 
     setup_wizard.run_setup_wizard()
 
-    assert dotenv_values(tmp_path / ".env")["CIEL_PREFERRED_NAME"] == "Example name"
+    assert saved_values(tmp_path / ".env")["CIEL_PREFERRED_NAME"] == "Example name"
     assert persona_path.read_text(encoding="utf-8") == "Keep this personality.\n"
     output = capsys.readouterr().out
     assert "Settings were saved" in output

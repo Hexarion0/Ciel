@@ -93,8 +93,10 @@ installs Pocket only when selected, CUDA libraries only for GPU recognition, and
 openWakeWord only when configured. It prepares the configured command and enabled
 wake recognition models, plus the selected voice; it does not download Amy for
 every voice choice. Pocket's model is prepared before the setup playback test.
-Alternatively, copy `.env.example` to `.env` and edit it, then run `ciel setup` to
-prepare its selections. Fresh setup uses CPU Pocket with the CIEL profile
+Settings live in two files: `config.json` holds everything except secrets, and
+`.env` holds only API keys and tokens. Alternatively, copy `config.example.json` to
+`config.json` (and `.env.example` to `.env` for keys) and edit them, then run
+`ciel setup` to prepare its selections. Fresh setup uses CPU Pocket with the CIEL profile
 (provisional Alba without private references) and offers CPU/`int8` command STT.
 The CUDA option uses `int8_float16`; command STT uses `small.en`, beam size 5, and a
 guarded `medium.en` retry. Ambient listening, speech interruption, and live AI
@@ -428,7 +430,7 @@ a local verification-failure response and offers a retry or general background.
 The reader supports public HTML, plain text, and news RSS/Atom links. Account actions, purchases,
 file downloads, browser automation, and PDF/media extraction remain future work.
 
-Edit `.env` and restart to change these controls:
+Edit `config.json` and restart to change these controls:
 
 | Setting | Default | Purpose |
 | --- | --- | --- |

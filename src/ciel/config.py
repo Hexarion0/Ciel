@@ -6,7 +6,7 @@ from typing import Literal
 
 from dotenv.main import resolve_variables
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 DEFAULT_NIM_MODEL = "nvidia/nemotron-3.5-super-vl-120b-a12b"
 DEFAULT_NIM_COMPLEX_MODEL = "nvidia/nemotron-3-ultra-550b-a55b"
@@ -359,7 +359,7 @@ class AudioConfig(BaseModel):
 
 
 class Settings(BaseSettings):
-    """Centralized settings for CIEL loaded from environment variables and .env file."""
+    """Centralized settings: environment, then .env (secrets), then config.json."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -367,6 +367,20 @@ class Settings(BaseSettings):
         extra="ignore",
         case_sensitive=False,
     )
+
+    @classmethod
+    def settings_customise_sources(
+        cls, settings_cls: type[BaseSettings], init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource, dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """Read config.json beside .env, below .env so older files keep working."""
+        from ciel.config_store import json_source
+
+        config = json_source(settings_cls, dotenv_settings)
+        return tuple(source for source in (
+            init_settings, env_settings, dotenv_settings, config, file_secret_settings,
+        ) if source is not None)
 
     # General app settings
     ciel_env: str = Field(default="development")

@@ -2,6 +2,12 @@
 
 ## Unreleased — 0.3.6 development
 
+- Split configuration into two files. `config.json` holds every ordinary setting in
+  readable JSON; `.env` keeps only API keys and tokens. Setup, chat setup, and the web
+  settings save each value to the right file. Settings already in `.env` still apply
+  and override `config.json`, and `${VAR}` references stay in `.env`. Template:
+  `config.example.json`.
+
 - Direct web mode no longer stops a turn after 30 seconds. Ciel searches, reads, and
   writes until it is done; each search or page read keeps its own timeout.
 

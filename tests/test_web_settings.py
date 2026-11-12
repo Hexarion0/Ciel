@@ -20,7 +20,8 @@ def test_web_settings_do_not_return_keys_and_save_only_admitted_fields(tmp_path)
     assert saved["values"]["nim_model"] == "new-model"
     assert saved["needs_restart"] is True
     assert settings.nim_model == "new-model"
-    assert "NIM_MODEL=" in (tmp_path / ".env").read_text()
+    assert json.loads((tmp_path / "config.json").read_text())["nim_model"] == "new-model"
+    assert not (tmp_path / ".env").exists()  # No secret was saved.
     assert applied == [{"nim_model", "tts_speed"}]
     with pytest.raises(ValueError):
         service.save({"memory_db_path": "/tmp/other-owner.db"})
@@ -39,4 +40,4 @@ def test_web_recall_status_reflects_persisted_pause_without_mutating_defaults(tm
     assert service.snapshot()["values"]["memory_recall_enabled"] is False
     service.save({"nim_model": "new-model"})
     assert settings.memory_recall_enabled is True
-    assert "MEMORY_RECALL_ENABLED" not in (tmp_path / ".env").read_text()
+    assert "memory_recall_enabled" not in json.loads((tmp_path / "config.json").read_text())

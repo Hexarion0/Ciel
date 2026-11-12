@@ -200,6 +200,8 @@ activemq-data/
 .env
 .env.*
 !.env.example
+# Local settings beside .env (names, LAN address); config.example.json is the template.
+/config.json
 .envrc
 .venv
 .venv-*/

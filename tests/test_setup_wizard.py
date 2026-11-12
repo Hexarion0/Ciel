@@ -9,8 +9,17 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 from dotenv import dotenv_values
 
-from ciel import setup_wizard
+from ciel import config_store, setup_wizard
+from ciel.config_store import config_path_for, read_config
 from ciel.terminal_ui import ConsoleUI
+
+
+def saved_values(env_path, interpolate=True):
+    """What setup saved: config.json settings, then .env (secrets) on top."""
+    values = dict(read_config(config_path_for(env_path)))
+    if env_path.exists():
+        values.update(dotenv_values(env_path, interpolate=interpolate))
+    return values
 
 
 class ScriptedUI:
@@ -169,7 +178,7 @@ def test_provider_is_chosen_before_its_key_and_personality_interview(
     harness.ui.on_choose = check_prompt_order
     assert setup_wizard.run_setup_wizard()
 
-    saved = dotenv_values(tmp_path / ".env")
+    saved = saved_values(tmp_path / ".env")
     assert {name: value for name, value in saved.items() if name.endswith("_API_KEY")} == {
         key: secret,
     }
@@ -200,7 +209,7 @@ def test_skip_or_keep_provider_does_not_ask_for_secrets(
     if existing:
         assert (tmp_path / ".env").read_text().startswith(original)
     else:
-        assert not any(key.endswith("_API_KEY") for key in dotenv_values(tmp_path / ".env"))
+        assert not any(key.endswith("_API_KEY") for key in saved_values(tmp_path / ".env"))
     menu, default = harness.ui.provider_menus[0]
     assert ("done", "Keep saved providers and continue" if existing else "Skip for now") in menu
     assert default == ("done" if existing else "nim")
@@ -217,7 +226,7 @@ def test_multiple_selected_providers_preserve_existing_key(tmp_path, wizard_fact
 
     assert setup_wizard.run_setup_wizard()
 
-    saved = dotenv_values(tmp_path / ".env")
+    saved = saved_values(tmp_path / ".env")
     assert (tmp_path / ".env").read_text().startswith(original)
     assert saved["GROQ_API_KEY"] == "synthetic-groq-key"
     assert saved["OPENROUTER_API_KEY"] == "synthetic-openrouter-key"
@@ -253,7 +262,7 @@ def test_search_provider_is_selected_before_masked_key_without_network_check(
     harness.ui.on_choose = on_choose
     assert setup_wizard.run_setup_wizard()
 
-    saved = dotenv_values(tmp_path / ".env")
+    saved = saved_values(tmp_path / ".env")
     assert saved["INTERNET_PROVIDER"] == provider
     assert saved[key] == "synthetic-search-key"
     assert harness.secret_prompts == [f"{label} API key [required]: "]
@@ -277,7 +286,7 @@ def test_free_search_needs_no_key_and_preserves_unused_keys(tmp_path, wizard_fac
 
     assert setup_wizard.run_setup_wizard()
 
-    saved = dotenv_values(tmp_path / ".env")
+    saved = saved_values(tmp_path / ".env")
     assert saved["INTERNET_PROVIDER"] == provider
     assert saved["brave_search_api_key"] == "synthetic-brave-key"
     assert saved["TAVILY_API_KEY"] == "synthetic-tavily-key"
@@ -289,7 +298,7 @@ def test_fresh_search_setup_defaults_to_duckduckgo_without_a_secret(tmp_path, wi
 
     assert setup_wizard.run_setup_wizard()
 
-    saved = dotenv_values(tmp_path / ".env")
+    saved = saved_values(tmp_path / ".env")
     assert saved["INTERNET_PROVIDER"] == "duckduckgo"
     assert not harness.secret_prompts
     assert not any(key.endswith("_API_KEY") for key in saved)
@@ -304,7 +313,7 @@ def test_search_setup_keeps_existing_selected_key_when_input_is_blank(tmp_path, 
     )
     assert setup_wizard.run_setup_wizard()
     assert harness.secret_prompts == ["Tavily API key [configured; Enter to keep]: "]
-    assert dotenv_values(tmp_path / ".env")["TAVILY_API_KEY"] == "synthetic-old-key"
+    assert saved_values(tmp_path / ".env")["TAVILY_API_KEY"] == "synthetic-old-key"
 
 
 def test_search_setup_requires_key_or_explicit_free_choice(tmp_path, wizard_factory, capsys):
@@ -313,7 +322,7 @@ def test_search_setup_requires_key_or_explicit_free_choice(tmp_path, wizard_fact
         search_choices=["brave", "ddgs"], secrets=[""],
     )
     assert setup_wizard.run_setup_wizard()
-    assert dotenv_values(tmp_path / ".env")["INTERNET_PROVIDER"] == "ddgs"
+    assert saved_values(tmp_path / ".env")["INTERNET_PROVIDER"] == "ddgs"
     assert "Brave Search needs an API key" in capsys.readouterr().out
 
 
@@ -336,7 +345,7 @@ def test_selected_saved_provider_can_keep_or_replace_key(tmp_path, wizard_factor
 
     assert setup_wizard.run_setup_wizard()
 
-    assert dotenv_values(tmp_path / ".env")["groq_api_key"] == (
+    assert saved_values(tmp_path / ".env")["groq_api_key"] == (
         answer or "synthetic-original-key"
     )
     assert harness.secret_prompts == ["Groq API key [configured; Enter to keep]: "]
@@ -362,12 +371,13 @@ def test_quick_start_reviews_before_saving_default_profile(tmp_path, wizard_fact
 
     def check_review(title):
         if title == "Ready to save?":
-            assert not env_path.exists()
+            assert not env_path.exists() and not config_path_for(env_path).exists()
 
     harness.ui.on_choose = check_review
     setup_wizard.run_setup_wizard()
-    saved = dotenv_values(env_path)
-    assert env_path.stat().st_mode & 0o777 == 0o600
+    saved = saved_values(env_path)
+    assert config_path_for(env_path).stat().st_mode & 0o777 == 0o600
+    assert not env_path.exists()  # No keys were entered, so there are no secrets to store.
     assert saved["TTS_VOICE"] == "ciel" and saved["TTS_ENGINE"] == "pocket"
     assert (saved["STT_MODEL"], saved["STT_DEVICE"], saved["STT_COMPUTE_TYPE"]) == (
         "small.en", "cuda", "int8_float16",
@@ -396,7 +406,7 @@ def test_quick_start_keeps_new_and_existing_secrets_hidden(
         (tmp_path / ".env").write_text(f'NIM_API_KEY="{secret}"\n')
     harness = wizard_factory(["quick", "save", "yes"], secrets=[] if configured else [secret])
     setup_wizard.run_setup_wizard()
-    assert dotenv_values(tmp_path / ".env")["NIM_API_KEY"] == secret
+    assert saved_values(tmp_path / ".env")["NIM_API_KEY"] == secret
     output = capsys.readouterr().out
     assert secret not in output and "key configured" in output
     assert "connection hasn't been tested yet" in output
@@ -443,7 +453,7 @@ def test_customize_can_reset_devices_and_change_speech_settings(tmp_path, wizard
         "customize", "amy", "default", "custom", "wake", "off", "save", "yes",
     ], secrets=["", "", ""], prompts=["USB Speaker"])
     setup_wizard.run_setup_wizard()
-    saved = dotenv_values(tmp_path / ".env")
+    saved = saved_values(tmp_path / ".env")
     assert saved["TTS_ENGINE"] == "piper" and saved["TTS_VOICE"] == "en_US-amy-medium"
     assert "AUDIO_INPUT_DEVICE" not in saved and saved["AUDIO_OUTPUT_DEVICE"] == "USB Speaker"
     assert saved["AMBIENT_LISTENING"] == "false" and saved["SHOW_AI_TRANSCRIPTS"] == "false"
@@ -475,7 +485,7 @@ def test_setup_voice_choices(tmp_path, wizard_factory, existing, choice, voice, 
         "customize", choice, "keep", "keep", None, None, "save", "yes",
     ], secrets=["", "", ""])
     setup_wizard.run_setup_wizard()
-    saved = dotenv_values(tmp_path / ".env")
+    saved = saved_values(tmp_path / ".env")
     assert saved["TTS_VOICE"] == voice and saved["TTS_ENGINE"] == engine
     harness.tts.assert_called_once_with(
         voice_name=voice, engine=engine, enabled=True, output_device=None,
@@ -490,7 +500,7 @@ def test_review_can_return_to_customize(tmp_path, wizard_factory):
     ], secrets=["", "", "", ""])
     setup_wizard.run_setup_wizard()
     assert len(harness.ui.summaries) == 2
-    assert dotenv_values(tmp_path / ".env")["TTS_ENGINE"] == "piper"
+    assert saved_values(tmp_path / ".env")["TTS_ENGINE"] == "piper"
 
 
 def test_numbered_terminal_menu_completes_customize_flow(tmp_path, wizard_factory, monkeypatch):
@@ -502,7 +512,7 @@ def test_numbered_terminal_menu_completes_customize_flow(tmp_path, wizard_factor
         setup_wizard, "ConsoleUI", lambda: ConsoleUI(stream=output, input_stream=terminal_input),
     )
     setup_wizard.run_setup_wizard()
-    assert dotenv_values(tmp_path / ".env")["TTS_VOICE"] == "en_US-amy-medium"
+    assert saved_values(tmp_path / ".env")["TTS_VOICE"] == "en_US-amy-medium"
     assert "Review your setup" in output.getvalue()
     assert "Voice confirmed" in output.getvalue()
     harness.tts.return_value.close.assert_called_once()
@@ -572,7 +582,7 @@ def test_interruption_after_save_keeps_configuration(
 ):
     harness = wizard_factory(["quick", "save", interruption()], secrets=[""])
     setup_wizard.run_setup_wizard()
-    assert dotenv_values(tmp_path / ".env")["TTS_ENGINE"] == "pocket"
+    assert saved_values(tmp_path / ".env")["TTS_ENGINE"] == "pocket"
     harness.tts.return_value.close.assert_called_once()
     assert "Configuration is saved" in capsys.readouterr().out
 
@@ -592,7 +602,7 @@ def test_output_device_retry_saves_and_uses_the_new_device(tmp_path, wizard_fact
         "quick", "save", "output", "device:9", "yes",
     ], secrets=[""], devices=[device])
     setup_wizard.run_setup_wizard()
-    assert dotenv_values(tmp_path / ".env")["AUDIO_OUTPUT_DEVICE"] == "9"
+    assert saved_values(tmp_path / ".env")["AUDIO_OUTPUT_DEVICE"] == "9"
     assert harness.settings.cache_clear.call_count == 2
     assert harness.tts.call_args_list == [
         call(voice_name="ciel", engine="pocket", enabled=True, output_device=None),
@@ -607,7 +617,7 @@ def test_retry_can_reset_a_newly_saved_output_device_to_system_default(tmp_path,
         "output", "default", "yes",
     ], secrets=["", "", ""], devices=[device])
     setup_wizard.run_setup_wizard()
-    assert "AUDIO_OUTPUT_DEVICE" not in dotenv_values(tmp_path / ".env")
+    assert "AUDIO_OUTPUT_DEVICE" not in saved_values(tmp_path / ".env")
     assert harness.settings.cache_clear.call_count == 2
     assert harness.tts.call_args_list == [
         call(voice_name="en_US-amy-medium", engine="piper", enabled=True, output_device=9),
@@ -621,7 +631,7 @@ def test_playback_exception_keeps_saved_configuration_without_claiming_success(
     harness = wizard_factory(["quick", "save", None], secrets=[""])
     harness.tts.return_value.speak.side_effect = RuntimeError("speaker unavailable")
     setup_wizard.run_setup_wizard()
-    assert (tmp_path / ".env").exists()
+    assert (tmp_path / "config.json").exists()
     harness.tts.return_value.close.assert_called_once()
     output = capsys.readouterr().out
     assert "Audio test failed" in output
@@ -635,7 +645,7 @@ def test_missing_custom_assets_save_choice_without_claiming_success(
     harness = wizard_factory(["quick", "save", None], secrets=[""])
     harness.assets.return_value = ["reference_audio: /private/reference.wav"]
     setup_wizard.run_setup_wizard()
-    assert dotenv_values(tmp_path / ".env")["TTS_ENGINE"] == "chatterbox_turbo"
+    assert saved_values(tmp_path / ".env")["TTS_ENGINE"] == "chatterbox_turbo"
     harness.tts.assert_not_called()
     output = capsys.readouterr().out
     assert "reference_audio: /private/reference.wav" in output and "choose Amy" in output
@@ -649,7 +659,7 @@ def test_invalid_saved_engine_reports_failure_without_overwriting_the_choice(
     (tmp_path / ".env").write_text(f"TTS_VOICE=ciel\nTTS_ENGINE={engine}\n")
     harness = wizard_factory(["quick", "save", None], secrets=[""])
     setup_wizard.run_setup_wizard()
-    assert dotenv_values(tmp_path / ".env")["TTS_ENGINE"] == engine
+    assert saved_values(tmp_path / ".env")["TTS_ENGINE"] == engine
     harness.tts.assert_not_called()
     output = capsys.readouterr().out
     assert "Audio test failed (ValueError)" in output
@@ -661,22 +671,16 @@ def test_failed_save_leaves_original_configuration_intact(tmp_path, wizard_facto
     original = '# original\nNIM_API_KEY="synthetic-original"\n'
     env_path.write_text(original)
     harness = wizard_factory(["quick", "save"])
-    real_set_key = setup_wizard.set_key
-    writes = 0
+    def disk_full(*_args, **_kwargs):
+        raise OSError("disk full")
 
-    def fail_after_first_write(*args, **kwargs):
-        nonlocal writes
-        writes += 1
-        if writes == 2:
-            raise OSError("disk full")
-        return real_set_key(*args, **kwargs)
-
-    monkeypatch.setattr(setup_wizard, "set_key", fail_after_first_write)
+    monkeypatch.setattr(config_store.os, "replace", disk_full)
     with pytest.raises(OSError, match="disk full"):
         setup_wizard.run_setup_wizard()
     assert env_path.read_text() == original
+    assert not (tmp_path / "config.json").exists()
     harness.settings.cache_clear.assert_not_called()
-    assert list(tmp_path.glob(".ciel-setup-*")) == []
+    assert list(tmp_path.glob(".ciel-config-*")) == []
 
 
 def test_disabled_voice_output_does_not_play_a_sample(tmp_path, wizard_factory, capsys):
@@ -684,7 +688,7 @@ def test_disabled_voice_output_does_not_play_a_sample(tmp_path, wizard_factory, 
     harness = wizard_factory(["quick", "save", None], secrets=[""])
     setup_wizard.run_setup_wizard()
     harness.tts.assert_not_called()
-    assert dotenv_values(tmp_path / ".env")["TTS_ENABLED"] == "false"
+    assert saved_values(tmp_path / ".env")["TTS_ENABLED"] == "false"
     assert "Voice output is disabled" in capsys.readouterr().out
 
 
@@ -737,7 +741,7 @@ def test_quick_setup_asks_personal_questions_when_ai_key_already_exists(
     )
     setup_wizard.run_setup_wizard()
 
-    saved = dotenv_values(tmp_path / ".env")
+    saved = saved_values(tmp_path / ".env")
     assert saved["CIEL_PREFERRED_NAME"] == "Alex"
     assert saved["INTERNET_HOME_CITY"] == "Hovd, Mongolia"
     assert saved["MEMORY_LEARNING_MODE"] == "automatic"
@@ -762,7 +766,7 @@ def test_personal_questions_enter_preserves_raw_values_comments_and_key_case(
     setup_wizard.run_setup_wizard()
 
     assert (tmp_path / ".env").read_text().startswith(original)
-    saved = dotenv_values(tmp_path / ".env", interpolate=False)
+    saved = saved_values(tmp_path / ".env", interpolate=False)
     assert saved["ciel_preferred_name"] == "  Alex ${UNDEFINED_NAME}  "
     assert saved["internet_home_city"] == "  Hovd, Mongolia  "
     assert saved["memory_learning_mode"] == "explicit"
@@ -802,7 +806,7 @@ def test_review_can_revise_personal_answers_before_saving(tmp_path, wizard_facto
     )
     setup_wizard.run_setup_wizard()
 
-    saved = dotenv_values(tmp_path / ".env")
+    saved = saved_values(tmp_path / ".env")
     assert saved["CIEL_PREFERRED_NAME"] == "Revised Name"
     assert saved["INTERNET_HOME_CITY"] == "Revised City"
     assert saved["MEMORY_LEARNING_MODE"] == "automatic"
@@ -869,7 +873,7 @@ def test_invalid_personal_answers_retry_before_saving(
     )
     setup_wizard.run_setup_wizard()
 
-    assert dotenv_values(tmp_path / ".env")[key] == valid
+    assert saved_values(tmp_path / ".env")[key] == valid
     assert len(harness.ui.questions) == 3
     assert message in capsys.readouterr().out.lower()
 
@@ -882,7 +886,7 @@ def test_invalid_saved_memory_choice_defaults_safely_and_is_repaired_on_save(
     setup_wizard.run_setup_wizard()
 
     assert harness.ui.memory_defaults == ["confirm"]
-    assert dotenv_values(tmp_path / ".env")["MEMORY_LEARNING_MODE"] == "confirm"
+    assert saved_values(tmp_path / ".env")["MEMORY_LEARNING_MODE"] == "confirm"
 
 
 def test_personalization_defaults_only_fill_missing_settings():
@@ -938,7 +942,7 @@ def test_managed_setup_saves_choices_before_installing_and_playing(
     harness = wizard_factory(["quick", "cpu", "save", "yes"], secrets=[""])
 
     def prepare(audio, notify):
-        saved = dotenv_values(tmp_path / ".env")
+        saved = saved_values(tmp_path / ".env")
         assert saved["STT_DEVICE"] == "cpu"
         assert saved["STT_COMPUTE_TYPE"] == "int8"
         assert saved["TTS_ENGINE"] == "pocket"
@@ -971,7 +975,7 @@ def test_managed_setup_preserves_saved_acceleration(tmp_path, wizard_factory, mo
     wizard_factory(["quick", None, "save", "yes"], secrets=[""])
     monkeypatch.setattr(installation, "prepare_components", MagicMock())
     assert setup_wizard.run_setup_wizard(install_components=True)
-    saved = dotenv_values(tmp_path / ".env")
+    saved = saved_values(tmp_path / ".env")
     assert saved["STT_DEVICE"] == "cuda"
     assert saved["STT_COMPUTE_TYPE"] == "float16"
 
@@ -987,7 +991,7 @@ def test_managed_setup_preserves_pending_gpu_when_returning_to_customize(
     ], secrets=["", "", "", ""])
     monkeypatch.setattr(installation, "prepare_components", MagicMock())
     assert setup_wizard.run_setup_wizard(install_components=True)
-    saved = dotenv_values(tmp_path / ".env")
+    saved = saved_values(tmp_path / ".env")
     assert saved["STT_DEVICE"] == "cuda"
     assert saved["STT_COMPUTE_TYPE"] == "int8_float16"
     assert saved["TTS_ENGINE"] == "piper"
@@ -1003,6 +1007,6 @@ def test_managed_setup_failed_download_keeps_choices_for_retry(
     error = KeyboardInterrupt() if interruption else RuntimeError("Synthetic download failure")
     monkeypatch.setattr(installation, "prepare_components", MagicMock(side_effect=error))
     assert not setup_wizard.run_setup_wizard(install_components=True)
-    assert dotenv_values(tmp_path / ".env")["STT_DEVICE"] == "cpu"
+    assert saved_values(tmp_path / ".env")["STT_DEVICE"] == "cpu"
     harness.tts.assert_not_called()
     assert "saved" in capsys.readouterr().out.lower()

@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import os
 from getpass import getpass
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 
-from dotenv import dotenv_values, set_key
-
+from ciel.config_store import load_configuration, save_configuration
 from ciel.terminal_ui import ConsoleUI
 
 
@@ -93,29 +90,11 @@ def apply_chat_autostart(
 
 
 def _save_configuration(env_path: Path, configuration: dict[str, str]) -> None:
-    """Atomically preserve non-chat settings, comments, and original key spelling."""
-    original = dotenv_values(env_path, interpolate=False) if env_path.is_file() else {}
-    names = {key.upper(): key for key in original}
-    temporary_path = None
-    try:
-        with NamedTemporaryFile(
-            mode="w", encoding="utf-8", dir=env_path.parent, prefix=".ciel-chat-", delete=False,
-        ) as temporary:
-            temporary_path = Path(temporary.name)
-            temporary.write(env_path.read_text(encoding="utf-8") if env_path.exists()
-                            else "# CIEL Configuration File\n")
-        for key, value in configuration.items():
-            original_key = names.get(key, key)
-            if original.get(original_key) != value:
-                set_key(temporary_path, original_key, value, quote_mode="always")
-        temporary_path.chmod(0o600)
-        os.replace(temporary_path, env_path)
-    finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
-    from ciel.config import get_settings
-
-    get_settings.cache_clear()
+    """Save only what changed: the bot token to .env, chat options to config.json."""
+    original = load_configuration(env_path)
+    changes = {key: value for key, value in configuration.items() if original.get(key) != value}
+    if changes:
+        save_configuration(env_path, changes)
 
 
 def run_chat_setup() -> bool:
@@ -126,8 +105,7 @@ def run_chat_setup() -> bool:
         ui.banner("Connect Ciel to your chat.")
         ui.note("Review before saving. Press Ctrl+C to leave setup.")
         env_path = Path(".env")
-        raw = dotenv_values(env_path, interpolate=False) if env_path.is_file() else {}
-        configuration = {key.upper(): value for key, value in raw.items() if value is not None}
+        configuration = load_configuration(env_path)
         configuration.setdefault("CHAT_SERVICES", "")
         configuration.setdefault("CHAT_STATE_PATH", "data/chat.db")
         while True:

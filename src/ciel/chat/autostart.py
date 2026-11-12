@@ -46,14 +46,18 @@ def _quoted(value: str, *, command: bool = False) -> str:
 
 def _configuration_revision(directory: Path) -> str:
     """Track local file edits without reading, hashing, or publishing configuration values."""
-    try:
-        metadata = (directory / ".env").stat()
-    except FileNotFoundError:
-        return "absent"
-    return ":".join(f"{value:x}" for value in (
-        metadata.st_dev, metadata.st_ino, metadata.st_mtime_ns, metadata.st_ctime_ns,
-        metadata.st_size,
-    ))
+    revisions = []
+    for name in (".env", "config.json"):
+        try:
+            metadata = (directory / name).stat()
+        except FileNotFoundError:
+            revisions.append("absent")
+            continue
+        revisions.append(":".join(f"{value:x}" for value in (
+            metadata.st_dev, metadata.st_ino, metadata.st_mtime_ns, metadata.st_ctime_ns,
+            metadata.st_size,
+        )))
+    return "/".join(revisions)
 
 
 def render_unit(project_dir: Path, python: Path | None = None) -> str:

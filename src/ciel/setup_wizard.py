@@ -1,12 +1,8 @@
 """Interactive setup and configuration wizard for CIEL."""
 
 import json
-import os
 from getpass import getpass
 from pathlib import Path
-from tempfile import NamedTemporaryFile
-
-from dotenv import dotenv_values, set_key, unset_key
 
 from ciel.audio.engines import resolve_tts_engine
 from ciel.chat.setup import apply_chat_autostart, chat_review_rows, configure_chat
@@ -18,6 +14,7 @@ from ciel.config import (
     normalize_audio_device,
     resolve_setup_values,
 )
+from ciel.config_store import load_configuration, save_configuration, stored_names
 from ciel.logging import get_logger
 from ciel.paths import resolve_asset_path, voice_profile_path
 from ciel.platform import get_audio_backend
@@ -137,29 +134,16 @@ def _initial_configuration(current_env: dict[str, str]) -> dict[str, str]:
 
 
 def _save_configuration(env_path: Path, configuration: dict[str, str]) -> None:
-    """Keep unchanged comments, key casing, and literal values when saving settings."""
-    original_env = dotenv_values(env_path, interpolate=False) if env_path.is_file() else {}
-    original_keys = {key.upper(): key for key in original_env}
-    temporary_path = None
-    try:
-        with NamedTemporaryFile(
-            mode="w", encoding="utf-8", dir=env_path.parent, prefix=".ciel-setup-", delete=False,
-        ) as temporary:
-            temporary_path = Path(temporary.name)
-            temporary.write(env_path.read_text(encoding="utf-8") if env_path.exists()
-                            else "# CIEL Configuration File\n")
-        for key in original_keys.keys() - configuration.keys():
-            if key in {"AUDIO_INPUT_DEVICE", "AUDIO_OUTPUT_DEVICE"}:
-                unset_key(temporary_path, original_keys[key])
-        for key, value in configuration.items():
-            original_key = original_keys.get(key, key)
-            if original_env.get(original_key) != value:
-                set_key(temporary_path, original_key, value, quote_mode="always")
-        temporary_path.chmod(0o600)
-        os.replace(temporary_path, env_path)
-    finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
+    """Save only what changed: secrets to .env, every other setting to config.json."""
+    original = load_configuration(env_path)
+    changes: dict[str, str | None] = {
+        key: value for key, value in configuration.items() if original.get(key) != value
+    }
+    for key in ("AUDIO_INPUT_DEVICE", "AUDIO_OUTPUT_DEVICE"):
+        if key in original and key not in configuration:
+            changes[key] = None
+    if changes:
+        save_configuration(env_path, changes)
     get_settings.cache_clear()
 
 
@@ -550,11 +534,9 @@ def run_setup_wizard(*, install_components: bool = False) -> bool:
         if install_components:
             ui.note("Choose first. Selected components download only after you save.")
         env_path = Path(".env")
-        original_env = dotenv_values(env_path, interpolate=False) if env_path.is_file() else {}
-        original_names = {key.upper(): key for key in original_env}
-        configuration = _initial_configuration({
-            key.upper(): value for key, value in original_env.items() if value is not None
-        })
+        original_env = load_configuration(env_path)
+        original_names = stored_names(env_path)
+        configuration = _initial_configuration(dict(original_env))
         if install_components and "STT_DEVICE" not in original_names:
             configuration["STT_DEVICE"] = "cpu"
             configuration["STT_COMPUTE_TYPE"] = "int8"

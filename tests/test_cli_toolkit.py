@@ -155,7 +155,8 @@ def test_settings_tools_work_without_voice_dependencies_or_local_files(tmp_path,
     assert result.returncode == 0, result.stderr
     values = json.loads(result.stdout)
     if "status" in arguments:
-        assert values["paths"]["config_file"] == str(tmp_path / ".env")
+        assert values["paths"]["config_file"] == str(tmp_path / "config.json")
+        assert values["paths"]["secrets_file"] == str(tmp_path / ".env")
         assert values["paths"]["config_file_exists"] is False
     else:
         assert all(values[name.upper()] == "unconfigured" for name in KEYS)

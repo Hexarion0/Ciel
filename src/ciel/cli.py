@@ -86,8 +86,9 @@ def _status(settings: Settings) -> dict[str, Any]:
             "ollama": {"host": settings.ollama_host, "connectivity": "not checked"},
         },
         "paths": {
-            "config_file": str(Path(".env").resolve()),
-            "config_file_exists": Path(".env").is_file(),
+            "config_file": str(Path("config.json").resolve()),
+            "secrets_file": str(Path(".env").resolve()),
+            "config_file_exists": Path("config.json").is_file() or Path(".env").is_file(),
             "data_root": str(runtime_data_root()),
             "memory_database": (
                 ":memory:" if settings.memory_db_path == ":memory:"
@@ -125,7 +126,7 @@ def _print_status(status: dict[str, Any]) -> None:
         for name, value in status["paths"].items() if name != "config_file_exists"
     ])])
     if not status["paths"]["config_file_exists"]:
-        ui.note("No .env file here; environment settings and defaults still apply.")
+        ui.note("No config.json or .env here; environment settings and defaults apply.")
     ui.note("Running sessions, models, and provider health are not checked. Try 'ciel doctor'.")
 
 
@@ -181,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
         settings = get_settings()
     except (ValidationError, ValueError, OSError):
         return _error(
-            "Configuration could not be loaded. Check .env and environment settings; "
+            "Configuration could not be loaded. Check config.json, .env, and environment; "
             "run 'ciel setup' to reconfigure.",
             json_output=args.json,
         )

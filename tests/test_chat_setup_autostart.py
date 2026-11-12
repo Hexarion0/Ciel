@@ -1,5 +1,6 @@
 """Chat setup remains local, private, cancellable, and independent of voice."""
 
+import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -121,8 +122,10 @@ def test_chat_setup_saves_before_autostart_and_preserves_other_settings(tmp_path
 
     def apply(_ui, configuration, *, project_dir):
         saved = dotenv_values(tmp_path / ".env")
-        assert "CHAT_AUTOSTART" not in saved
-        assert saved["CHAT_SERVICES"] == "telegram"
+        config = json.loads((tmp_path / "config.json").read_text())
+        assert "CHAT_AUTOSTART" not in saved and "chat_autostart" not in config
+        assert config["chat_services"] == "telegram"
+        assert "CHAT_SERVICES" not in saved
         assert saved["telegram_bot_token"] == "replacement-token"
         assert project_dir == tmp_path
         return True
