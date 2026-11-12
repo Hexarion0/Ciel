@@ -186,12 +186,14 @@ class MainTools:
                 self._direct.seed(previous.sources)
             self.lookup = self._direct.lookup()
         self._started_at = time.monotonic()
+        # Direct mode has no turn-wide clock: the model searches, reads, and writes
+        # until it is done. Each network call still has its own timeout.
+        researching = (previous is not None and previous.attempted) or (
+            self._web_allowed() and (is_explicit_web_request(query) or contextual_web
+                                     or self.correction is not None)
+        )
         self._deadline = (self._started_at + RESEARCH_BUDGET_SECONDS
-                          if (previous is not None and previous.attempted) or (
-                              self._web_allowed() and (is_explicit_web_request(query)
-                                                       or contextual_web
-                                                       or self.correction is not None)
-                          ) else None)
+                          if researching and self._direct is None else None)
         self._fresh_lookup = False
         self.screen_result = None
         self.screen_request = None
@@ -573,7 +575,7 @@ class MainTools:
         return ToolResult(result.payload(command), local_only=self.private, source="exec")
 
     def _direct_call(self, name: str, arguments: dict) -> ToolResult:
-        """Run one direct-mode web tool within the turn's shared research budget."""
+        """Run one direct-mode web tool; only the network call itself is time-bounded."""
         assert self._direct is not None
         if name == "web_search":
             queries = DirectWeb.queries(arguments)
@@ -582,13 +584,6 @@ class MainTools:
             topic = queries[0]
         else:
             topic = str(arguments.get("url", "")).strip()
-        if self._deadline is None:
-            self._deadline = self._started_at + RESEARCH_BUDGET_SECONDS
-        read_deadline = self._deadline - _FINAL_RESERVE_SECONDS
-        if time.monotonic() >= read_deadline:
-            # Guidance, not a malformed call: it must not trip the repeated-failure stop.
-            return ToolResult({"error": "The research time for this turn is used up. Answer "
-                               "from the results you have."}, source="web")
         if self.progress is not None and self.progress(
             "search" if name == "web_search" else "read_page", topic,
         ) is False:
@@ -596,6 +591,8 @@ class MainTools:
         if not self._valid() or not self._web_allowed():
             return ToolResult({"error": "The lookup was cancelled."}, is_error=True)
         self._fresh_lookup = True
+        # A per-call timeout so one dead site cannot hang the turn; not a turn budget.
+        read_deadline = time.monotonic() + self.settings.internet.research_timeout_seconds
         read_cancel = DeadlineCancellation(
             ResearchCancellation(self._guard_cancel, self._web_allowed), read_deadline,
         )

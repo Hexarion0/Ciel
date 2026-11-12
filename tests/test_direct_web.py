@@ -315,3 +315,30 @@ def test_answer_without_sources_keeps_bracketed_numbers_that_were_not_copied(mak
     # [1, 2] matches markers from the earlier reply; [0, 1] and [3] never appeared.
     assert earlier.answer_filter(text).content == (
         "x is in [0, 1], step [3] repeats, and the list is sorted.")
+
+
+def test_direct_mode_has_no_turn_deadline(make_tools):
+    tools = make_tools("search the web for the RTX 5060 price in Mongolia")
+
+    assert tools.response_deadline() is None
+
+
+def test_direct_search_still_runs_long_after_the_old_budget(make_tools):
+    tools = make_tools()
+    tools._started_at -= 600  # Ten minutes into the turn.
+
+    result = tools.execute(call("web_search", query="2026 world cup final"))
+
+    assert "used up" not in json.dumps(result.content)
+    assert [row["source"] for row in result.content["results"]] == [1, 2, 3]
+    assert tools.response_deadline() is None
+
+
+def test_each_direct_network_call_gets_its_own_timeout(make_tools, monkeypatch):
+    tools = make_tools()
+    monkeypatch.setattr("ciel.agent_tools.time.monotonic", lambda: 1000.0)
+
+    tools.execute(call("web_search", query="2026 world cup final"))
+
+    deadline = tools._direct.internet.search_direct.call_args.kwargs["deadline"]
+    assert deadline == 1000.0 + tools.settings.internet.research_timeout_seconds

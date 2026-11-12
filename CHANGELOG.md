@@ -2,6 +2,9 @@
 
 ## Unreleased — 0.3.6 development
 
+- Direct web mode no longer stops a turn after 30 seconds. Ciel searches, reads, and
+  writes until it is done; each search or page read keeps its own timeout.
+
 - Add an `exec` tool that lets Ciel run shell commands on this PC (`EXEC_ENABLED`, off by
   default) from every channel. `EXEC_APPROVAL` picks `always` (default), `safe`, or
   `never`; approval is the owner replying "yes" to the exact command, held by the app.
