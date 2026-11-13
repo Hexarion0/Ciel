@@ -53,6 +53,8 @@ _PROFILE_TOPICS = (
     (r"\b(?:timezone|time zone)\b", "timezone"),
     (r"\b(?:favorite|favourite|preferred|prefer)\b", "preference"),
 )
+_DAILY_NOTE = re.compile(r"memory/\d{4}-\d{2}-\d{2}\.md")
+"""Owner daily notes, the only paths that hold reflection candidates."""
 _CONTROL = re.compile(
     r"^\s*(?:/(?!local\b)\w+\b|forget\b|clear (?:the |my )?(?:memory|history|session)\b)",
     re.IGNORECASE,
@@ -590,6 +592,14 @@ class MemoryLifecycle:
         """
         normalized = " ".join(str(query).casefold().split())[:2000]
         if not normalized or self.workspace is None or self._closed:
+            return 0
+        results = list(results)
+        if not any(_DAILY_NOTE.fullmatch(path) for path in (
+            result.get("path") if isinstance(result, dict) else getattr(result, "path", None)
+            for result in results
+        ) if isinstance(path, str)):
+            # Only owner daily notes are candidates. The automatic per-turn search returns
+            # curated-file hits, so skip the full candidate scan for them.
             return 0
         guard = self.snapshot()
         with self._guard_lock:

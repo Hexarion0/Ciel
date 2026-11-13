@@ -120,3 +120,59 @@ def test_plain_lan_mode_does_not_grant_public_clients_access():
     handler = SimpleNamespace(path="/api/state", command="GET", headers={},
                               client_address=("8.8.8.8", 1234), _json=MagicMock())
     assert not ui.channels.authorize(handler)
+
+
+def test_a_non_ascii_csrf_header_is_refused_without_an_error():
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from ciel.web import DesktopWebUI
+
+    ui = DesktopWebUI("owner", "hey ciel")
+    device = ui.channels.auth.pair(ui.channels.auth.issue_code(), source="phone")
+    handler = SimpleNamespace(
+        path="/api/message", command="POST", client_address=("192.168.1.20", 1234),
+        headers={"Cookie": "ciel_device=" + device.token, "X-CSRF-Token": "jÃ©"},
+        _json=MagicMock(),
+    )
+    assert not ui.channels.authorize(handler)
+    assert handler._json.call_args.args[0] == 403
+
+
+def test_open_lan_browser_sessions_stay_bounded():
+    # Every cookieless request on an open home network creates a session; a client
+    # that never keeps cookies must not grow server memory without limit.
+    from ciel.webapp.auth import MAX_BROWSER_SESSIONS, DeviceAuth
+
+    auth = DeviceAuth("owner")
+    paired = auth.pair(auth.issue_code(), source="phone")
+    sessions = [auth.create_session() for _ in range(MAX_BROWSER_SESSIONS + 50)]
+
+    assert len(auth._devices) <= MAX_BROWSER_SESSIONS + 1
+    assert auth.authenticate(sessions[-1].token) is not None
+    assert auth.authenticate(paired.token) is not None  # Paired phones are never evicted.
+
+
+def test_a_failed_local_listener_does_not_hang_shutdown(monkeypatch):
+    import threading
+
+    from ciel import web
+    from ciel.web import DesktopWebUI
+
+    real, created = web.BrowserHTTPServer, []
+
+    def server(*args, **kwargs):
+        created.append(args)
+        if len(created) == 2:
+            raise OSError("address in use")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(web, "BrowserHTTPServer", server)
+    ui = DesktopWebUI("owner", "hey ciel")
+    ui.insecure_lan = True
+    with pytest.raises(OSError):
+        ui.start(lambda text: True, host="127.0.0.2", port=0)
+    closer = threading.Thread(target=ui.close, daemon=True)
+    closer.start()
+    closer.join(3)
+    assert not closer.is_alive(), "close() hung on a server that never started serving"

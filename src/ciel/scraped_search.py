@@ -18,6 +18,7 @@ from html import unescape
 
 import httpx
 
+from ciel.providers.streaming import pooled_client
 from ciel.search_providers import SearchProviderError
 
 CACHE_TTL_SECONDS = 15 * 60
@@ -85,7 +86,7 @@ def fetch_page(
     # httpx timeouts limit each phase; the deadline also bounds a slow trickle. A slow
     # first byte (over 2s from some networks) needs most of the budget on its own.
     deadline = time.monotonic() + timeout
-    with httpx.Client(timeout=timeout * 0.75, follow_redirects=False,
+    with pooled_client(timeout * 0.75, follow_redirects=False,
                       trust_env=False) as client:
         with client.stream(
             method, url,

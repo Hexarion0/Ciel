@@ -33,6 +33,20 @@ def test_local_tls_creates_stable_ca_and_certificate_for_pc_address(tmp_path):
         prepare_local_tls("8.8.8.8", tmp_path / "public")
 
 
+def test_local_tls_certificate_passes_strict_x509_verification(tmp_path):
+    # Python 3.13+ clients verify strictly by default and reject a leaf certificate
+    # without key identifiers, and newer OpenSSL no longer adds them on its own.
+    from ciel.webapp.tls import prepare_local_tls
+
+    bundle = prepare_local_tls("192.168.1.100", tmp_path / "tls")
+    check = subprocess.run(
+        ["openssl", "verify", "-x509_strict", "-CAfile", str(bundle.ca_certificate),
+         str(bundle.certificate)],
+        capture_output=True,
+    )
+    assert check.returncode == 0, check.stdout.decode() + check.stderr.decode()
+
+
 def test_android_setup_http_exposes_only_public_certificate_and_instructions(tmp_path):
     import httpx
 

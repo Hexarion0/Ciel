@@ -83,6 +83,21 @@ _STAGE_DIRECTION_START = re.compile(
 )
 
 
+_STAGE_DIRECTION_LOOKAHEAD = 64
+"""Unclosed bracket text this long that does not start like a description is literal."""
+
+
+def could_be_stage_direction(content: str) -> bool:
+    """Whether unfinished bracket text may still turn out to be a description to hide.
+
+    Streaming holds text after "[" until "]" arrives; a literal ":[" would otherwise
+    hold back every later sentence of the reply.
+    """
+    content = content.strip()
+    return (len(content) < _STAGE_DIRECTION_LOOKAHEAD
+            or _STAGE_DIRECTION_START.match(content) is not None)
+
+
 def is_stage_direction(content: str) -> bool:
     """Identify performance descriptions while preserving native cues and bracketed data."""
     content = content.strip()

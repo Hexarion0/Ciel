@@ -252,6 +252,10 @@ class DesktopWebUI:
         document = (Path(__file__).parent / "web_assets/index.html").read_bytes()
 
         class Handler(BaseHTTPRequestHandler):
+            # Keep-alive for the frequent GET polls (state, audio chunks, assets), which
+            # otherwise paid a new TCP and TLS handshake each time on a phone.
+            protocol_version = "HTTP/1.1"
+
             def setup(self) -> None:
                 super().setup()
                 self.connection.settimeout(3)
@@ -269,6 +273,11 @@ class DesktopWebUI:
                 for name, value in getattr(self, 'response_headers', {}).items():
                     self.send_header(name, value)
                 self.response_headers = {}
+                if self.command != "GET":
+                    # Other methods can be rejected before their body is read; never reuse
+                    # a connection that may still hold unread request bytes.
+                    self.close_connection = True
+                    self.send_header("Connection", "close")
                 self.send_header("Content-Security-Policy", "default-src 'self'; "
                                  "script-src 'self' 'unsafe-inline'; style-src 'self' "
                                  "'unsafe-inline'; img-src 'self' blob: data:; "
@@ -459,6 +468,8 @@ class DesktopWebUI:
                 self._local_server.daemon_threads = True
             except OSError:
                 self._server.server_close()
+                # shutdown() on a server that never ran serve_forever() waits forever.
+                self._server = None
                 raise
             self._local_thread = threading.Thread(
                 target=self._local_server.serve_forever, name='ciel-web-pc', daemon=True,

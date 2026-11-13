@@ -13,6 +13,7 @@ from urllib.parse import parse_qsl, urlsplit, urlunsplit
 import httpx
 
 from ciel.logging import SecretMaskingFilter
+from ciel.providers.streaming import pooled_client
 from ciel.search_providers import SearchProviderError
 
 _ENDPOINT = "https://mcp.parallel.ai/mcp"
@@ -268,7 +269,7 @@ def _call_tool(
     headers = {"Accept": "application/json, text/event-stream", "Accept-Encoding": "identity"}
     try:
         _remaining(deadline, cancel_event)
-        with httpx.Client(timeout=timeout, trust_env=False, follow_redirects=False) as client:
+        with pooled_client(timeout, trust_env=False, follow_redirects=False) as client:
             initialized, session = _request(client, headers, {
                 "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
                     "protocolVersion": _PROTOCOL, "capabilities": {},

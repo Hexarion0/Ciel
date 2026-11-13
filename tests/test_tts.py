@@ -355,3 +355,65 @@ def test_playback_reports_underruns_without_failing_speech(monkeypatch, caplog, 
     ))
     assert tts.speak("Test speech.")
     assert ("TTS playback underrun" in caplog.text) is underflow
+
+
+def test_forced_turbo_close_does_not_wait_before_stopping_the_worker(tmp_path):
+    # A failed sentence force-closes the worker; the fallback voice waits for this call.
+    import subprocess
+    import time
+
+    from ciel.audio.chatterbox_worker import ChatterboxTurboWorker
+
+    worker = ChatterboxTurboWorker(
+        tmp_path / "python", tmp_path / "worker.py", tmp_path / "model",
+        tmp_path / "reference.wav", "reference",
+    )
+    worker._process = subprocess.Popen(["sleep", "30"], stdin=subprocess.PIPE, text=True)
+    started = time.monotonic()
+    worker.close(force=True)
+    assert time.monotonic() - started < 1.5
+    assert worker._process.poll() is not None
+
+
+class _FlakyTurbo:
+    """A live worker that cannot voice some sentences."""
+
+    def __init__(self, failures):
+        self.failures, self.closed = failures, False
+
+    def is_alive(self):
+        return not self.closed
+
+    def synthesize(self, text, **kwargs):
+        from ciel.audio.chatterbox_worker import ChatterboxWorkerError
+
+        if self.failures:
+            self.failures -= 1
+            raise ChatterboxWorkerError("Chatterbox returned empty or non-finite audio")
+        return np.ones(240, dtype=np.float32), 24000
+
+    def close(self, *, force=False):
+        self.closed = True
+
+
+def test_one_bad_sentence_keeps_a_healthy_turbo_worker(monkeypatch):
+    tts = TextToSpeech(voice_name="ciel", engine="chatterbox_turbo", enabled=True)
+    worker = _FlakyTurbo(failures=1)
+    tts._chatterbox = worker
+    monkeypatch.setattr(tts, "_synthesize_pocket", lambda text, style=None: (np.zeros(10), 1))
+
+    assert tts.synthesize("An odd sentence.")[1] == 1  # This sentence used the fallback.
+    assert not tts._chatterbox_failed and not worker.closed
+    assert tts.synthesize("Back to normal.")[1] == 24000
+    assert tts.last_engine == "chatterbox_turbo"
+
+
+def test_repeated_turbo_failures_switch_to_the_fallback_voice(monkeypatch):
+    tts = TextToSpeech(voice_name="ciel", engine="chatterbox_turbo", enabled=True)
+    worker = _FlakyTurbo(failures=10)
+    tts._chatterbox = worker
+    monkeypatch.setattr(tts, "_synthesize_pocket", lambda text, style=None: (np.zeros(10), 1))
+
+    for _ in range(3):
+        tts.synthesize("Still failing.")
+    assert tts._chatterbox_failed and worker.closed

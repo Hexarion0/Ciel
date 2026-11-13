@@ -145,3 +145,22 @@ def test_launch_does_not_hide_other_errors_or_cancellation(monkeypatch, error):
     with pytest.raises(type(error)) as caught:
         __main__.main([])
     assert caught.value is error
+
+
+@pytest.mark.parametrize(("configured", "expected"), [
+    ({}, ("INFO", True)),
+    ({"ciel_log_level": "warning"}, ("WARNING", True)),
+    ({"ciel_debug": True}, ("DEBUG", False)),
+    ({"ciel_log_level": "DEBUG"}, ("DEBUG", False)),
+])
+def test_launch_uses_the_configured_log_level(monkeypatch, configured, expected):
+    from ciel import __main__, config, logging
+
+    _prepare_launch(monkeypatch, AudioInputError("microphone unavailable"))
+    settings = config.Settings(_env_file=None, **configured)
+    monkeypatch.setattr(config, "get_settings", lambda: settings)
+    calls = []
+    monkeypatch.setattr(logging, "setup_logging",
+                        lambda level, *, concise: calls.append((level, concise)) or MagicMock())
+    __main__.main([])
+    assert calls == [expected]

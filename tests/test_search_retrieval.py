@@ -105,7 +105,7 @@ def mock_pages(monkeypatch, bodies):
         stream=httpx.ByteStream(bodies[request.url.path].encode()),
     ))
     monkeypatch.setattr("ciel.internet.httpx.Client", lambda **kw: original(
-        transport=transport, **kw,
+        **{**kw, "transport": transport},
     ))
 
 
@@ -176,7 +176,7 @@ def test_news_feed_is_a_lead_to_an_article_with_its_own_date(monkeypatch):
                               stream=httpx.ByteStream(body.encode()))
 
     monkeypatch.setattr("ciel.internet.httpx.Client", lambda **kw: original(
-        transport=httpx.MockTransport(handler), **kw,
+        **{**kw, "transport": httpx.MockTransport(handler)},
     ))
     service = InternetService(InternetConfig(max_pages=3))
     monkeypatch.setattr(service, "_search", Mock(return_value=[{
@@ -254,3 +254,31 @@ def test_country_news_excludes_inner_mongolia_without_independent_country_refere
         "title": title, "url": "https://example.com/story/123", "body": body,
     }]))
     assert bool(service.lookup(query).sources) is expected
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("see https://en.wikipedia.org/wiki/Python_(programming_language)",
+     ["https://en.wikipedia.org/wiki/Python_(programming_language)"]),
+    ("(see https://en.wikipedia.org/wiki/Mars_(planet))",
+     ["https://en.wikipedia.org/wiki/Mars_(planet)"]),
+    ("https://shop.example.com/item?id=1&region=us&section=2&currency=USD",
+     ["https://shop.example.com/item?id=1&region=us&section=2&currency=USD"]),
+    ("copied from a page: https://example.com/?a=1&amp;b=2", ["https://example.com/?a=1&b=2"]),
+])
+def test_links_keep_their_parentheses_and_query_parameters(text, expected):
+    assert public_urls(text) == expected
+
+
+@pytest.mark.parametrize("text", [
+    "Thanks.What is the capital of France?",
+    "Hi.Can you help me?",
+    "ok.what about tomorrow",
+    "I use Node.js with styles.css and index.html",
+])
+def test_missing_spaces_and_file_names_are_not_web_addresses(text):
+    assert public_urls(text) == []
+
+
+@pytest.mark.parametrize("text", ["open github.io", "see huggingface.co/models", "try zed.dev"])
+def test_common_bare_domains_are_still_recognized(text):
+    assert public_urls(text)

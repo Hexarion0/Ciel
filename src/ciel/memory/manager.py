@@ -90,7 +90,11 @@ class ConversationManager:
             from ciel.memory.conversation_index import ConversationIndex
             from ciel.memory.titles import ConversationTitler
 
-            self._titler = ConversationTitler(router_or_provider, ConversationIndex(self.store))
+            # Called on every summary schedule (each turn): keep one titler per router so
+            # its retry back-off and in-flight guard survive between turns.
+            if getattr(self._titler, "router", None) is not router_or_provider:
+                self._titler = ConversationTitler(router_or_provider,
+                                                  ConversationIndex(self.store))
         return self.lifecycle.start(router_or_provider)
 
     def _title_after_reply(self) -> None:
@@ -298,8 +302,10 @@ class ConversationManager:
         """Retain explicit local routing for the session until its history is cleared."""
         session_ids = list((context or self._context()).session_ids)
         placeholders = ",".join("?" for _ in session_ids)
-        with self.store._lock:
-            candidates = self.store._get_connection().execute(
+
+        def scan(connection) -> bool:
+            # A full scan of the session's user turns, so it is reused until a write.
+            candidates = connection.execute(
                 "SELECT content FROM conversation_turns "
                 f"WHERE session_id IN ({placeholders}) "
                 "AND role='user' AND instr(lower(content), '/local') > 0;",
@@ -309,6 +315,8 @@ class ConversationManager:
                 ModelRouter.requires_local([ChatMessage("user", row["content"])])
                 for row in candidates
             )
+
+        return self.store.unchanged_since_write("requires_local", tuple(session_ids), scan)
 
     def get_active_messages(
         self,

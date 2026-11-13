@@ -194,3 +194,44 @@ def test_concise_format_keeps_problems_and_redacts_secrets(capsys):
     assert isinstance(logging.getLogger().handlers[0].formatter, ConversationFormatter)
     setup_logging("DEBUG", concise=False)
     assert isinstance(logging.getLogger().handlers[0].formatter, CielFormatter)
+
+
+@pytest.mark.parametrize("text", [
+    "https://example.com/blog/risk-management-guide",
+    "https://en.wikipedia.org/wiki/Task-based_language_learning",
+    "Try a disk-usage-analyzer first.",
+    "I hate to be the bearer of bad news.",
+    "Bearer certificates were common.",
+])
+def test_ordinary_words_and_urls_are_not_mistaken_for_secrets(monkeypatch, text):
+    monkeypatch.setattr(SecretMaskingFilter, "_configured_secrets", ())
+    assert SecretMaskingFilter._redact(text) == text
+
+
+def test_telegram_bot_token_inside_an_api_url_is_masked(monkeypatch):
+    monkeypatch.setattr(SecretMaskingFilter, "_configured_secrets", ())
+    token = "123456789:" + "A" * 35
+    url = f"https://api.telegram.org/bot{token}/getUpdates"
+    assert token not in SecretMaskingFilter._redact(url)
+
+
+def test_secrets_inside_exception_arguments_and_tracebacks_are_masked(capsys):
+    logger = setup_logging("INFO", concise=False)
+    key = "gsk_" + "s" * 30
+    try:
+        raise RuntimeError(f"request failed with key {key}")
+    except RuntimeError as error:
+        logger.warning("Provider failed: %s", error)
+        logger.warning("Provider failed: %(error)s", {"error": error})
+        logger.exception("Provider crashed")
+    output = capsys.readouterr().out
+    assert key not in output
+    assert output.count("[REDACTED_SECRET]") >= 3
+    setup_logging("DEBUG", concise=False)
+
+
+def test_numeric_log_arguments_still_format():
+    record = logging.LogRecord("test", logging.INFO, "t.py", 1, "%d chunks in %.1fs", (3, 0.25),
+                               None)
+    assert SecretMaskingFilter().filter(record)
+    assert record.getMessage() == "3 chunks in 0.2s"

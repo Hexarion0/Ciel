@@ -32,6 +32,12 @@ _REGISTRY = ".ciel-memory.json"
 _DOCUMENT_CACHE_ENTRIES = 4096
 _DOCUMENT_CACHE_BYTES = 16 * 1024 * 1024
 _REGISTRY_CACHE_BYTES = 256 * 1024
+MAX_ENTRY_RECORDS = 1000
+"""Newest duplicate-append guards kept; retries happen within moments of the first write.
+
+Unbounded, one record per note eventually pushed the registry past MAX_DOCUMENT_BYTES,
+after which every memory read and write failed.
+"""
 _MARKER = re.compile(
     r"(?m)^<!-- ciel-memory:([a-f0-9]{32}) -->\n(.*?)\n<!-- /ciel-memory:\1 -->[ \t]*(?:\n|$)",
     re.S,
@@ -447,8 +453,12 @@ class MemoryWorkspace:
             self._record_provenance(state, path, origin=origin, session_id=session_id,
                                     local_only=local_only)
             if identity:
-                state["entries"][identity] = {"path": path, "origin": origin,
-                                             "session_id": session_id, "local_only": local_only}
+                entries = state["entries"]
+                entries[identity] = {"path": path, "origin": origin,
+                                     "session_id": session_id, "local_only": local_only}
+                if len(entries) > MAX_ENTRY_RECORDS:
+                    # JSON objects keep insertion order, so the first keys are the oldest.
+                    state["entries"] = dict(list(entries.items())[-MAX_ENTRY_RECORDS:])
             self._save_registry(state)
             return path
 

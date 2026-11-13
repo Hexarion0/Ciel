@@ -775,6 +775,7 @@ def run_desktop(
             turn_id = conv_manager.add_turn("assistant", strip_speech_events(text),
                                            provider=provider, model=model, sources=metadata,
                                            web_evidence=evidence_payload(lookup))
+            request["reply_recorded"] = True
             if screen_result is not None:
                 if not screen_service.mark(turn_id, request=visual, **(
                     {"expected_revision": screen_result.task_revision}
@@ -1266,6 +1267,11 @@ def run_desktop(
             if not current():
                 return False
             logger.warning("Main response turn failed (%s).", type(error).__name__)
+            logger.debug("Main response turn failure details", exc_info=True)
+            if request.get("reply_recorded"):
+                # The answer is already saved and shown; only delivering it failed (such
+                # as speaker playback). Another reply would contradict the saved one.
+                return False
             return finish("I couldn't finish that request. Could you try again?")
 
     def on_transcription(text: str, wake_info: dict, audio_data) -> bool:
@@ -1382,7 +1388,8 @@ def run_desktop(
             # request. Legacy private history remains protected during replay.
             if typed or wake_info.get("wake_verified") or not ambient_enabled[0] or (
                 ambient_context.is_explicit(user_text)
-                or active_control_turn(wake_info)
+                # No earlier fragments are linked yet at this point in the turn.
+                or active_control_turn(wake_info, [])
             ):
                 reply = "/local is no longer available. Send your message normally."
                 log_reply('🤖 CIEL: "%s" [local/command]', reply)
@@ -2208,7 +2215,11 @@ def run_desktop(
                 return False
             logger.error("Error generating or speaking AI response: %s", err)
             error_msg = "Something went wrong while I was processing that. Could you try again?"
-            say(error_msg)
+            try:
+                say(error_msg)
+            except Exception:
+                # The failure may be the speaker itself; the error is already logged.
+                logger.debug("Could not deliver the error message either", exc_info=True)
             return True  # Stay in conversation despite transient error
 
     def on_barge_in():

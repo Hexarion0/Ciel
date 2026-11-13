@@ -5,8 +5,6 @@ import time
 from collections.abc import Iterator
 from typing import Any
 
-import httpx
-
 from ciel.config import get_settings
 from ciel.logging import get_logger
 from ciel.providers.base import (
@@ -17,7 +15,7 @@ from ciel.providers.base import (
     ToolCallAccumulator,
     require_text_messages,
 )
-from ciel.providers.streaming import streaming_client
+from ciel.providers.streaming import pooled_client, streaming_client
 from ciel.providers.tool_calls import (
     ollama_tool_calls,
     ollama_tool_deltas,
@@ -47,7 +45,7 @@ class OllamaProvider(LLMProvider):
     def health_check(self) -> bool:
         """Check if local Ollama daemon is running and reachable."""
         try:
-            with httpx.Client(timeout=3.0) as client:
+            with pooled_client(timeout=3.0) as client:
                 res = client.get(f"{self.host}/api/tags")
                 return res.status_code == 200
         except Exception as err:
@@ -92,7 +90,7 @@ class OllamaProvider(LLMProvider):
         }
 
         start_t = time.time()
-        with httpx.Client(timeout=self.timeout) as client:
+        with pooled_client(timeout=self.timeout) as client:
             resp = client.post(
                 f"{self.host}/api/chat",
                 json=payload,

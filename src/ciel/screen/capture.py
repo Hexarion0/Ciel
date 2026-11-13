@@ -145,6 +145,25 @@ def decode_image(data: bytes) -> Image.Image:
         raise ScreenCaptureError("The desktop returned an unreadable image.") from exc
 
 
+def image_size(data: bytes) -> tuple[int, int]:
+    """A PNG's bounded dimensions from its header, without decoding the pixels.
+
+    For images this process already decoded once: a full decode of each cached 4K
+    capture cost about 0.1 s on every screen request.
+    """
+    if not data or len(data) > MAX_IMAGE_BYTES:
+        raise ScreenCaptureError("The screen image exceeded the supported size.")
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            width, height = image.size
+            if (image.format != "PNG" or not 0 < width <= MAX_IMAGE_SIDE
+                    or not 0 < height <= MAX_IMAGE_SIDE or width * height > MAX_IMAGE_PIXELS):
+                raise ScreenCaptureError("The screen image exceeded the supported dimensions.")
+            return width, height
+    except (OSError, ValueError, UnidentifiedImageError, Image.DecompressionBombError) as exc:
+        raise ScreenCaptureError("The desktop returned an unreadable image.") from exc
+
+
 def encode_image(image: Image.Image) -> bytes:
     """Encode a bounded image as PNG without writing personal pixels to a temp file."""
     if image.width * image.height > MAX_IMAGE_PIXELS:

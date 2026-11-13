@@ -49,9 +49,10 @@ class ConversationCatalog:
     def title(self, handle: str) -> str | None:
         """Ciel's chosen title for a conversation, if it has picked one."""
         try:
-            return self.index.title(self._identity(handle))
+            chosen = self.index.title(self._identity(handle))
         except ValueError:
             return None
+        return self.index.store.redact_forgotten(chosen) if chosen else chosen
 
     def resolve(self, handle: str) -> tuple[str, ...]:
         """Reject unknown or newly revoked handles without exposing session names."""

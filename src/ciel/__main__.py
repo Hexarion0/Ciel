@@ -187,7 +187,9 @@ def main(argv: list[str] | None = None) -> int:
     from ciel.platform.base import AudioInputError
 
     dev_mode = args.mode == "dev"
-    logger = setup_logging("DEBUG" if dev_mode else "INFO", concise=not dev_mode)
+    # CIEL_LOG_LEVEL / CIEL_DEBUG apply too; debug output needs the full (non-concise) format.
+    log_level = "DEBUG" if dev_mode or settings.app.debug else settings.app.log_level
+    logger = setup_logging(log_level, concise=log_level != "DEBUG")
 
     if not dev_mode:
         from ciel.terminal_ui import ConsoleUI
@@ -207,7 +209,7 @@ def main(argv: list[str] | None = None) -> int:
     logger.info(
         "Environment: %s | Log Level: %s",
         settings.app.env,
-        "DEBUG" if dev_mode else "INFO",
+        log_level,
     )
 
     # Initialize and report audio backend status

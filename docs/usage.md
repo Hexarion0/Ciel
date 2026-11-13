@@ -287,9 +287,10 @@ development-day counts calculated from a confirmed start date.
 
 ## GPU speech recognition
 
-The default command recognizer is `small.en` on CUDA with `int8_float16` and beam
-size 5. The installer includes the runtime libraries; existing installations can
-add them with `.venv/bin/python -m pip install -e ".[gpu]"` (Linux).
+With no saved settings, the command recognizer is `small.en` on CUDA with
+`int8_float16` and beam size 5; fresh setup offers CPU recognition instead. The CUDA
+runtime libraries are installed only when setup saves CUDA recognition; existing
+installations can add them with `.venv/bin/python -m pip install -e ".[gpu]"` (Linux).
 This keeps speech recognition independent of the voice-training environment.
 Start with `ciel`, or `./scripts/launch_ciel_gpu.sh`. The launcher adds existing NVIDIA
 library directories from the application or Piper training environment before
@@ -313,19 +314,16 @@ that preparation; activate `.venv` first. The script does not force GPU settings
 
 ## Listening, captions, and interruptions
 
-For the desktop web interface, run `ciel web`. It starts the same voice
-listener and opens `http://127.0.0.1:8765`. The browser displays a voice orb,
-the current reply in a speech bubble, status, and command feedback.
-The bubble stays readable until the next request or until you dismiss it; saved
-conversation history is not displayed on this page. Text messages use the same queue and memory as
-microphone requests. Mute, stop, and end-session
-buttons run `/mute`, `/stop`, and `/exit`. Voice capture and playback use the
-PC's devices; the page does not request the browser's microphone. You can draft
-text while disconnected; runtime actions become available when the page reconnects.
+For the browser app, run `ciel web`; it opens `http://127.0.0.1:8765` with persistent
+chats, the voice orb, and settings. Web mode uses the browser's microphone and speakers,
+not the PC's audio devices, and shares memory with the other channels. See
+[Desktop web interface](../README.md#desktop-web-interface) for everyday use.
 
 Use `--no-open-browser` for manual opening or `--web-port 8766` for a different
-port. Run one Ciel process at a time. The server binds to `127.0.0.1`, so
-this version does not accept connections from a phone or another computer.
+port. Run one Ciel process at a time. Phones on the same private network can connect
+over local HTTPS with `--web-host`, `--web-cert`, and `--web-key`, or through
+**Settings → Connect your Android phone**, then pair with `ciel pair`; see
+[web interface setup](web-interface.md).
 
 Keyboard input is enabled automatically when listening in an interactive terminal.
 Type at the owner-name prompt (for example, `[hexarion]: `) and press Enter;
@@ -380,7 +378,7 @@ being transcribed, STT word count/confidence, quality retries, superseded speech
 and each ambient reply/silence reason. DEBUG logs include raw candidates, including
 background speech. For a single diagnostic run, use `ciel start dev --show-transcripts` to show
 the recognized words at INFO level, including rejected ambient speech. Set
-`SHOW_TRANSCRIPTS=true` in `.env` to make this the default, or override it for a run
+`"show_transcripts": true` in `config.json` to make this the default, or override it for a run
 with `--no-show-transcripts`. Recognizable but low-confidence
 direct speech can prompt a repeat without executing or saving the uncertain text.
 Live AI captions are enabled by default and reveal letters as the voice
@@ -440,8 +438,8 @@ questions that merely contain farewell words do not.
 ## Ambient conversation
 
 Ambient listening is the default for `ciel`, `ciel start`, and the GPU launcher.
-Existing explicit `.env` choices still apply; set `AMBIENT_LISTENING=true` to
-enable it in an older configuration. No additional launch flags are needed.
+An existing explicit choice still applies; set `"ambient_listening": true` in
+`config.json` to enable it in an older configuration. No additional launch flags are needed.
 `--no-ambient` selects wake-word mode for one run. Local Silero VAD captures
 speech without a wake phrase at 16 kHz. Direct addresses are handled locally.
 With the default main-model flow, admitted follow-ups get a reply or clarification;
@@ -518,7 +516,7 @@ details. Low-confidence transcripts do not automatically save personal facts.
 
 Setup keeps existing custom settings and device choices. Press Enter to keep a
 device, enter an index or name to change it, or enter `default` to reset it to the
-system default. Numeric device indices in `.env` are parsed as integers.
+system default. Saved numeric device indices are parsed as integers.
 
 See [release checks](release-checks.md) for automated validation and the
 live microphone checks required before tagging a release.
@@ -558,7 +556,7 @@ gasp at a surprise, or groan at a playful frustration. The voice prompt also enc
 natural pauses and emotional wording that fits the conversation. Effects are optional;
 they do not appear in captions or newly saved dialogue.
 
-Set `TTS_EXPRESSIVENESS=expressive` in `.env` for up to two vocal cues per reply (the
+Set `"tts_expressiveness": "expressive"` in `config.json` for up to two vocal cues per reply (the
 default), `natural` for at most one, or `off` for none. Restart after changing it.
 Piper uses the spoken phrasing but cannot render Turbo's effects. `[giggle]` maps to
 `[chuckle]`; `[moan]` maps to `[groan]`, an approximation. For example, a spoken reply
@@ -577,7 +575,7 @@ Generation continues during playback, so the first sentence can play before the
 whole response finishes. Set `TTS_STREAMING=false` to restore batch replies.
 Playback uses 1,024-frame blocks and requests a 120 ms output buffer so brief
 Python scheduling delays are less likely to interrupt audio. If speech stutters,
-set `TTS_PLAYBACK_LATENCY=0.20` in `.env` and restart CIEL. Larger buffers add
+set `"tts_playback_latency": 0.20` in `config.json` and restart CIEL. Larger buffers add
 some delay before sound starts. Playback warnings report output-buffer underruns;
 this setting affects playback buffering, not model synthesis time or speaking speed.
 Reasoning tags are filtered across token boundaries. Code remains in conversation

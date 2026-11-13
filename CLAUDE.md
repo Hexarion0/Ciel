@@ -26,7 +26,8 @@ Running the app: `python -m ciel start [dev]` (voice; `dev` = verbose logging), 
 the full list. Configuration comes from `config.json` (ordinary settings, template:
 `config.example.json`) and `.env` (secrets only, template: `.env.example`) via pydantic-settings
 in `config.py` and `config_store.py`; `.env` overrides `config.json`. `SecretStr` fields are the
-secrets. Add new options to `.env.example` and regenerate `config.example.json`.
+secrets. Add new options to `config.example.json` and as a commented line in
+`.env.example` (which keeps only secrets active).
 
 ## Testing notes
 

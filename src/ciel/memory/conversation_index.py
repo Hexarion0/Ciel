@@ -164,12 +164,11 @@ class ConversationIndex:
         return (first[0] if first else None), (_timestamp(latest[0]) if latest else 0.0)
 
     def display_title(self, identity: str, first_message: str | None) -> str:
-        """Ciel's chosen title, else the first thing the owner said."""
+        """Ciel's chosen title, else the first thing the owner said; forgotten facts masked."""
         chosen = self.title(identity)
-        if chosen:
-            return chosen
-        fallback = " ".join(first_message.split())[:80] if first_message else "Conversation"
-        return SecretMaskingFilter._redact(fallback)
+        if not chosen:
+            chosen = " ".join(first_message.split())[:80] if first_message else "Conversation"
+        return SecretMaskingFilter._redact(self.store.redact_forgotten(chosen))
 
     def summaries(
         self, scope: tuple[str, ...], *, include_private: bool, current: str = "",

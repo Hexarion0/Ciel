@@ -8,6 +8,7 @@ import httpx
 
 from ciel.config import InternetConfig
 from ciel.logging import SecretMaskingFilter
+from ciel.providers.streaming import pooled_client
 
 _BRAVE_WEB_URL = "https://api.search.brave.com/res/v1/web/search"
 _BRAVE_NEWS_URL = "https://api.search.brave.com/res/v1/news/search"
@@ -72,7 +73,7 @@ def search_api(
         return []
     maximum = min(maximum, 20)
     try:
-        with httpx.Client(timeout=timeout, trust_env=False, follow_redirects=False) as client:
+        with pooled_client(timeout, trust_env=False, follow_redirects=False) as client:
             if config.provider == "brave":
                 response = client.get(
                     _BRAVE_NEWS_URL if news else _BRAVE_WEB_URL,

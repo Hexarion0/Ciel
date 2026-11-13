@@ -4,6 +4,8 @@ import os
 import platform
 import shutil
 import subprocess
+import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -196,6 +198,31 @@ def get_system_snapshot(
     )
 
 
+_PROMPT_SNAPSHOT_SECONDS = 30.0
+_prompt_snapshot_lock = threading.Lock()
+_prompt_snapshot_cache: tuple[float, Settings, SystemSnapshot] | None = None
+
+
+def _prompt_snapshot(cfg: Settings) -> SystemSnapshot:
+    """Background telemetry for the system prompt, refreshed at most every 30 seconds.
+
+    Probing on every turn ran nvidia-smi before each reply, which can take up to its
+    1.5-second timeout on a sleeping GPU. Explicit hardware questions use the
+    system_info action, which always reads fresh values.
+    """
+    global _prompt_snapshot_cache
+    now = time.monotonic()
+    with _prompt_snapshot_lock:
+        cached = _prompt_snapshot_cache
+        if (cached is not None and cached[1] is cfg
+                and now - cached[0] < _PROMPT_SNAPSHOT_SECONDS):
+            return cached[2]
+    snapshot = get_system_snapshot(settings=cfg)
+    with _prompt_snapshot_lock:
+        _prompt_snapshot_cache = (now, cfg, snapshot)
+    return snapshot
+
+
 def generate_system_prompt(
     snapshot: SystemSnapshot | None = None,
     settings: Settings | None = None,
@@ -206,7 +233,7 @@ def generate_system_prompt(
     from ciel.persona import build_advanced_persona, load_persona_preferences
 
     cfg = settings or get_settings()
-    snap = snapshot or get_system_snapshot(settings=cfg)
+    snap = snapshot or _prompt_snapshot(cfg)
     now_str = datetime.now().strftime("%A, %B %d, %Y, %I:%M %p")
 
     gpu_name = snap.gpu.name if snap.gpu.available else "Unknown GPU"

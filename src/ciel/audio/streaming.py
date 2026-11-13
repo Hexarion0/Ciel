@@ -8,7 +8,12 @@ from collections.abc import Callable
 from contextvars import copy_context
 from dataclasses import dataclass
 
-from ciel.audio.speech_events import SpeechEventLimiter, is_stage_direction, strip_speech_events
+from ciel.audio.speech_events import (
+    SpeechEventLimiter,
+    could_be_stage_direction,
+    is_stage_direction,
+    strip_speech_events,
+)
 from ciel.conversation import INTERNAL_REPLY_NOTES
 from ciel.latency import active_trace, mark
 from ciel.logging import get_logger
@@ -63,8 +68,10 @@ class VisibleText:
                 end = self.pending.find("]")
                 if end < 0:
                     if not final:
-                        break
-                    if is_stage_direction(self.pending[1:]):
+                        if could_be_stage_direction(self.pending[1:]):
+                            break
+                        # Otherwise an ordinary "[" (":["): speak it and keep going.
+                    elif is_stage_direction(self.pending[1:]):
                         self.pending = ""
                         break
                 elif is_stage_direction(self.pending[1:end]):

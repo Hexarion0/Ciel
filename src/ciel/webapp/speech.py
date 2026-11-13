@@ -171,6 +171,8 @@ class BrowserSpeech:
         with self._lock:
             self._prune()
             if len(self._jobs) >= MAX_JOBS:
+                self._drop_oldest_finished()
+            if len(self._jobs) >= MAX_JOBS:
                 raise ValueError("Finish or stop the current reply before requesting more audio.")
             handle = secrets.token_urlsafe(18)
             job = _Playback(
@@ -296,6 +298,17 @@ class BrowserSpeech:
     def _prune(self) -> None:
         self._jobs = {h: j for h, j in self._jobs.items() if self._valid(j)}
 
+    def _drop_oldest_finished(self) -> None:
+        """Free one slot from a reply whose audio was fully handed out. Caller holds the lock.
+
+        Finished replies stay for replay until they expire, so without this a hands-free
+        session would lose its voice after MAX_JOBS replies within that window.
+        """
+        for handle, job in self._jobs.items():  # Insertion order: oldest first.
+            if job.done and job.chunks.empty():
+                del self._jobs[handle]
+                return
+
     def list(self, device_id: str, revision: int) -> list[dict]:
         """Advertise only this device's current, unexpired jobs; never old chat audio."""
         with self._lock:
@@ -308,27 +321,48 @@ class BrowserSpeech:
             ]
 
     def chunk(
-        self, handle: str, device_id: str, revision: int, client: str,
+        self, handle: str, device_id: str, revision: int, client: str, *, wait: float = 0.0,
     ) -> AudioChunk | None:
-        """Claim once across tabs and drain one chunk; None means synthesis is still pending."""
-        with self._lock:
-            job = self._jobs.get(handle)
-            if (
-                job is None
-                or not self._valid(job)
-                or job.request.device_id != device_id
-                or job.request.revision != revision
-                or job.client
-                and job.client != client
-            ):
-                raise ValueError("This playback is no longer available.")
-            job.client = client
+        """Claim once across tabs and drain one chunk; None means synthesis is still pending.
+
+        ``wait`` holds the request briefly for a chunk that is nearly ready, so the browser
+        need not sleep and ask again (saving most of its retry delay before the first word).
+        """
+        deadline = time.monotonic() + max(0.0, wait)
+        while True:
+            with self._lock:
+                job = self._jobs.get(handle)
+                if (
+                    job is None
+                    or not self._valid(job)
+                    or job.request.device_id != device_id
+                    or job.request.revision != revision
+                    or job.client
+                    and job.client != client
+                ):
+                    raise ValueError("This playback is no longer available.")
+                job.client = client
+                try:
+                    chunk = job.chunks.get_nowait()
+                except queue.Empty:
+                    if job.done:
+                        raise EOFError(job.error) from None
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        return None
+                    chunk = None
+                else:
+                    break
+            # Wait outside the lock, in short steps so Stop or a switch ends it quickly.
             try:
-                chunk = job.chunks.get_nowait()
+                chunk = job.chunks.get(timeout=min(remaining, 0.05))
             except queue.Empty:
-                if job.done:
-                    raise EOFError(job.error) from None
-                return None
+                continue
+            with self._lock:
+                if handle in self._jobs and self._valid(job):
+                    break
+            raise ValueError("This playback is no longer available.")
+        with self._lock:
             # Browsers play chunks back to back, so audibility extends from the later of now
             # and the end of the audio already handed out.
             self._audible_until = max(self.clock(), self._audible_until) + chunk.seconds

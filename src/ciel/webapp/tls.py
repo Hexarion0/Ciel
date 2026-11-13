@@ -91,6 +91,8 @@ def prepare_local_tls(host: str, directory: Path) -> LocalTLS:
                 "basicConstraints=critical,CA:TRUE,pathlen:0",
                 "-addext",
                 "keyUsage=critical,keyCertSign,cRLSign",
+                "-addext",
+                "subjectKeyIdentifier=hash",
             )
         ca_key.chmod(0o600)
         # A private directory and process umask protect key material while OpenSSL writes it.
@@ -98,10 +100,14 @@ def prepare_local_tls(host: str, directory: Path) -> LocalTLS:
         try:
             csr = directory / "server.csr"
             extensions = directory / "server.ext"
+            # Name the key identifiers: strict verifiers (Python 3.13+ defaults) reject a
+            # leaf without them, and newer OpenSSL omits them when an extfile is given.
             extensions.write_text(
                 "basicConstraints=critical,CA:FALSE\n"
                 "keyUsage=critical,digitalSignature,keyEncipherment\n"
                 "extendedKeyUsage=serverAuth\n"
+                "subjectKeyIdentifier=hash\n"
+                "authorityKeyIdentifier=keyid,issuer\n"
                 f"subjectAltName=IP:{address},IP:127.0.0.1,DNS:localhost\n",
             )
             openssl(

@@ -318,3 +318,38 @@ def test_hidden_chats_can_be_listed_and_restored(store):
     assert sorted(item["title"] for item in restored["conversations"]) == [
         "Bike repair", "Coast trip"]
     assert restored["hidden_count"] == 0
+
+
+def test_forgotten_facts_are_masked_in_conversation_titles(store):
+    from ciel.memory.service import MemoryService
+    from ciel.webapp.conversations import ConversationCatalog
+
+    chat(store, "s1", ("My favorite game is Hades", "Nice pick."))
+    chat(store, "s2", ("I keep replaying Hades", "It is a good one."))
+    index = ConversationIndex(store)
+    index.set_title("s1", "Hades favorite game chat")
+    service = MemoryService(store)
+    if service.handle("My favorite game is Hades.").startswith("Should I remember"):
+        service.handle("yes")
+    assert "forgotten" in service.handle("Forget my favorite game.")
+
+    listed = index.summaries(("s1", "s2"), include_private=True)
+    catalog = ConversationCatalog(store, lambda: ("s1", "s2"))
+    shown = catalog.list()["conversations"]
+    titles = [entry["title"] for entry in listed + shown]
+    titles += [catalog.title(entry["handle"]) or "" for entry in shown]
+    assert titles and not any("Hades" in title for title in titles)
+
+
+def test_one_titler_is_kept_across_turns_for_the_same_router(store):
+    # A new titler per turn reset its retry back-off, so a failing title request could
+    # be retried on every single reply.
+    manager = ConversationManager(store)
+    router = MagicMock()
+    manager.start_memory_lifecycle(router)
+    first = manager._titler
+    manager.start_memory_lifecycle(router)
+    assert manager._titler is first
+    manager.start_memory_lifecycle(MagicMock())
+    assert manager._titler is not first
+    manager.lifecycle.close()

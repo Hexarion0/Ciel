@@ -550,3 +550,22 @@ def test_interruption_between_sentences_does_not_count_previous_audio_twice(spee
     assert interrupted["estimated_spoken_text"] == "First sentence."
     assert interrupted["remaining_text"] == "Second sentence."
     assert interrupted["played_seconds"] == interrupted["duration_seconds"] == 10
+
+
+def test_an_unclosed_bracket_that_is_not_a_stage_direction_does_not_stall_speech():
+    visible = VisibleText()
+    output = ""
+    for piece in ["I like this :[ ", "smiley. ", "Here is ", "more text about the plan, ",
+                  "with enough words to pass any stage direction. ", "And more."]:
+        output += visible.feed(piece)
+    assert "Here is more text" in output  # Released before the reply ended.
+    output += visible.feed("", final=True)
+    assert output == ("I like this :[ smiley. Here is more text about the plan, with enough "
+                      "words to pass any stage direction. And more.")
+
+
+def test_a_long_unclosed_stage_direction_is_still_held_until_it_closes():
+    visible = VisibleText()
+    output = visible.feed("[soft inhale — " + "steady, focused. " * 10)
+    assert output == ""
+    assert visible.feed("] Alright.", final=True).strip() == "Alright."

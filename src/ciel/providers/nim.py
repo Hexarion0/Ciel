@@ -19,7 +19,7 @@ from ciel.providers.base import (
     ToolCallAccumulator,
     require_text_messages,
 )
-from ciel.providers.streaming import streaming_client
+from ciel.providers.streaming import pooled_client, streaming_client
 from ciel.providers.tool_calls import (
     openai_choice,
     openai_tool_calls,
@@ -119,7 +119,7 @@ class NimProvider(LLMProvider):
         if not self.is_configured():
             return False
         try:
-            with httpx.Client(timeout=5.0) as client:
+            with pooled_client(timeout=5.0) as client:
                 res = client.get(f"{self.base_url}/models", headers=self._get_headers())
                 return res.status_code == 200
         except Exception as err:
@@ -196,7 +196,7 @@ class NimProvider(LLMProvider):
         }
         retryable = (429, 500, 502, 503, 504)
         start_t = time.monotonic()
-        with httpx.Client(timeout=self.timeout) as client:
+        with pooled_client(timeout=self.timeout) as client:
 
             def complete(active_model: str, attempts: int) -> dict[str, Any]:
                 request = self._model_payload(payload, active_model)
@@ -337,11 +337,13 @@ class NimProvider(LLMProvider):
             flags=re.IGNORECASE,
         ).strip()
 
-        # 4. Detect Nemotron-style CoT ending with a "Final X:" marker
+        # 4. Detect Nemotron-style CoT ending with a "Final X:" marker on its own line.
+        # Mid-sentence words ("a tough decision for the committee") are not markers.
         final_marker_match = re.search(
-            r"(?:Final\s+(?:decision|call|answer|response|statement)|Decision|Direct\s+response)[:\s]+(.+)$",
+            r"^[ \t>*_#-]*(?:Final\s+(?:decision|call|answer|response|statement)|Decision"
+            r"|Direct\s+response)[ \t*_]*:[ \t]*(.+)\Z",
             cleaned,
-            flags=re.IGNORECASE | re.DOTALL,
+            flags=re.IGNORECASE | re.DOTALL | re.MULTILINE,
         )
         if final_marker_match:
             final_part = final_marker_match.group(1).strip()
@@ -387,6 +389,7 @@ class NimProvider(LLMProvider):
         """Retry transient failures; switch retired models before any text is emitted."""
         cancel_event = kwargs.pop("cancel_event", None)
         allow_model_fallback = kwargs.pop("allow_model_fallback", True)
+        max_attempts = max(1, int(kwargs.pop("max_attempts", 3)))
         if cancel_event is not None and cancel_event.is_set():
             return
         msgs = self.normalize_messages(messages)
@@ -407,7 +410,7 @@ class NimProvider(LLMProvider):
         }
 
         RETRYABLE = (429, 500, 502, 503, 504)
-        MAX_RETRIES = 3
+        MAX_RETRIES = max_attempts
 
         emitted = False
 

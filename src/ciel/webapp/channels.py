@@ -22,6 +22,9 @@ from ciel.webapp.media import MediaStore
 from ciel.webapp.requests import WebRequest
 from ciel.webapp.speech import BrowserSpeech
 
+_CHUNK_WAIT_SECONDS = 0.5
+"""How long an audio request waits for a nearly ready chunk before answering "not yet"."""
+
 
 class WebChannels:
     """Assign identities on the server and recheck them at asynchronous boundaries."""
@@ -99,8 +102,10 @@ class WebChannels:
             handler.command == "POST"
             and path != "/api/pair"
             and handler.device
+            # Bytes: compare_digest raises TypeError for non-ASCII str headers.
             and not secrets.compare_digest(
-                handler.headers.get("X-CSRF-Token", ""), handler.device.csrf
+                handler.headers.get("X-CSRF-Token", "").encode("utf-8", "surrogateescape"),
+                handler.device.csrf.encode(),
             )
         ):
             handler._json(403, {"error": "Refresh this device session and try again."})
@@ -222,6 +227,7 @@ class WebChannels:
                     handler.device.device_id,
                     self.revision(),
                     client,
+                    wait=_CHUNK_WAIT_SECONDS,
                 )
                 if data:
                     # Which caption characters this chunk speaks, for live captions.

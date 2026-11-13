@@ -95,8 +95,9 @@ wake recognition models, plus the selected voice; it does not download Amy for
 every voice choice. Pocket's model is prepared before the setup playback test.
 Settings live in two files: `config.json` holds everything except secrets, and
 `.env` holds only API keys and tokens. Alternatively, copy `config.example.json` to
-`config.json` (and `.env.example` to `.env` for keys) and edit them, then run
-`ciel setup` to prepare its selections. Fresh setup uses CPU Pocket with the CIEL profile
+`config.json` and edit it, copy `.env.example` to `.env` for your keys, then run
+`ciel setup` to prepare its selections. Any setting written in `.env` overrides
+`config.json`, so keep ordinary settings out of it. Fresh setup uses CPU Pocket with the CIEL profile
 (provisional Alba without private references) and offers CPU/`int8` command STT.
 The CUDA option uses `int8_float16`; command STT uses `small.en`, beam size 5, and a
 guarded `medium.en` retry. Ambient listening, speech interruption, and live AI

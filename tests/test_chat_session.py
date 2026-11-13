@@ -271,3 +271,22 @@ def test_verified_web_reply_includes_source_link(session, monkeypatch):
     assert "supports text chat" in answer
     assert source.url in answer
     assert session.conversation.get_recent_turns()[-1].sources[0]["url"] == source.url
+
+
+@pytest.mark.parametrize("settings, expected", [
+    ({}, 60.0),
+    ({"internet_mode": "direct"}, 300.0),
+    ({"exec_enabled": True, "exec_timeout_seconds": 120}, 180.0),
+])
+def test_text_turn_limit_leaves_room_for_direct_web_and_commands(tmp_path, settings, expected):
+    # Direct web turns and shell commands have their own timeouts and no turn-wide clock
+    # in voice; text turns must not cut them off after the plain-chat minute.
+    chat = ChatSession(
+        Settings(_env_file=None, memory_db_path=str(tmp_path / "facts.db"),
+                 ciel_persona_file="", chat_state_path=str(tmp_path / "chat.db"), **settings),
+        channel="telegram", session_id="limit-test", router=RecordingRouter(),
+    )
+    try:
+        assert chat._turn_limit() == expected
+    finally:
+        chat.close()

@@ -71,7 +71,7 @@ def test_fetch_page_reports_status_and_bounds_size(monkeypatch):
         return httpx.Response(503, text="busy")
 
     monkeypatch.setattr("ciel.scraped_search.httpx.Client", lambda **kwargs: _REAL_CLIENT(
-        transport=httpx.MockTransport(handler), **kwargs,
+        **{**kwargs, "transport": httpx.MockTransport(handler)},
     ))
     status, html = scraped_search.fetch_page("Test", "https://search.example/", {"q": "x"}, 2)
 

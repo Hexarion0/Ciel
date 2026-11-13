@@ -11,7 +11,7 @@ from ciel.providers.openrouter import OpenRouterProvider
 def _client(monkeypatch):
     client = MagicMock()
     client.__enter__.return_value = client
-    monkeypatch.setattr("ciel.providers.openrouter.httpx.Client", lambda **_kwargs: client)
+    monkeypatch.setattr("httpx.Client", lambda **_kwargs: client)
     return client
 
 

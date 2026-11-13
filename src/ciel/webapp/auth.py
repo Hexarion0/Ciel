@@ -20,6 +20,8 @@ PAIRED_DEVICE_LIFETIME = 30 * 24 * 3600
 """Paired devices stay connected until this long passes without use."""
 BROWSER_SESSION_LIFETIME = 12 * 3600
 """Unpaired open home-network sessions stay in memory only, for this long."""
+MAX_BROWSER_SESSIONS = 256
+"""Unpaired sessions kept at once; the oldest go first. Paired devices are not counted."""
 _RENEWAL_SAVE_INTERVAL = 24 * 3600
 _RETRY_AFTER_FAILED_SAVE = 300
 _DIGEST = re.compile(r"[0-9a-f]{64}")
@@ -111,6 +113,8 @@ class DeviceAuth:
     def create_session(self, *, paired: bool = False) -> DeviceSession:
         """Allocate a browser identity; only paired devices are kept across restarts."""
         with self._lock:
+            if not paired:
+                self._bound_browser_sessions()
             token = secrets.token_urlsafe(32)
             lifetime = PAIRED_DEVICE_LIFETIME if paired else BROWSER_SESSION_LIFETIME
             device = DeviceSession(
@@ -119,6 +123,22 @@ class DeviceAuth:
             )
             self._devices[_digest(token)] = device
             return replace(device, token=token)
+
+    def _bound_browser_sessions(self) -> None:
+        """Drop expired unpaired sessions, then the oldest beyond the cap. Caller holds the lock.
+
+        Open home-network mode creates one per cookieless request, and expired ones were
+        only removed when their own cookie came back.
+        """
+        now = self.clock()
+        browser = [(device.expires_at, digest) for digest, device in self._devices.items()
+                   if not device.paired]
+        stale = {digest for expires_at, digest in browser if expires_at <= now}
+        live = sorted(item for item in browser if item[1] not in stale)
+        stale.update(digest for _expires, digest in live[:max(0, len(live)
+                                                               - MAX_BROWSER_SESSIONS + 1)])
+        for digest in stale:
+            del self._devices[digest]
 
     def authenticate(self, cookie: str) -> DeviceSession | None:
         """Authenticate by token digest; each use restarts a paired device's idle window."""

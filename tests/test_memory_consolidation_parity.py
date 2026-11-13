@@ -523,3 +523,21 @@ def test_reset_erases_only_its_observations_signals_and_related_review_plans(sto
     assert store.get_memory(saved.id).content == saved.content
     assert daily_before == {item.path: item.text for item in store.workspace.documents()
                             if item.path.startswith("memory/")}
+
+
+def test_recall_without_daily_note_hits_skips_the_candidate_scan(store, monkeypatch):
+    # The automatic per-turn search returns MEMORY.md/USER.md hits, which can never
+    # reinforce a daily-note candidate; scanning every candidate cost ~185 ms a turn.
+    lifecycle = MemoryLifecycle(store, clock=lambda: NOW)
+    capture(lifecycle)
+    lifecycle.flush()
+    scans = []
+    original = lifecycle._candidates
+    monkeypatch.setattr(lifecycle, "_candidates",
+                        lambda *args, **kwargs: scans.append(1) or original(*args, **kwargs))
+    hit = {"path": "MEMORY.md", "start_line": 1, "end_line": 3, "snippet": NOTE, "score": 1.0}
+
+    assert lifecycle.record_recall([hit], "Cedar") == 0
+    assert scans == []
+    assert recalled(lifecycle, queries=1)
+    assert scans

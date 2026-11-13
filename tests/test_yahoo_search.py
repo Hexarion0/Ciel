@@ -54,7 +54,7 @@ _REAL_CLIENT = httpx.Client
 
 def _serve(monkeypatch, handler):
     monkeypatch.setattr("ciel.scraped_search.httpx.Client", lambda **kwargs: _REAL_CLIENT(
-        transport=httpx.MockTransport(handler), **kwargs,
+        **{**kwargs, "transport": httpx.MockTransport(handler)},
     ))
 
 

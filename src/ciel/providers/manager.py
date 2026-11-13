@@ -126,6 +126,10 @@ class ProviderManager:
                        if provider_name == "nim" and nim_reasoning is not None else {}),
                     **({"allow_model_fallback": False}
                        if provider_name == "nim" and not allow_model_fallback else {}),
+                    # With another provider ready, fail over instead of sleeping on retries.
+                    **({"max_attempts": 1}
+                       if provider_name == "nim" and self._has_fallback_after(
+                           provider_name, order, allowed_providers) else {}),
                     **kwargs,
                 )
                 if not isinstance(response.content, str) or not (
@@ -150,6 +154,14 @@ class ProviderManager:
         error_msg = f"All AI providers in fallback chain failed. Last error: {last_error}"
         logger.error(error_msg)
         raise RuntimeError(error_msg) from last_error
+
+    def _has_fallback_after(
+        self, name: str, order: list[str], allowed: tuple[str, ...] | None,
+    ) -> bool:
+        """Whether a configured, permitted provider follows ``name`` in this call's order."""
+        later = order[order.index(name) + 1:] if name in order else []
+        return any((allowed is None or other in allowed) and self.providers[other].is_configured()
+                   for other in later)
 
     def stream_with_fallback(
         self,
@@ -198,6 +210,10 @@ class ProviderManager:
                        if provider_name == "nim" and nim_reasoning is not None else {}),
                     **({"allow_model_fallback": False}
                        if provider_name == "nim" and not allow_model_fallback else {}),
+                    # With another provider ready, fail over instead of sleeping on retries.
+                    **({"max_attempts": 1}
+                       if provider_name == "nim" and self._has_fallback_after(
+                           provider_name, order, allowed_providers) else {}),
                     **kwargs,
                 ):
                     if cancel_event is not None and cancel_event.is_set():

@@ -278,3 +278,89 @@ def test_first_served_chunk_logs_request_timing_without_text(caplog):
               if "Browser reply audio" in record.getMessage()]
     assert len(timing) == 1 and trace.turn_id in timing[0]
     assert "Private" not in caplog.text
+
+
+def test_a_long_hands_free_session_keeps_speaking_after_many_replies():
+    # Finished replies stay listed for replay, but must not block the next reply's audio.
+    from ciel.webapp.speech import MAX_JOBS, BrowserSpeech
+
+    class TTS:
+        def synthesize_stream(self, text, **kwargs):
+            yield np.zeros(160, dtype=np.float32), 16000
+
+    service = BrowserSpeech(TTS())
+    jobs = []
+    for turn in range(MAX_JOBS + 4):
+        request = WebRequest(f"r{turn}", "phone", "chat", 1, "voice", "hello")
+        job = service.speak(f"Reply {turn}.", request, cancel_event=threading.Event(),
+                            current=lambda: True)
+        assert drain(service, job)
+        jobs.append(job)
+
+    # The most recent finished reply can still be replayed.
+    assert service.replay(jobs[-1], "phone", 1)
+
+
+def test_unfinished_replies_still_limit_queued_audio():
+    from ciel.webapp.speech import MAX_JOBS, BrowserSpeech
+
+    release = threading.Event()
+
+    class SlowTTS:
+        def synthesize_stream(self, text, **kwargs):
+            assert release.wait(5)
+            yield np.zeros(160, dtype=np.float32), 16000
+
+    service = BrowserSpeech(SlowTTS())
+    try:
+        for turn in range(MAX_JOBS):
+            request = WebRequest(f"r{turn}", "phone", "chat", 1, "voice", "hello")
+            service.speak("Reply.", request, cancel_event=threading.Event(),
+                          current=lambda: True)
+        request = WebRequest("extra", "phone", "chat", 1, "voice", "hello")
+        with pytest.raises(ValueError):
+            service.speak("One more.", request, cancel_event=threading.Event(),
+                          current=lambda: True)
+    finally:
+        release.set()
+
+
+def test_a_chunk_that_arrives_shortly_is_returned_by_the_same_request():
+    # Returning "not ready" made the browser wait 150 ms before asking again.
+    from ciel.webapp.speech import BrowserSpeech
+
+    release = threading.Event()
+
+    class TTS:
+        def synthesize_stream(self, text, **kwargs):
+            assert release.wait(2)
+            yield np.zeros(160, dtype=np.float32), 16000
+
+    service = BrowserSpeech(TTS())
+    request = WebRequest("r", "phone", "chat", 1, "voice", "hello")
+    job = service.speak("Hello.", request, cancel_event=threading.Event(), current=lambda: True)
+    assert service.chunk(job, "phone", 1, "tab-one") is None  # No wait by default.
+    threading.Timer(0.1, release.set).start()
+    started = time.monotonic()
+    chunk = service.chunk(job, "phone", 1, "tab-one", wait=1.0)
+    assert chunk is not None and chunk.startswith(b"RIFF")
+    assert time.monotonic() - started < 0.9
+
+
+def test_stop_during_a_chunk_wait_ends_the_wait():
+    from ciel.webapp.speech import BrowserSpeech
+
+    class Silent:
+        def synthesize_stream(self, text, **kwargs):
+            time.sleep(2)
+            return
+            yield
+
+    service = BrowserSpeech(Silent())
+    request = WebRequest("r", "phone", "chat", 1, "voice", "hello")
+    job = service.speak("Hello.", request, cancel_event=threading.Event(), current=lambda: True)
+    threading.Timer(0.1, service.cancel).start()
+    started = time.monotonic()
+    with pytest.raises(ValueError):
+        service.chunk(job, "phone", 1, "tab-one", wait=1.0)
+    assert time.monotonic() - started < 0.5

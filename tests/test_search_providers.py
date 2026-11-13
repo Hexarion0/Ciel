@@ -27,8 +27,8 @@ def api_transport(monkeypatch):
         return httpx.Response(status, request=request, **kwargs)
 
     def client(**kwargs):
-        options.append(kwargs)
-        return original_client(**kwargs, transport=httpx.MockTransport(respond))
+        options.append({key: value for key, value in kwargs.items() if key != "transport"})
+        return original_client(**{**kwargs, "transport": httpx.MockTransport(respond)})
 
     monkeypatch.setattr("ciel.search_providers.httpx.Client", client)
     return requests, options, responses

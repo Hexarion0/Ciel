@@ -257,6 +257,11 @@ class ChatterboxTurboWorker:
             if late is not None and not late.get("cancelled"):
                 self._remove_audio_file(late)
 
+    def is_alive(self) -> bool:
+        """Whether the model process is running and can take another request."""
+        process = self._process
+        return not self._closed and process is not None and process.poll() is None
+
     def close(self, *, force: bool = False) -> None:
         """Ask the persistent model process to exit, then bound shutdown time."""
         with self._lifecycle_lock:
@@ -271,8 +276,12 @@ class ChatterboxTurboWorker:
                         process.stdin.flush()
                 except OSError:
                     pass
+        if force:
+            # A forced close never asked the worker to exit, so waiting first only
+            # delays the fallback voice by the whole timeout.
+            process.terminate()
         try:
-            process.wait(timeout=3.0)
+            process.wait(timeout=1.0 if force else 3.0)
         except subprocess.TimeoutExpired:
             process.terminate()
             try:

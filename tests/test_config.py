@@ -1,6 +1,7 @@
 """Tests for centralized configuration and secret handling."""
 
 import os
+import re
 from pathlib import Path
 from unittest.mock import patch
 
@@ -21,6 +22,30 @@ from ciel.config import (
 )
 
 
+def documented_env(tmp_path):
+    """The shipped templates as a fresh install would copy them, isolated from config.json."""
+    root = Path(__file__).resolve().parents[1]
+    (tmp_path / ".env").write_text((root / ".env.example").read_text(encoding="utf-8"))
+    (tmp_path / "config.json").write_text(
+        (root / "config.example.json").read_text(encoding="utf-8"),
+    )
+    return tmp_path / ".env"
+
+
+def test_env_example_sets_only_secrets_and_documents_known_options():
+    # A copied .env.example must not override config.json with non-secret defaults.
+    from ciel.config_store import secret_names
+
+    root = Path(__file__).resolve().parents[1]
+    lines = (root / ".env.example").read_text(encoding="utf-8").splitlines()
+    active = {line.split("=", 1)[0] for line in lines if re.match(r"^[A-Z][A-Z0-9_]*=", line)}
+    documented = {match.group(1) for line in lines
+                  if (match := re.match(r"^# ([A-Z][A-Z0-9_]*)=", line))}
+    fields = {name.upper() for name in Settings.model_fields}
+    assert active == set(secret_names())
+    assert documented and documented <= fields
+
+
 def test_default_settings():
     """Verify default settings values when no environment variables are set."""
     settings = Settings(
@@ -36,8 +61,8 @@ def test_default_settings():
     assert settings.providers.nim_api_key is None
 
 
-def test_memory_workspace_defaults_match_documented_settings():
-    example = Path(__file__).resolve().parents[1] / ".env.example"
+def test_memory_workspace_defaults_match_documented_settings(tmp_path):
+    example = documented_env(tmp_path)
     with patch.dict(os.environ, {}, clear=True):
         configurations = (MemoryConfig(), Settings(_env_file=None).memory,
                           Settings(_env_file=example).memory)
@@ -135,8 +160,8 @@ def test_legacy_voice_only_environment_keeps_piper(tmp_path):
     assert (audio.tts_engine, audio.tts_voice) == ("auto", "en_US-custom-medium")
 
 
-def test_example_configuration_starts_with_cpu_pocket():
-    example = Path(__file__).resolve().parents[1] / ".env.example"
+def test_example_configuration_starts_with_cpu_pocket(tmp_path):
+    example = documented_env(tmp_path)
     with patch.dict(os.environ, {}, clear=True):
         settings = Settings(_env_file=example)
     audio = settings.audio
@@ -152,9 +177,9 @@ def test_example_configuration_starts_with_cpu_pocket():
     assert audio.stt_retry_model == "medium.en"
 
 
-def test_fresh_nim_configuration_uses_super_and_ultra_consistently():
+def test_fresh_nim_configuration_uses_super_and_ultra_consistently(tmp_path):
     """Direct settings and the example retain the intended conversation model sizes."""
-    example = Path(__file__).resolve().parents[1] / ".env.example"
+    example = documented_env(tmp_path)
     with patch.dict(os.environ, {}, clear=True):
         fresh = Settings(_env_file=None)
         documented = Settings(_env_file=example)
@@ -416,9 +441,9 @@ def test_selected_search_provider_and_secret_keys_reach_structured_config(tmp_pa
         assert "synthetic-tavily-key" not in configuration.model_dump_json()
 
 
-def test_example_configuration_uses_duckduckgo_without_a_key():
+def test_example_configuration_uses_duckduckgo_without_a_key(tmp_path):
     """Fresh installs use the anonymous search service without enabling saved paid keys."""
-    example = Path(__file__).resolve().parents[1] / ".env.example"
+    example = documented_env(tmp_path)
     with patch.dict(os.environ, {}, clear=True):
         internet = Settings(_env_file=example).internet
         saved_keys = Settings(
@@ -498,3 +523,21 @@ def test_controller_configuration_from_environment():
 def test_controller_rejects_unbounded_settings(options):
     with pytest.raises(ValidationError):
         Settings(_env_file=None, **options)
+
+
+@pytest.mark.parametrize("value, expected", [
+    ("127.0.0.1:11434", "http://127.0.0.1:11434"),
+    ("0.0.0.0", "http://0.0.0.0:11434"),
+    ("localhost", "http://localhost:11434"),
+    ("::1", "http://[::1]:11434"),
+    ("http://gpu-box:8080/", "http://gpu-box:8080"),
+    ("https://ollama.example", "https://ollama.example"),
+])
+def test_ollama_host_accepts_ollamas_own_host_forms(monkeypatch, value, expected):
+    # Ollama documents OLLAMA_HOST without a scheme, and settings read that variable.
+    from ciel.config import Settings
+
+    monkeypatch.setenv("OLLAMA_HOST", value)
+    settings = Settings(_env_file=None)
+    assert settings.ollama_host == expected
+    assert settings.providers.ollama_host == expected

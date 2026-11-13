@@ -350,3 +350,25 @@ def test_private_namespace_stays_private_without_a_provenance_registry(tmp_path)
     assert workspace.documents()[0].local_only is True
     with pytest.raises(MemoryWorkspaceError):
         workspace.get("memory/private/owner.md")
+
+
+def test_duplicate_guard_records_stay_bounded_and_recent_ones_still_dedupe(tmp_path):
+    # Every note adds a duplicate-guard record. Unbounded, the registry outgrew the
+    # document size limit after about 9,500 notes and then every memory read failed.
+    import json
+
+    from ciel.memory import workspace as workspace_module
+
+    workspace = MemoryWorkspace(tmp_path / "notes")
+    total = workspace_module.MAX_ENTRY_RECORDS + 50
+    for number in range(total):
+        workspace.append_daily(f"Observation {number}", entry_id=f"entry-{number}",
+                               now=datetime(2026, 11, 1, tzinfo=timezone.utc))
+    registry = json.loads((tmp_path / "notes" / ".ciel-memory.json").read_text())
+    assert len(registry["entries"]) == workspace_module.MAX_ENTRY_RECORDS
+
+    note = tmp_path / "notes" / "memory" / "2026-11-01.md"
+    before = note.read_text()
+    workspace.append_daily("Observation repeated", entry_id=f"entry-{total - 1}",
+                           now=datetime(2026, 11, 1, tzinfo=timezone.utc))
+    assert note.read_text() == before

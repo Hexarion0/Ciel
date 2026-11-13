@@ -35,7 +35,7 @@ def fake_ollama(monkeypatch, vectors, *, transform=None):
 
     def client(**kwargs):
         options.append(kwargs)
-        return original_client(transport=httpx.MockTransport(handler), **kwargs)
+        return original_client(**{**kwargs, "transport": httpx.MockTransport(handler)})
 
     monkeypatch.setattr("ciel.memory.semantic.httpx.Client", client)
     return requests, options

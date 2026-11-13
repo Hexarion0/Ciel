@@ -373,7 +373,7 @@ def test_nim_http_fallback_policy(monkeypatch, streaming, status):
 
     client_class = httpx.Client
     monkeypatch.setattr("httpx.Client", lambda **kw: client_class(
-        transport=httpx.MockTransport(handle), **kw,
+        **{**kw, "transport": httpx.MockTransport(handle)},
     ))
     sleeper = MagicMock()
     monkeypatch.setattr("ciel.providers.nim.time.sleep", sleeper)
@@ -406,7 +406,7 @@ def test_nim_failed_stream_backup_is_attempted_only_once(monkeypatch):
 
     client_class = httpx.Client
     monkeypatch.setattr("httpx.Client", lambda **kw: client_class(
-        transport=httpx.MockTransport(handle), **kw,
+        **{**kw, "transport": httpx.MockTransport(handle)},
     ))
     provider = NimProvider(api_key="test", model="retired-model")
     provider.fallback_model = "backup-model"
@@ -430,7 +430,7 @@ def test_nim_canceled_retirement_response_does_not_try_backup(monkeypatch):
 
     client_class = httpx.Client
     monkeypatch.setattr("httpx.Client", lambda **kw: client_class(
-        transport=httpx.MockTransport(handle), **kw,
+        **{**kw, "transport": httpx.MockTransport(handle)},
     ))
     provider = NimProvider(api_key="test", model="retired-model")
     assert list(provider.stream("Hello", cancel_event=cancel)) == []
@@ -515,7 +515,7 @@ def test_controller_nim_never_falls_back_to_heavy_model(monkeypatch, streaming):
 
     client_class = httpx.Client
     monkeypatch.setattr("httpx.Client", lambda **kw: client_class(
-        transport=httpx.MockTransport(handle), **kw,
+        **{**kw, "transport": httpx.MockTransport(handle)},
     ))
     with pytest.raises(httpx.HTTPStatusError):
         if streaming:
@@ -547,7 +547,7 @@ def test_nim_identical_primary_and_backup_do_not_repeat_missing_model(
 
     client_class = httpx.Client
     monkeypatch.setattr("httpx.Client", lambda **kw: client_class(
-        transport=httpx.MockTransport(handle), **kw,
+        **{**kw, "transport": httpx.MockTransport(handle)},
     ))
     with pytest.raises(httpx.HTTPStatusError):
         if streaming:
@@ -608,7 +608,7 @@ def test_controller_fallback_uses_provider_default_without_nim_options(monkeypat
 
     client_class = httpx.Client
     monkeypatch.setattr("httpx.Client", lambda **kw: client_class(
-        transport=httpx.MockTransport(handle), **kw,
+        **{**kw, "transport": httpx.MockTransport(handle)},
     ))
     manager = ProviderManager(fallback_chain=["nim", "groq"])
     primary = MagicMock()
@@ -693,7 +693,7 @@ def test_nim_timeout_before_answer_tries_configured_backup(monkeypatch, streamin
 
     client_class = httpx.Client
     monkeypatch.setattr('httpx.Client', lambda **kwargs: client_class(
-        transport=httpx.MockTransport(handle), **kwargs,
+        **{**kwargs, "transport": httpx.MockTransport(handle)},
     ))
     provider = NimProvider(api_key='test', model='slow-primary')
     provider.fallback_model = 'selected-backup'
@@ -724,7 +724,7 @@ def test_nim_timeout_after_partial_reply_never_starts_another_model(monkeypatch,
 
     client_class = httpx.Client
     monkeypatch.setattr('httpx.Client', lambda **kwargs: client_class(
-        transport=httpx.MockTransport(handle), **kwargs,
+        **{**kwargs, "transport": httpx.MockTransport(handle)},
     ))
     provider = NimProvider(api_key='test', model='primary')
     provider.fallback_model = 'backup'
@@ -747,7 +747,7 @@ def test_nim_timeout_without_distinct_permitted_backup_is_not_retried(monkeypatc
 
     client_class = httpx.Client
     monkeypatch.setattr('httpx.Client', lambda **kwargs: client_class(
-        transport=httpx.MockTransport(handle), **kwargs,
+        **{**kwargs, "transport": httpx.MockTransport(handle)},
     ))
     provider = NimProvider(api_key='test', model='primary')
     provider.fallback_model = 'backup'
@@ -774,9 +774,57 @@ def test_nim_cancellation_during_timeout_does_not_start_backup(monkeypatch):
 
     client_class = httpx.Client
     monkeypatch.setattr('httpx.Client', lambda **kwargs: client_class(
-        transport=httpx.MockTransport(handle), **kwargs,
+        **{**kwargs, "transport": httpx.MockTransport(handle)},
     ))
     provider = NimProvider(api_key='test', model='primary')
     provider.fallback_model = 'backup'
     assert list(provider.stream('Hello', cancel_event=canceled)) == []
     assert models == ['primary']
+
+
+@pytest.mark.parametrize("content", [
+    "It was a tough decision for the committee, but they agreed.",
+    "I made a quick decision: tea.",
+    "The final answer is 42, and here is why.",
+])
+def test_nim_cleanup_keeps_prose_that_mentions_decisions_and_answers(content):
+    assert NimProvider.clean_reasoning(content) == content
+
+
+def test_nim_cleanup_still_takes_a_final_marker_on_its_own_line():
+    assert NimProvider.clean_reasoning("Let me weigh it up.\nFinal answer: Take the train.") == (
+        "Take the train."
+    )
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_nim_fails_over_without_retry_sleeps_when_another_provider_is_ready(
+    monkeypatch, streaming,
+):
+    # A rate-limited NIM retried twice with 0.5 s and 1 s sleeps before the configured
+    # next provider was tried, delaying the first spoken word.
+    import httpx
+
+    def handle(request):
+        return httpx.Response(429)
+
+    client_class = httpx.Client
+    monkeypatch.setattr("httpx.Client", lambda **kw: client_class(
+        **{**kw, "transport": httpx.MockTransport(handle)},
+    ))
+    sleeper = MagicMock()
+    monkeypatch.setattr("ciel.providers.nim.time.sleep", sleeper)
+    manager = ProviderManager(fallback_chain=["nim", "groq"])
+    manager.register_provider("nim", NimProvider(api_key="test", model="primary"))
+    backup = MagicMock()
+    backup.is_configured.return_value = True
+    backup.send.return_value = LLMResponse("From Groq.", "groq", "llama")
+    backup.stream.return_value = iter([LLMStreamChunk("From Groq.", "groq", "llama")])
+    manager.register_provider("groq", backup)
+
+    if streaming:
+        text = "".join(chunk.delta for chunk in manager.stream_with_fallback("Hello"))
+    else:
+        text = manager.send_with_fallback("Hello").content
+    assert text == "From Groq."
+    sleeper.assert_not_called()

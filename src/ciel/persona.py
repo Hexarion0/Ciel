@@ -22,6 +22,30 @@ _SELF_PERSONA_END = "# --- CIEL managed persona preferences: end ---"
 _SETUP_PERSONA_START = "# --- CIEL setup persona: start ---"
 _SETUP_PERSONA_END = "# --- CIEL setup persona: end ---"
 SETUP_PERSONA_MAX_CHARS = 4000
+# A style description: "more playful", "a bit warmer", "like a pirate", "use shorter replies".
+_STYLE_DESCRIPTION = re.compile(
+    r"^(?:(?:a little|a bit|much|slightly|very|more|less)\s+)*"
+    r"(?:curious|playful|calm|calmer|warm|warmer|friendly|friendlier|gentle|gentler|"
+    r"patient|formal|informal|casual|concise|brief|shorter|longer|direct|honest|"
+    r"thoughtful|supportive|witty|funny|serious|expressive|natural|naturally|plainspoken|"
+    r"affectionate|confident|professional|relaxed|energetic|empathetic|sarcastic|"
+    r"humorous|talkative|quiet|reserved|robotic|verbose|wordy|human|polite|blunt|"
+    r"cheerful|kind|kinder|nice|nicer|chill|upbeat|encouraging|enthusiastic|chatty|"
+    r"detailed|technical|simply|clearly|slowly)\b|"
+    r"^like\s+(?:a|an)\s+\w|"
+    r"^(?:use|give|keep)\s+(?:your\s+)?"
+    r"(?:shorter|longer|brief|concise|natural|simple|plain)\s+"
+    r"(?:replies|responses|answers|language|wording|sentences)\b",
+    re.I,
+)
+# "Be honest, is this a good idea?" asks a question; it does not describe a style.
+_QUESTION_SHAPE = re.compile(
+    r"\b(?:what|why|when|where|who|how|which)\b"
+    r"|\b(?:is|are|was|were|do|does|did|should|shall|can|could|would|will)\s+"
+    r"(?:this|that|it|i|we|you|they|he|she|there)\b",
+    re.I,
+)
+_STANDING_REQUEST = re.compile(r"\b(?:from now on|going forward|from here on)\b", re.I)
 
 
 def parse_persona_request(text: str, *, pending: bool = False) -> tuple[str, str] | None:
@@ -48,6 +72,14 @@ def parse_persona_request(text: str, *, pending: bool = False) -> tuple[str, str
         clean,
         re.I,
     )
+    if match:
+        # "Can you talk about Rome?" or "be at the meeting" asks for something else.
+        # Only a style description, or an explicit "from now on", changes the style.
+        described = match.group(1).strip()
+        if _QUESTION_SHAPE.search(described) or not (
+            _STYLE_DESCRIPTION.match(described) or _STANDING_REQUEST.search(clean)
+        ):
+            return None
     if not match:
         match = re.fullmatch(
             r"(?:please\s+)?(?:change|update|adjust) your "
@@ -72,18 +104,7 @@ def parse_persona_request(text: str, *, pending: bool = False) -> tuple[str, str
             return None
         # A pending prompt authorizes style descriptions, not arbitrary next turns.
         # Other phrasing can still use the explicit "change your style to ..." form.
-        if not re.match(
-            r"^(?:(?:a little|a bit|much|slightly|very|more|less)\s+)*"
-            r"(?:curious|playful|calm|calmer|warm|warmer|friendly|friendlier|gentle|gentler|"
-            r"patient|formal|informal|casual|concise|brief|shorter|longer|direct|honest|"
-            r"thoughtful|supportive|witty|funny|serious|expressive|natural|plainspoken|"
-            r"affectionate|confident|professional|relaxed|energetic|empathetic|sarcastic|"
-            r"humorous|talkative|quiet|reserved)\b|"
-            r"^(?:use|give|keep)\s+(?:your\s+)?"
-            r"(?:shorter|longer|brief|concise|natural|simple|plain)\s+"
-            r"(?:replies|responses|answers|language|wording|sentences)\b",
-            preference, re.I,
-        ):
+        if not _STYLE_DESCRIPTION.match(preference):
             return None
     else:
         preference = match.group(1).strip()

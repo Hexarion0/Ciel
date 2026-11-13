@@ -58,12 +58,20 @@ _DESTRUCTIVE = re.compile(
     r"|:\(\)\s*\{[^}]*\};\s*:",
     re.I,
 )
-# Paths whose recursive removal, chmod, or chown is never routine.
+# Paths whose recursive removal, chmod, or chown is never routine. Commands start in the
+# home folder, so "*", ".", "..", and ".*" there mean all of it.
 _PROTECTED = re.compile(
     r"^(?:/|/\*|~|~/|~/\*|~/\..*|\$\{?HOME\}?(?:/|/\*|/\..*)?|/home(?:/[^/]+)?/?\*?"
     r"|/home/[^/]+/\..*|/(?:etc|usr|boot|var|bin|sbin|lib|lib64|opt|root|srv|dev|proc|sys)"
-    r"(?:/.*)?)$",
+    r"(?:/.*)?|\*|\.\.?/?\*?)$",
 )
+# du's own flags; others, such as --files0-from or -X, read a file named in the command.
+_DU_SHORT_FLAGS = re.compile(r"-[0abcDhHklLmPSsx]*(?:d\d*)?")
+_DU_LONG_FLAGS = frozenset({
+    "--all", "--apparent-size", "--bytes", "--total", "--dereference-args",
+    "--human-readable", "--inodes", "--dereference", "--count-links", "--no-dereference",
+    "--separate-dirs", "--si", "--summarize", "--one-file-system", "--null",
+})
 _SHELLS = {"sh", "bash", "zsh", "dash", "ksh", "fish"}
 _NETWORK = re.compile(r"\b(?:curl|wget|git\s+(?:clone|pull|fetch)|aria2c|scp|rsync|http)\b",
                       re.I)
@@ -129,10 +137,37 @@ def is_approval(text: str, *, spoken: bool = False) -> bool:
 
 
 def _words(command: str) -> list[str]:
+    """Shell words, with ; & | ( ) < > and backticks split off even without spaces.
+
+    Plain shlex.split keeps "hi;rm" as one word, which hid "echo hi;rm -rf ~".
+    """
+    lexer = shlex.shlex(command.replace("`", " "), posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
     try:
-        return shlex.split(command, comments=False)
+        return list(lexer)
     except ValueError:
-        return command.split()
+        return [word for word in re.split(r"[\s;&|()<>`]+", command) if word]
+
+
+def _du_arguments_safe(arguments: list[str]) -> bool:
+    """Only du flags that print sizes; paths are fine, flags that read files are not."""
+    depth_value = False
+    for item in arguments:
+        if depth_value:
+            if not item.isdigit():
+                return False
+            depth_value = False
+        elif item.startswith("--"):
+            name, _, value = item.partition("=")
+            if not (name == "--max-depth" and value.isdigit()
+                    or name in _DU_LONG_FLAGS and not value or item == "--"):
+                return False
+        elif item.startswith("-") and item != "-":
+            if not _DU_SHORT_FLAGS.fullmatch(item):
+                return False
+            depth_value = item.endswith("d")
+    return not depth_value
 
 
 def is_destructive(command: str, depth: int = 0) -> bool:
@@ -172,6 +207,8 @@ def is_safe_listed(command: str) -> bool:
         return False
     if not words or words[0] not in SAFE_COMMANDS or _SHELL_SYNTAX.search(command):
         return False
+    if words[0] == "du":
+        return _du_arguments_safe(words[1:])
     allowed = _SAFE_ARGUMENTS.get(words[0])
     return allowed is None or tuple(words[1:]) in allowed
 

@@ -172,7 +172,9 @@ def screen_scope(conversation: Any) -> tuple[tuple[str, int], ...]:
 
 def _png(image: Image.Image) -> bytes:
     output = io.BytesIO()
-    image.convert("RGB").save(output, format="PNG", optimize=True)
+    # optimize=True tries every filter and nearly doubled encode time on a 4K screen
+    # for a few percent smaller files; the 8 MB bound below still applies.
+    image.convert("RGB").save(output, format="PNG")
     return output.getvalue()
 
 

@@ -69,7 +69,7 @@ def mock_interview_http(monkeypatch):
 
     def client(**kwargs):
         timeouts.append(kwargs["timeout"])
-        return client_class(transport=httpx.MockTransport(handle), **kwargs)
+        return client_class(**{**kwargs, "transport": httpx.MockTransport(handle)})
 
     monkeypatch.setattr(httpx, "Client", client)
 

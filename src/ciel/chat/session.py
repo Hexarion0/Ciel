@@ -45,6 +45,9 @@ from ciel.web_answers import web_answer_messages
 
 logger = get_logger("chat.session")
 REQUEST_TIMEOUT_SECONDS = 60.0
+DIRECT_WEB_TURN_SECONDS = 300.0
+"""Direct web turns have no turn-wide clock (each search or read has its own timeout);
+this only stops a turn that has stalled outright."""
 TEXT_RESPONSE_MAX_TOKENS = 4096
 _OVERRIDE = re.compile(r"^/(?:fast|strong|deep)\s+", re.I)
 _REASONING = re.compile(r"^/reasoning(?:\s|$)", re.I)
@@ -337,6 +340,16 @@ class ChatSession:
         """Keep a native visual call within the owner's actual visual task."""
         return self.screen.resolve_native(query)
 
+    def _turn_limit(self) -> float:
+        """Outer bound for one text turn, leaving room for direct web and shell commands."""
+        limit = REQUEST_TIMEOUT_SECONDS
+        if self.settings.internet.mode == "direct":
+            limit = max(limit, DIRECT_WEB_TURN_SECONDS)
+        exec_tool = self.settings.exec_tool
+        if exec_tool.enabled:
+            limit = max(limit, exec_tool.timeout_seconds + REQUEST_TIMEOUT_SECONDS)
+        return limit
+
     def _generate(self, query: str, canceled: threading.Event) -> str:
         from ciel.memory.tools import memory_lookup_request
 
@@ -467,7 +480,7 @@ class ChatSession:
             response = _bounded(
                 lambda: agent.send(messages, temperature=0.7, max_tokens=TEXT_RESPONSE_MAX_TOKENS,
                                    cancel_event=model_cancel),
-                time.monotonic() + REQUEST_TIMEOUT_SECONDS, canceled,
+                time.monotonic() + self._turn_limit(), canceled,
             )
         finally:
             model_cancel.set()

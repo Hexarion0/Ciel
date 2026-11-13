@@ -6,11 +6,11 @@ import math
 import re
 import sqlite3
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 from uuid import uuid4
 
 from ciel.logging import get_logger
@@ -20,6 +20,7 @@ from ciel.memory.web_evidence import decode_web_evidence, normalize_web_evidence
 from ciel.memory.workspace import MemoryWorkspace
 
 logger = get_logger("memory.store")
+_T = TypeVar("_T")
 
 _SESSION_ID_SQL = (
     "CASE WHEN json_valid(metadata_json) "
@@ -722,22 +723,41 @@ class MemoryStore:
                     ).rowcount
             return deleted
 
+    def unchanged_since_write(self, name: str, scope: Any, compute: Callable[[Any], _T]) -> _T:
+        """Reuse a value derived from this database until any connection writes to it.
+
+        PRAGMA data_version changes when another connection (or process, such as the
+        Telegram worker) commits; total_changes counts this connection's own writes.
+        Callers that run many times per turn skip their query or regex work otherwise.
+        """
+        with self._lock:
+            connection = self._get_connection()
+            marker = (connection.execute("PRAGMA data_version").fetchone()[0],
+                      connection.total_changes, scope)
+            caches = getattr(self._local, "derived", None)
+            if caches is None:
+                caches = self._local.derived = {}
+            cached = caches.get(name)
+            if cached is not None and cached[0] == marker:
+                return cached[1]
+            value = compute(connection)
+            caches[name] = (marker, value)
+            return value
+
+    def _forgotten_patterns(self) -> list[re.Pattern[str]]:
+        def compile_patterns(connection: Any) -> list[re.Pattern[str]]:
+            rows = connection.execute("SELECT patterns_json FROM forgotten_memories;").fetchall()
+            return [
+                re.compile(r"(?<!\w)" + re.escape(pattern) + r"(?!\w)", re.IGNORECASE)
+                for row in rows for pattern in self._decode_patterns(row["patterns_json"])
+            ]
+
+        return self.unchanged_since_write("forgotten_patterns", None, compile_patterns)
+
     def redact_forgotten(self, text: str) -> str:
         """Mask forgotten values before sending archived or recent text to a model."""
-        with self._lock:
-            rows = (
-                self._get_connection()
-                .execute("SELECT patterns_json FROM forgotten_memories;")
-                .fetchall()
-            )
-        for row in rows:
-            for pattern in self._decode_patterns(row["patterns_json"]):
-                text = re.sub(
-                    r"(?<!\w)" + re.escape(pattern) + r"(?!\w)",
-                    "[forgotten fact]",
-                    text,
-                    flags=re.IGNORECASE,
-                )
+        for pattern in self._forgotten_patterns():
+            text = pattern.sub("[forgotten fact]", text)
         return text
 
     def ranked_recall_candidates(

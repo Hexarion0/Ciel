@@ -1,8 +1,10 @@
 """Centralized configuration and secrets management for CIEL."""
 
+import ipaddress
 import re
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import urlsplit
 
 from dotenv.main import resolve_variables
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
@@ -26,6 +28,33 @@ def _duckduckgo_region(value: object) -> object:
     if region and not re.fullmatch(r"[a-z]{2}-[a-z]{2,3}", region):
         raise ValueError("DuckDuckGo region must look like us-en, de-de, or tw-tzh")
     return region
+
+
+def _ollama_url(value: object) -> object:
+    """Accept Ollama's own OLLAMA_HOST forms, such as 127.0.0.1:11434 or 0.0.0.0.
+
+    Settings have no prefix, so Ollama's variable is read as ollama_host; without a
+    scheme every local request would fail, including private local_only turns.
+    """
+    if not isinstance(value, str):
+        return value
+    host = value.strip().rstrip("/")
+    if not host:
+        return "http://localhost:11434"
+    if "://" in host:
+        return host
+    try:
+        if ipaddress.ip_address(host).version == 6:
+            return f"http://[{host}]:11434"
+    except ValueError:
+        pass
+    if host.startswith(":"):
+        host = "localhost" + host  # Ollama accepts ":11434" for the default host.
+    try:
+        has_port = urlsplit(f"http://{host}").port is not None
+    except ValueError:
+        return f"http://{host}"
+    return f"http://{host}" if has_port else f"http://{host}:11434"
 
 
 def _register_search_secret(value: SecretStr | None) -> SecretStr | None:
@@ -226,6 +255,11 @@ class ProviderConfig(BaseModel):
         default="http://localhost:11434",
         description="Ollama local server endpoint",
     )
+
+    @field_validator("ollama_host", mode="before")
+    @classmethod
+    def normalize_ollama_host(cls, value: object) -> object:
+        return _ollama_url(value)
 
 
 class ChatConfig(BaseModel):
@@ -548,6 +582,11 @@ class Settings(BaseSettings):
     def normalize_duckduckgo_region(cls, value: object) -> object:
         """Reject a malformed region when settings load, not on first search."""
         return _duckduckgo_region(value)
+
+    @field_validator("ollama_host", mode="before")
+    @classmethod
+    def normalize_ollama_host(cls, value: object) -> object:
+        return _ollama_url(value)
 
     @field_validator("internet_home_city", mode="before")
     @classmethod

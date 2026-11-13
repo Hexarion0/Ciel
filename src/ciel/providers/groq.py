@@ -5,8 +5,6 @@ import time
 from collections.abc import Iterator
 from typing import Any
 
-import httpx
-
 from ciel.config import ProviderConfig, get_settings
 from ciel.logging import get_logger
 from ciel.providers.base import (
@@ -17,7 +15,7 @@ from ciel.providers.base import (
     ToolCallAccumulator,
     require_text_messages,
 )
-from ciel.providers.streaming import streaming_client
+from ciel.providers.streaming import pooled_client, streaming_client
 from ciel.providers.tool_calls import (
     openai_choice,
     openai_tool_calls,
@@ -70,7 +68,7 @@ class GroqProvider(LLMProvider):
         if not self.is_configured():
             return False
         try:
-            with httpx.Client(timeout=5.0) as client:
+            with pooled_client(timeout=5.0) as client:
                 res = client.get(f"{self.base_url}/models", headers=self._get_headers())
                 return res.status_code == 200
         except Exception as err:
@@ -100,7 +98,7 @@ class GroqProvider(LLMProvider):
         }
 
         start_t = time.time()
-        with httpx.Client(timeout=self.timeout) as client:
+        with pooled_client(timeout=self.timeout) as client:
             resp = client.post(
                 f"{self.base_url}/chat/completions",
                 headers=self._get_headers(),

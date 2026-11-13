@@ -700,7 +700,10 @@ class MemoryService:
     def _forget(self, topic: str, *, local_only: bool = False) -> str:
         """Resolve specific saved topics, refusing an ambiguous broad deletion."""
         topic = topic.strip().rstrip(".!?")
-        if topic.strip().casefold() not in ("that", "it", "the last fact"):
+        refers_back = topic.casefold() in {
+            "that", "it", "this", "that one", "this one", "that fact", "the last fact",
+        }
+        if not refers_back:
             self.focus_key = None
             self.observe_topic(topic)
             timeline_topic = re.fullmatch(
@@ -724,6 +727,10 @@ class MemoryService:
         if self.focus_key and item is None:
             self.focus_key = None
             return "I couldn't find a saved fact matching that. Which fact should I forget?"
+        if refers_back and item is None:
+            # "Forget it" means the fact just discussed. With none in focus, searching
+            # saved text for the letters "it" would delete an unrelated fact.
+            return "Which saved fact should I forget?"
         matches = [candidate for candidate in
                    self.store.find_memories_containing(topic, limit=2)
                    if local_only or not candidate.metadata.get("local_only")]

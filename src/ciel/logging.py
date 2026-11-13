@@ -5,19 +5,26 @@ import re
 import sys
 import threading
 
-# Known token/secret patterns to redact automatically
+# Known token/secret patterns to redact automatically. Key prefixes must start a word:
+# "risk-management-guide" or "task-based-learning" are words and URL slugs, not keys.
 SENSITIVE_PATTERNS = [
-    re.compile(r"(nvapi-[A-Za-z0-9_-]{10,})", re.IGNORECASE),
-    re.compile(r"(sk-[A-Za-z0-9_-]{10,})", re.IGNORECASE),
-    re.compile(r"(gsk_[A-Za-z0-9_-]{10,})", re.IGNORECASE),
-    re.compile(r"(tvly-[A-Za-z0-9_-]{10,})", re.IGNORECASE),
-    re.compile(r"(?<!\w)[0-9]{5,15}:[A-Za-z0-9_-]{20,}(?!\w)"),
-    re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/-]+", re.IGNORECASE),
+    re.compile(r"(?<![A-Za-z0-9])(nvapi-[A-Za-z0-9_-]{10,})", re.IGNORECASE),
+    re.compile(r"(?<![A-Za-z0-9])(sk-[A-Za-z0-9_-]{10,})", re.IGNORECASE),
+    re.compile(r"(?<![A-Za-z0-9])(gsk_[A-Za-z0-9_-]{10,})", re.IGNORECASE),
+    re.compile(r"(?<![A-Za-z0-9])(tvly-[A-Za-z0-9_-]{10,})", re.IGNORECASE),
+    # Telegram bot tokens, also inside API URLs: https://api.telegram.org/bot<token>/...
+    re.compile(r"(?:(?<=bot)|(?<!\w))[0-9]{5,15}:[A-Za-z0-9_-]{20,}(?!\w)"),
+    # A bearer token has a digit or token punctuation, or is long; "the bearer of" is prose.
+    re.compile(
+        r"(Bearer\s+)(?:(?=[A-Za-z0-9._~+/-]*[0-9._~+/-])[A-Za-z0-9._~+/-]{8,}"
+        r"|[A-Za-z0-9._~+/-]{20,})",
+        re.IGNORECASE,
+    ),
 ]
 _SECRET_MARKERS = ("nvapi-", "sk-", "gsk_", "tvly-", "bearer")
 _PARTIAL_TOKEN_SUFFIX = re.compile(
-    r"(?:nvapi-|sk-|gsk_|tvly-)[A-Za-z0-9_-]*\Z"
-    r"|Bearer\s*\Z"
+    r"(?<![A-Za-z0-9])(?:nvapi-|sk-|gsk_|tvly-)[A-Za-z0-9_-]*\Z"
+    r"|Bearer\s*[A-Za-z0-9._~+/-]*\Z"
     r"|(?<!\w)(?:[0-9]{1,15}|[0-9]{5,15}:[A-Za-z0-9_-]*)\Z",
     re.IGNORECASE,
 )
@@ -51,14 +58,29 @@ class SecretMaskingFilter(logging.Filter):
             record.msg = self._redact(record.msg)
         if record.args:
             if isinstance(record.args, dict):
-                record.args = {
-                    k: self._redact(v) if isinstance(v, str) else v for k, v in record.args.items()
-                }
+                record.args = {k: self._redact_arg(v) for k, v in record.args.items()}
             elif isinstance(record.args, (list, tuple)):
-                record.args = tuple(
-                    self._redact(v) if isinstance(v, str) else v for v in record.args
-                )
+                record.args = tuple(self._redact_arg(v) for v in record.args)
+        if record.exc_info and record.exc_info[0] is not None and not record.exc_text:
+            # Formatters reuse a cached exc_text, so the traceback is redacted once here.
+            record.exc_text = self._redact(logging.Formatter().formatException(record.exc_info))
+        if record.stack_info:
+            record.stack_info = self._redact(record.stack_info)
         return True
+
+    @classmethod
+    def _redact_arg(cls, value: object) -> object:
+        """Redact a format argument; exceptions and other objects can carry keys too."""
+        if isinstance(value, str):
+            return cls._redact(value)
+        if value is None or isinstance(value, (bool, int, float)):
+            return value  # Keep numbers numeric for %d and %.2f formats.
+        try:
+            text = str(value)
+        except Exception:
+            return value
+        redacted = cls._redact(text)
+        return redacted if redacted != text else value
 
     @classmethod
     def _redact(cls, text: str) -> str:

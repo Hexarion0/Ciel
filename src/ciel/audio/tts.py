@@ -33,6 +33,9 @@ from ciel.logging import get_logger
 from ciel.paths import bundled_worker_path, resolve_asset_path, voice_profile_path
 
 logger = get_logger("audio.tts")
+_TURBO_ERRORS_BEFORE_FALLBACK = 3
+"""Consecutive per-sentence Turbo errors that switch the session to the fallback voice."""
+
 
 def resolve_piper_voice_paths(voice_name: str, models_dir: str | Path) -> tuple[Path, Path]:
     """Resolve a Piper ONNX + config pair without starting any TTS server."""
@@ -115,6 +118,7 @@ class TextToSpeech:
         )
         self._chatterbox: ChatterboxTurboWorker | None = None
         self._chatterbox_failed = False
+        self._chatterbox_errors = 0
         self._profile_data: dict | None = None
         self._pocket: PocketTTS | None = None
         self._pocket_failed = False
@@ -371,9 +375,20 @@ class TextToSpeech:
                     return None
                 raise ChatterboxWorkerError("Chatterbox returned no audio")
             self.last_engine = "chatterbox_turbo"
+            self._chatterbox_errors = 0
             logger.debug("Chatterbox Turbo synthesis completed (%d characters).", len(spoken_text))
             return result
         except Exception as err:
+            self._chatterbox_errors += 1
+            alive = getattr(self._chatterbox, "is_alive", None)
+            if (callable(alive) and alive() is True
+                    and self._chatterbox_errors < _TURBO_ERRORS_BEFORE_FALLBACK):
+                # The worker is healthy but could not voice this sentence; keep it (and
+                # its loaded GPU model) for the next one.
+                logger.warning("Chatterbox Turbo could not voice one sentence; using the "
+                               "fallback voice for it: %s", err)
+                return (self._synthesize_pocket(spoken_text, style)
+                        if spoken_text and fallback else None)
             self._chatterbox_failed = True
             logger.warning(
                 "Chatterbox Turbo failed; switching to CPU Pocket, then local Piper: %s",

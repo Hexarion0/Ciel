@@ -509,7 +509,7 @@ def mock_http(monkeypatch, handler, addresses=None):
 
     def client(**kwargs):
         settings.append(kwargs)
-        return original(transport=transport, **kwargs)
+        return original(**{**kwargs, "transport": transport})
 
     monkeypatch.setattr("ciel.internet.httpx.Client", client)
     return resolve, settings
@@ -727,3 +727,89 @@ def test_search_and_read_evidence_remain_distinct(service, monkeypatch):
     result = service.prepare("Latest release")
     assert result.sources[0].snippet == "Public information about Latest release"
     assert result.sources[0].content == "Latest release verified article excerpt"
+
+
+@pytest.mark.parametrize("value", ["2025-01-01T10:00:00+0800", "2025-01-01T10:00:00.5+00:00",
+                                   "2025-01-01T10:00:00Z"])
+def test_feed_timestamps_with_compact_offsets_are_dated(value):
+    # Python 3.10's fromisoformat rejects these forms, which left news undated.
+    from ciel.internet import _date_score
+
+    assert _date_score(value) > 0
+
+
+def test_page_charset_declared_in_html_is_used_when_the_header_has_none(monkeypatch):
+    page = '<meta charset="windows-1251"><title>Мэдээ</title><p>Улаанбаатар хотын мэдээ</p>'
+    mock_http(monkeypatch, lambda _request: httpx.Response(
+        200, headers={"content-type": "text/html"}, content=page.encode("cp1251"),
+    ))
+    result = InternetService(InternetConfig()).prepare("Read https://example.com")
+    assert result.sources and "Улаанбаатар" in result.sources[0].content
+
+
+def test_a_long_article_that_mentions_captcha_is_still_readable(monkeypatch):
+    page = ("<title>How CAPTCHA works</title><p>A captcha asks a person to prove they are "
+            "human.</p>" + "<p>Background and history of the test.</p>" * 80)
+    mock_http(monkeypatch, lambda _request: httpx.Response(
+        200, headers={"content-type": "text/html; charset=utf-8"}, content=page.encode(),
+    ))
+    assert InternetService(InternetConfig()).prepare("Read https://example.com").sources
+
+
+def test_slow_dripping_pages_stop_at_the_deadline():
+    # Reading in 8 KB chunks only checked the deadline after 8 KB had arrived.
+    import time as clock
+
+    from ciel.internet import _read_body
+
+    class Drip(httpx.SyncByteStream):
+        def __iter__(self):
+            for _ in range(100):
+                clock.sleep(0.01)
+                yield b"x"
+
+    response = httpx.Response(200, stream=Drip())
+    started = clock.monotonic()
+    with pytest.raises(TimeoutError):
+        _read_body(response, clock.monotonic() + 0.05, None)
+    assert clock.monotonic() - started < 0.5
+
+
+def test_aspnet_style_pages_inside_a_form_keep_their_text(monkeypatch):
+    page = ("<title>Gov</title><body><form id='aspnetForm'><main><h1>Notice</h1>"
+            "<p>Office hours change next week for all branches.</p></main></form></body>")
+    mock_http(monkeypatch, lambda _request: httpx.Response(
+        200, headers={"content-type": "text/html; charset=utf-8"}, content=page.encode(),
+    ))
+    result = InternetService(InternetConfig()).prepare("Read https://example.com")
+    assert result.sources and "Office hours change" in result.sources[0].content
+
+
+def test_deeply_nested_hidden_markup_parses_quickly():
+    import time as clock
+
+    from ciel.internet import _PageText
+
+    page = "<nav>" + "<b>" * 30000 + "</x>" * 40000 + "</nav><p>After</p>"
+    started = clock.monotonic()
+    parser = _PageText()
+    parser.feed(page)
+    assert clock.monotonic() - started < 2.0
+
+
+def test_candidate_pages_are_read_together_not_one_after_another(monkeypatch):
+    import time as clock
+
+    service = InternetService(InternetConfig())
+
+    def slow_read(url, deadline, canceled):
+        clock.sleep(0.3)
+        return InternetSource("Page", url, content="text")
+
+    monkeypatch.setattr(service, "_read_page", slow_read)
+    urls = [f"https://example{index}.com/a" for index in range(3)]
+    started = clock.monotonic()
+    futures = service._prefetch_pages(urls, clock.monotonic() + 10, False, None)
+    pages = [future.result() for future in futures.values()]
+    assert [page.url for page in pages] == urls
+    assert clock.monotonic() - started < 0.75

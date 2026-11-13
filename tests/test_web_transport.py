@@ -67,3 +67,33 @@ def test_tls_disconnects_are_quiet_and_do_not_block_later_requests(tmp_path, cap
     finally:
         ui.close()
     assert "Traceback" not in capsys.readouterr().err
+
+
+def test_polling_reuses_one_connection_and_posts_close_theirs():
+    # Phones poll /api/state several times a second; HTTP/1.0 paid a new TCP (and TLS)
+    # handshake for every poll.
+    import http.client
+
+    from ciel.web import DesktopWebUI
+
+    ui = DesktopWebUI("owner", "hey ciel")
+    url = ui.start(lambda text: True, port=0)
+    try:
+        port = int(url.rsplit(":", 1)[1])
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+        for _ in range(3):
+            connection.request("GET", "/api/state", headers={"Host": f"127.0.0.1:{port}"})
+            response = connection.getresponse()
+            assert response.status == 200
+            response.read()
+            assert response.version == 11 and not response.will_close
+        # A rejected POST may leave its body unread, so its connection is not reused.
+        connection.request("POST", "/api/nothing-here", body=b"{}",
+                           headers={"Host": f"127.0.0.1:{port}",
+                                    "Content-Type": "application/json"})
+        response = connection.getresponse()
+        response.read()
+        assert response.will_close
+        connection.close()
+    finally:
+        ui.close()

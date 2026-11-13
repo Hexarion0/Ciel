@@ -136,6 +136,23 @@ def test_forget_that_uses_last_saved_fact_and_zero_match_is_honest(store):
     assert "couldn't find" in handle_confirmed(service, "Forget my red keyboard.")
 
 
+@pytest.mark.parametrize("text", ["Forget it.", "Forget about it.", "Forget that.",
+                                  "Forget this."])
+def test_forget_it_without_a_fact_in_focus_deletes_nothing(store, text):
+    # "favorite" contains "it": a substring search must not pick it as the target.
+    handle_confirmed(MemoryService(store), "My favorite game is Hades.")
+    reply = MemoryService(store).handle(text)
+
+    assert "Which" in reply
+    assert store.get_fact("user:favorite_game") is not None
+
+
+def test_forget_this_uses_the_fact_in_focus(store):
+    service = MemoryService(store)
+    handle_confirmed(service, "Remember that I have a red keyboard.")
+    assert "forgotten" in service.handle("Forget this.")
+
+
 def test_existing_structured_anchor_is_updated_in_place(tmp_path):
     path = tmp_path / "legacy.db"
     store = MemoryStore(path)
@@ -301,3 +318,31 @@ def test_spoken_correction_fillers_preserve_exact_favorite_value(store):
     assert store.get_fact("user:favorite_game") is None
     assert "saved" in service.handle("yes")
     assert store.get_fact("user:favorite_game").metadata["value"] == "Standoff 2"
+
+
+def test_a_fact_forgotten_by_another_process_is_masked_immediately(tmp_path):
+    # Forgotten-fact patterns are cached until the database changes; a forget from
+    # another connection (such as the Telegram worker) must still take effect at once.
+    path = tmp_path / "shared.db"
+    voice, telegram = MemoryStore(path), MemoryStore(path)
+    try:
+        handle_confirmed(MemoryService(telegram), "My favorite game is Hades.")
+        assert voice.redact_forgotten("I love Hades") == "I love Hades"  # Cached: none yet.
+        service = MemoryService(telegram)
+        assert "forgotten" in service.handle("Forget my favorite game.")
+        assert "Hades" not in voice.redact_forgotten("I love Hades")
+    finally:
+        voice.close()
+        telegram.close()
+
+
+def test_forgotten_patterns_are_not_recompiled_for_every_message(store, monkeypatch):
+    handle_confirmed(MemoryService(store), "My favorite game is Hades.")
+    MemoryService(store).handle("Forget my favorite game.")
+    compiled = []
+    original = store._decode_patterns
+    monkeypatch.setattr(store, "_decode_patterns",
+                        lambda value: compiled.append(1) or original(value))
+    for _ in range(20):
+        assert "Hades" not in store.redact_forgotten("Hades again")
+    assert len(compiled) <= 1

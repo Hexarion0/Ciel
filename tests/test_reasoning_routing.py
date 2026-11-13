@@ -170,7 +170,7 @@ def test_nim_wire_options_and_final_answer_only(monkeypatch, streaming, thinking
 
     client_class = httpx.Client
     monkeypatch.setattr("httpx.Client", lambda **kw: client_class(
-        transport=httpx.MockTransport(handle), **kw,
+        **{**kw, "transport": httpx.MockTransport(handle)},
     ))
     provider = NimProvider(api_key="test", config=ProviderConfig())
     if streaming:
@@ -267,7 +267,7 @@ def test_unavailable_super_uses_ultra_without_downgrading_or_exposing_reasoning(
 
     client_class = httpx.Client
     monkeypatch.setattr("httpx.Client", lambda **kw: client_class(
-        transport=httpx.MockTransport(handle), **kw,
+        **{**kw, "transport": httpx.MockTransport(handle)},
     ))
     provider = NimProvider(api_key="test", config=ProviderConfig())
     if streaming:

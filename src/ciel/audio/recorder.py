@@ -83,7 +83,10 @@ class VoiceRecorder:
             self.last_speech_observed_at = time.monotonic()
             if not self._speech_started:
                 self._speech_started = True
-                self._speech_start_time = now
+                # Speech began at the start of this frame; `now` is its end. Counting from
+                # the end made a two-frame "yes" look like a 1-frame click and wait out
+                # the initial-silence timeout.
+                self._speech_start_time = now - frame.size / self.sample_rate
                 logger.debug("Speech activity detected (RMS=%.4f).", rms)
             self._last_speech_time = now
         else:

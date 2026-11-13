@@ -71,9 +71,14 @@ else
     SETUP_STATUS=$?
 fi
 
-# 5. Install a launcher even if setup needs another attempt.
+# 5. Install a launcher even if setup needs another attempt. A launcher that cannot be
+# installed (an unrelated ~/.local/bin/ciel) must not hide the setup result below.
 echo -e "\n${BOLD}[5/5] Installing the ciel command...${NC}"
-bash scripts/install_ciel_command.sh
+if ! bash scripts/install_ciel_command.sh; then
+    echo -e "${YELLOW}The ciel command was not installed; .venv/bin/ciel works instead.${NC}"
+    echo "To install it, move the existing ~/.local/bin/ciel aside, then run:"
+    echo "  bash scripts/install_ciel_command.sh"
+fi
 
 if [[ "$SETUP_STATUS" -ne 0 ]]; then
     echo -e "\n${YELLOW}CIEL core is installed; setup did not finish.${NC}"

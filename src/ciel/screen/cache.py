@@ -27,7 +27,7 @@ from ciel.screen.capture import (
     Monitor,
     ScreenCaptureError,
     ScreenImage,
-    decode_image,
+    image_size,
 )
 
 CAPTURE_TTL_SECONDS = 15 * 60
@@ -268,8 +268,7 @@ class CaptureCache:
                 return
 
     def _store_image(self, image: ScreenImage) -> dict[str, Any]:
-        decoded = decode_image(image.data)
-        if (decoded.size != (image.width, image.height) or image.mime_type != "image/png"
+        if (image_size(image.data) != (image.width, image.height) or image.mime_type != "image/png"
                 or not image.name or len(image.name) > 512
                 or not all(math.isfinite(value) for value in (image.origin_x, image.origin_y))
                 or (image.logical_width is not None and (
@@ -319,8 +318,7 @@ class CaptureCache:
             data = _read_private(self.directory / filename, MAX_IMAGE_BYTES)
             values = {key: item for key, item in value.items() if key not in {"file", "bytes"}}
             image = ScreenImage(data=data, **values)
-            decoded = decode_image(data)
-            if decoded.size != (image.width, image.height):
+            if image_size(data) != (image.width, image.height):
                 raise ValueError("invalid dimensions")
             return image
         except (OSError, TypeError, ValueError) as exc:

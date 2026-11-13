@@ -28,7 +28,7 @@ def transport(monkeypatch):
 
     def client(**kwargs):
         options.append(kwargs)
-        return original_client(**kwargs, transport=httpx.MockTransport(respond))
+        return original_client(**{**kwargs, "transport": httpx.MockTransport(respond)})
 
     monkeypatch.setattr("ciel.parallel_search.httpx.Client", client)
     return requests, options, responses

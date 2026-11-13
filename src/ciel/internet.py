@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 import ipaddress
 import json
 import math
@@ -12,14 +13,22 @@ import threading
 import time
 import zlib
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from email.utils import parsedate_to_datetime
-from html import unescape
 from html.parser import HTMLParser
 from typing import TypeVar
-from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlsplit, urlunsplit
+from urllib.parse import (
+    SplitResult,
+    parse_qsl,
+    unquote,
+    urlencode,
+    urljoin,
+    urlsplit,
+    urlunsplit,
+)
 from uuid import uuid4
 from xml.etree import ElementTree
 
@@ -209,6 +218,61 @@ def is_news_query(query: str) -> bool:
     return bool(_NEWS.search(query))
 
 
+_FILE_SUFFIXES = frozenset({
+    "py", "pyc", "sh", "bash", "zsh", "md", "txt", "json", "toml", "yaml", "yml",
+    "ini", "cfg", "conf", "env", "log", "db", "sqlite", "zip", "tar", "gz", "jpg",
+    "jpeg", "png", "mp3", "mp4", "pdf", "exe", "dll", "csv", "docx", "xlsx",
+    "js", "mjs", "cjs", "jsx", "ts", "tsx", "css", "scss", "html", "htm", "xml", "svg",
+    "gif", "webp", "wav", "flac", "lock", "rb", "php", "java", "kt", "cpp", "hpp",
+})
+# Generic top-level domains people type without a scheme; two-letter country domains
+# (such as .mn) are always accepted. "ok.what" or "Node.js" are not web addresses.
+_GENERIC_TLDS = frozenset({
+    "com", "org", "net", "edu", "gov", "mil", "int", "info", "biz", "name", "pro", "xyz",
+    "app", "dev", "online", "site", "tech", "store", "shop", "blog", "news", "cloud",
+    "page", "wiki", "live", "space", "website", "top", "club", "design", "games", "art",
+    "media", "digital", "social", "world", "today", "life", "email", "link", "tools",
+    "software", "systems", "network", "global", "agency", "studio", "academy", "center",
+    "company", "group", "solutions", "services", "travel", "museum", "jobs", "mobi",
+    "asia", "moe", "codes", "run", "lol", "fun", "ink", "one", "plus", "chat", "video",
+    "film", "music", "radio", "photo", "photos", "help", "guide", "health", "finance",
+    "money", "bank", "market", "energy", "land", "city", "school", "science", "foundation",
+    "computer", "network", "zone", "works", "rocks", "ninja", "guru", "team", "work",
+})
+_CLOSING = {")": "(", "]": "[", "}": "{"}
+
+
+def _trim_url(candidate: str) -> str:
+    """Drop trailing sentence punctuation, keeping a closing bracket the URL itself opened.
+
+    https://en.wikipedia.org/wiki/Mars_(planet) keeps its ")"; "(see https://x.y/a)." loses
+    only the unmatched one.
+    """
+    while candidate:
+        last = candidate[-1]
+        if last in ".,!?:;'\"":
+            candidate = candidate[:-1]
+        elif last in _CLOSING and candidate.count(last) > candidate.count(_CLOSING[last]):
+            candidate = candidate[:-1]
+        else:
+            break
+    return candidate
+
+
+def _unescape_url(url: str) -> str:
+    """Undo HTML escaping of "&" only; html.unescape turns "&region=" into "®ion="."""
+    return url.replace("&amp;", "&")
+
+
+def _bare_domain_suffix(suffix: str, host: str) -> bool:
+    """Whether a scheme-less match ends in a real-looking top-level domain."""
+    if not host or suffix.casefold() in _FILE_SUFFIXES:
+        return False
+    if not (suffix.islower() or host.isupper()):
+        return False  # "Thanks.What": a missing space after a sentence, not a domain.
+    return len(suffix) == 2 or suffix.casefold() in _GENERIC_TLDS
+
+
 def public_urls(text: str) -> list[str]:
     """Recognize explicit links and bare public domains without contacting DNS.
 
@@ -217,17 +281,13 @@ def public_urls(text: str) -> list[str]:
     """
     explicit = list(_URL.finditer(text))
     matches = [(match.start(), match.end(), match.group()) for match in explicit]
-    blocked_suffixes = {
-        "py", "pyc", "sh", "bash", "zsh", "md", "txt", "json", "toml", "yaml", "yml",
-        "ini", "cfg", "conf", "env", "log", "db", "sqlite", "zip", "tar", "gz", "jpg",
-        "jpeg", "png", "mp3", "mp4", "pdf", "exe", "dll", "csv", "docx", "xlsx",
-    }
     for match in _BARE_URL.finditer(text):
         if any(start <= match.start() < end for start, end, _value in matches):
             continue
-        candidate = match.group().rstrip(".,!?:;)]}")
-        host = (urlsplit("https://" + candidate).hostname or "").casefold()
-        if host.rsplit(".", 1)[-1] in blocked_suffixes:
+        candidate = _trim_url(match.group())
+        host = urlsplit("https://" + candidate).hostname or ""
+        suffix = candidate.split("/", 1)[0].split(":", 1)[0].rsplit(".", 1)[-1]
+        if not _bare_domain_suffix(suffix, host):
             continue
         # Do not salvage a domain from file:// paths or a credentialed expression.
         prefix = text[max(0, match.start() - 128):match.start()]
@@ -237,7 +297,7 @@ def public_urls(text: str) -> list[str]:
     urls: dict[str, str] = {}
     for _start, _end, candidate in sorted(matches):
         try:
-            url = _public_url(unescape(candidate.rstrip(".,!?:;)]}")))
+            url = _public_url(_unescape_url(_trim_url(candidate)))
         except ValueError:
             continue
         urls.setdefault(source_identity(url), url)
@@ -745,11 +805,24 @@ def _incomplete_sources(
     return [source for _priority, source in promising[:min(pages, 2)]]
 
 
+def _iso_datetime(value: str) -> datetime:
+    """Parse ISO 8601 as later Pythons do; 3.10 accepts only isoformat() output.
+
+    Feeds commonly write "+0800" offsets and one-digit fractions ("10:00:00.5").
+    """
+    text = value.strip().replace("Z", "+00:00")
+    if "T" in text or " " in text:
+        text = re.sub(r"([+-]\d{2})(\d{2})$", r"\1:\2", text)
+        text = re.sub(r"\.(\d+)(?=[+-]\d{2}:\d{2}$|$)",
+                      lambda match: "." + (match.group(1) + "000000")[:6], text)
+    return datetime.fromisoformat(text)
+
+
 def _date_score(value: str) -> float:
     """Rank a supplied date without replacing missing dates with retrieval time."""
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except (ValueError, TypeError):
+        parsed = _iso_datetime(value)
+    except (ValueError, TypeError, AttributeError):
         try:
             parsed = parsedate_to_datetime(value)
         except (ValueError, TypeError, OverflowError):
@@ -1031,6 +1104,42 @@ def _public_url(url: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, parsed.query, ""))
 
 
+_CHALLENGE_PAGE_CHARS = 2000
+_META_CHARSET = re.compile(rb"""<meta[^>]+?charset\s*=\s*["']?\s*([A-Za-z0-9_.:-]{1,40})""", re.I)
+
+
+def _declared_charset(body: bytes) -> str | None:
+    """A page's own encoding: a byte-order mark or <meta charset> near the start.
+
+    Many Cyrillic sites declare windows-1251 only in the page; decoding it as UTF-8
+    turned their text into replacement characters.
+    """
+    if body.startswith(b"\xef\xbb\xbf"):
+        return "utf-8-sig"
+    if body.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return "utf-16"
+    match = _META_CHARSET.search(body[:4096])
+    if match is None:
+        return None
+    name = match.group(1).decode("ascii", "ignore")
+    try:
+        return codecs.lookup(name).name
+    except LookupError:
+        return None
+
+
+def _ascii_host(parsed: SplitResult) -> tuple[str, str]:
+    """Host header and TLS server name; international names use their IDNA form."""
+    host = parsed.hostname or ""
+    if host.isascii():
+        return parsed.netloc, host
+    try:
+        ascii_host = host.encode("idna").decode("ascii")
+    except UnicodeError as error:
+        raise ValueError("The page address has an invalid host name") from error
+    return ascii_host + (f":{parsed.port}" if parsed.port else ""), ascii_host
+
+
 def _read_body(
     response: httpx.Response, deadline: float, canceled: threading.Event | None,
 ) -> bytes:
@@ -1044,7 +1153,9 @@ def _read_body(
     )
     wire_bytes = 0
     body = bytearray()
-    for chunk in response.iter_raw(chunk_size=8192):
+    # Each network read, however small, re-checks the deadline: a fixed chunk size made a
+    # one-byte-at-a-time page hold a reader slot long after the deadline.
+    for chunk in response.iter_raw():
         _remaining(deadline, canceled)
         wire_bytes += len(chunk)
         if wire_bytes > _MAX_BYTES:
@@ -1068,8 +1179,13 @@ def _read_body(
 class _PageText(HTMLParser):
     """Extract readable page text without scripts, navigation, forms, or hidden elements."""
 
-    _IGNORED = {"script", "style", "noscript", "svg", "nav", "header", "footer", "form"}
+    # Forms are not ignored: ASP.NET-style sites wrap the whole page in one <form>.
+    _IGNORED = {"script", "style", "noscript", "svg", "nav", "header", "footer"}
+    _PAGE_CHROME = {"header", "footer"}
+    """Site banners, but inside <main> or <article> they hold the headline and byline."""
     _VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta"}
+    _MAX_HIDDEN_DEPTH = 256
+    """Bound the hidden-tag stack; deeply nested junk markup made parsing quadratic."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -1108,13 +1224,14 @@ class _PageText(HTMLParser):
         }:
             self.links.append((attributes.get("href") or "", "News feed", ""))
         hidden = (
-            tag in self._IGNORED or "hidden" in attributes
+            tag in self._IGNORED and not (tag in self._PAGE_CHROME and self._preferred)
+            or "hidden" in attributes
             or attributes.get("aria-hidden") == "true"
             or re.search(r"display\s*:\s*none|visibility\s*:\s*hidden",
                          attributes.get("style") or "", re.I)
         )
         if self._hidden or hidden:
-            if tag not in self._VOID:
+            if tag not in self._VOID and len(self._hidden) < self._MAX_HIDDEN_DEPTH:
                 self._hidden.append(tag)
             return
         if tag == "title":
@@ -1439,7 +1556,9 @@ class InternetService:
                 continue
             raw_url = str(row.get("href") or row.get("url") or "")
             try:
-                url = _public_url(raw_url if backend in _SCRAPED_BACKENDS else unescape(raw_url))
+                url = _public_url(
+                    raw_url if backend in _SCRAPED_BACKENDS else _unescape_url(raw_url),
+                )
             except ValueError:
                 continue
             excerpt = row.get("content") if backend == "parallel" else ""
@@ -1605,7 +1724,7 @@ class InternetService:
                 try:
                     raw_url = str(result.get("href") or result.get("url") or "")
                     # Free-engine parsers already decoded the HTML attribute once.
-                    decoded = raw_url if backend in _SCRAPED_BACKENDS else unescape(raw_url)
+                    decoded = raw_url if backend in _SCRAPED_BACKENDS else _unescape_url(raw_url)
                     url = _public_url(decoded)
                 except ValueError:
                     continue
@@ -1665,7 +1784,11 @@ class InternetService:
             pending = [source for source in sources[:maximum]
                        if not source.content or source.content_kind != "provider_excerpt"]
             visited: set[str] = set()
-            for _read in range(max(0, pages - len(selected))):
+            budget = max(0, pages - len(selected))
+            prefetched = self._prefetch_pages(
+                [source.url for source in pending[:budget]], read_deadline, research, canceled,
+            )
+            for _read in range(budget):
                 if not pending:
                     break
                 source = pending.pop(0)
@@ -1674,7 +1797,8 @@ class InternetService:
                     continue
                 visited.add(identity)
                 try:
-                    page = self._read_page(
+                    future = prefetched.pop(identity, None)
+                    page = future.result() if future is not None else self._read_page(
                         source.url,
                         min(read_deadline, time.monotonic() + (12.0 if research else 8.0)),
                         canceled,
@@ -1845,6 +1969,32 @@ class InternetService:
             except (ValueError, OSError, httpx.HTTPError, TimeoutError):
                 _remaining(deadline, canceled)
 
+    def _prefetch_pages(
+        self, urls: list[str], deadline: float, research: bool,
+        canceled: threading.Event | None,
+    ) -> dict[str, Future]:
+        """Start reading the first candidate pages together; the caller uses them in order.
+
+        Serial reads cost the sum of every page's fetch time (up to 12 s each); the read
+        loop's relevance checks, redirects, and news-link discovery stay unchanged.
+        """
+        if len(urls) < 2:
+            return {}
+        executor = ThreadPoolExecutor(max_workers=min(4, len(urls)),
+                                      thread_name_prefix="ciel-page-read")
+        futures: dict[str, Future] = {}
+        try:
+            for url in urls:
+                identity = source_identity(url)
+                if identity not in futures:
+                    futures[identity] = executor.submit(
+                        self._read_page, url,
+                        min(deadline, time.monotonic() + (12.0 if research else 8.0)), canceled,
+                    )
+        finally:
+            executor.shutdown(wait=False)
+        return futures
+
     def _read_page(
         self, url: str, deadline: float, canceled: threading.Event | None,
     ) -> InternetSource:
@@ -1860,17 +2010,21 @@ class InternetService:
             if not addresses or any(not _public_address(item[4][0]) for item in addresses):
                 raise ValueError("The page does not resolve to public addresses")
             address = addresses[0][4][0]
-            pinned = httpx.URL(url).copy_with(host=address)
+            host_header, server_name = _ascii_host(parsed)
+            try:
+                pinned = httpx.URL(url).copy_with(host=address)
+            except httpx.InvalidURL as error:  # Not a ValueError; it would end the read loop.
+                raise ValueError("The page address is not valid") from error
             timeout = min(_remaining(deadline, canceled), 12.0)
             # A new client per hop drops cookies; trust_env=False disables ambient proxies/auth.
             with httpx.Client(timeout=timeout, follow_redirects=False, trust_env=False) as client:
                 with client.stream(
                     "GET", pinned,
-                    headers={"Host": parsed.netloc, "User-Agent": "CIEL/0.3 public-page reader",
+                    headers={"Host": host_header, "User-Agent": "CIEL/0.3 public-page reader",
                              "Accept": "text/html,application/xhtml+xml,text/plain,"
                                        "application/rss+xml,application/atom+xml",
                              "Accept-Encoding": "identity"},
-                    extensions={"sni_hostname": host},
+                    extensions={"sni_hostname": server_name},
                 ) as response:
                     _remaining(deadline, canceled)
                     if response.status_code in {301, 302, 303, 307, 308}:
@@ -1888,7 +2042,9 @@ class InternetService:
                     if "attachment" in response.headers.get("content-disposition", "").lower():
                         raise ValueError("File downloads are not supported")
                     body = _read_body(response, deadline, canceled)
-                    encoding = response.charset_encoding or "utf-8"
+                    encoding = (response.charset_encoding
+                                or (_declared_charset(body) if media_type != "text/plain" else None)
+                                or "utf-8")
                     try:
                         decoded = body.decode(encoding, errors="replace")
                     except LookupError:
@@ -1910,7 +2066,9 @@ class InternetService:
                 published_at, publisher, links = parser.published_at, parser.publisher, parser.links
                 date_kind = parser.date_kind
             content = _clean_content(decoded)
-            if not content or re.search(
+            # Challenge pages are short; a real article about CAPTCHAs or "access denied"
+            # errors is not one.
+            if not content or len(content) < _CHALLENGE_PAGE_CHARS and re.search(
                 r"(?:just a moment|verify you are human|access denied|captcha)",
                 title + " " + content[:300], re.I,
             ):

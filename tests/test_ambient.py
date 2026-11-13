@@ -1659,3 +1659,39 @@ def test_uncertain_app_name_cannot_supply_later_launch_context(tmp_path, monkeyp
         assert 'Which application' in tts.speak.call_args.args[0]
     finally:
         store.close()
+
+
+def test_unaddressed_retired_local_command_in_ambient_mode_is_ignored(tmp_path, monkeypatch):
+    # This path called active_control_turn() without its fragments and raised TypeError.
+    router = MagicMock()
+    _router, tts, _loop, store, turns = run_callbacks(
+        tmp_path, monkeypatch, [("/local what time is it", {"speech_started_at": 0.0})],
+        router=router,
+    )
+    try:
+        router.send.assert_not_called()
+        assert not [turn for turn in turns if turn.role == "assistant"]
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("controller", [False, True])
+def test_a_speaker_failure_does_not_add_a_second_contradicting_reply(
+    tmp_path, monkeypatch, controller,
+):
+    # The answer was saved, then playback raised; the turn's failure handler used to
+    # save "I couldn't finish that request" as a second reply and raise again.
+    router = MagicMock()
+    router.send.return_value = LLMResponse("Four.", "test", "test")
+    tts = MagicMock()
+    tts.speak.side_effect = RuntimeError("audio device lost")
+    _router, _tts, _loop, store, turns = run_callbacks(
+        tmp_path, monkeypatch,
+        [("Ciel, what is two plus two?", {"wake_verified": True, "speech_started_at": 0.0})],
+        router=router, tts=tts, ambient=False, controller=controller,
+    )
+    try:
+        replies = [turn.content for turn in turns if turn.role == "assistant"]
+        assert replies == ["Four."]
+    finally:
+        store.close()
